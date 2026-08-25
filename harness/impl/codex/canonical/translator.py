@@ -631,6 +631,66 @@ class CodexCanonicalTranslator(HarnessTranslator):
         # start order, so the oldest open wrapper is the stable owner.
         return candidates[0] if candidates else None
 
+    def _process_shell(
+        self,
+        raw_event: RawEvent,
+        process_id: CodexShellId,
+    ) -> ShellId | None:
+        """Resolve a Codex process after the application restarts.
+
+        A yielded exec result joins the wrapper call id to the native process
+        id. This link is in the rollout, but the fast path also keeps it in
+        memory. Search the earlier rollout when new translator memory does not
+        have it. A recovered link also proves that the shell was backgrounded,
+        so its later completion must close the running-work set.
+        """
+        source_key = self._source_key(raw_event)
+        key = source_key, process_id
+        remembered = self._process_shells.get(key)
+        if remembered is not None:
+            return remembered
+        try:
+            end_position = int(raw_event.source_position)
+        except ValueError:
+            return None
+        # False: the typed result carried the process id. True: the wrapper
+        # printed a process reference, which is valid only when the call says
+        # that it can print `r.session_id`.
+        result_calls: dict[CodexCallId, bool] = {}
+        try:
+            with open(source_key, "rb") as source:
+                while end_position > 0:
+                    start_position = max(0, end_position - 65_536)
+                    source.seek(start_position)
+                    chunk = source.read(end_position - start_position)
+                    for line in reversed(chunk.splitlines()):
+                        try:
+                            record = rollout.parse_line(line.decode())
+                        except (UnicodeDecodeError, ValidationError):
+                            continue
+                        if isinstance(record, ExecResultRecord):
+                            if record.running and record.process_id == process_id:
+                                result_calls[record.call_id] = False
+                                continue
+                            reported = _REPORTED_PROCESS_ID.fullmatch(record.output.strip())
+                            if reported is not None and reported.group(1) == process_id:
+                                result_calls[record.call_id] = True
+                                continue
+                        if isinstance(record, ExecRecord) and record.call_id in result_calls:
+                            if result_calls[record.call_id] and not record.reports_session_id:
+                                continue
+                            shell_id = shell_id_from_codex_call(record.call_id)
+                            self._call_records[(source_key, record.call_id)] = record
+                            self._process_shells[key] = shell_id
+                            self._backgrounded_shells.add((source_key, shell_id))
+                            return shell_id
+                        if isinstance(record, ExecResultRecord):
+                            continue
+                    end_position = start_position
+        except OSError:
+            return None
+        return None
+
     @staticmethod
     def _collaboration_call_from_line(
         line: bytes, call_id: CodexCallId,
@@ -881,30 +941,48 @@ class CodexCanonicalTranslator(HarnessTranslator):
         hook = codex_hook_payload
         hook_name = hook.hook_event_name or ""
         native_identity = hook.hook_event_id or hook.uuid or raw_event.source_position
+        run_started = self._hook_run_started_events(raw_event, hook)
         if hook_name == "SessionStart":
-            path = hook.transcript_path or ""
-            if not lead_rollout(path):
-                # A subagent thread announces no session of its own.
-                return []
-            metadata = session_metadata(path)
-            return self._session_started_events(
-                raw_event,
-                hook.cwd or "",
-                os.path.realpath(path),
-                continued_from=self._continued_from(
-                    raw_event,
-                    str(metadata.forked_from_id)
-                    if metadata is not None and metadata.forked_from_id is not None
-                    else None,
-                ),
-            )
+            return run_started
         if hook_name == "PreCompact":
             payload: EventPayload = CompactionStarted(hook.before_tokens)
-            return [event(raw_event, "compaction", native_identity, "started", payload)]
+            return [*run_started, event(raw_event, "compaction", native_identity, "started", payload)]
         if hook_name == "PostCompact":
             payload = CompactionFinished(hook.before_tokens, hook.after_tokens)
-            return [event(raw_event, "compaction", native_identity, "finished", payload)]
-        return []
+            return [*run_started, event(raw_event, "compaction", native_identity, "finished", payload)]
+        return run_started
+
+    def _hook_run_started_events(
+        self,
+        raw_event: RawEvent,
+        hook: CodexHookPayload,
+    ) -> list[CanonicalEvent[EventPayload]]:
+        """Let any lead hook confirm a run whose SessionStart hook was missed.
+
+        All hooks from one terminal window produce the same canonical start
+        identities. Normal deliveries therefore converge on the SessionStart
+        facts. A later hook repairs the run only when those facts are absent.
+        """
+        if raw_event.parent_actor_id is not None:
+            return []
+        if hook.hook_event_name != "SessionStart" and raw_event.terminal_window_id is None:
+            return []
+        path = hook.transcript_path or ""
+        if not lead_rollout(path):
+            # A subagent thread announces no session of its own.
+            return []
+        metadata = session_metadata(path)
+        return self._session_started_events(
+            raw_event,
+            hook.cwd or "",
+            os.path.realpath(path),
+            continued_from=self._continued_from(
+                raw_event,
+                str(metadata.forked_from_id)
+                if metadata is not None and metadata.forked_from_id is not None
+                else None,
+            ),
+        )
 
     def _session_started_events(
         self,
@@ -1419,7 +1497,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
             # function: a lookup that can miss is not the same thing as an id
             # built from the record, and sharing one binding for both made the
             # non-optional uses depend on which branch ran.
-            known_shell_id = self._process_shells.get((source_key, process_id))
+            known_shell_id = self._process_shell(raw_event, process_id)
             if known_shell_id is None:
                 raise TranslationError(f"Codex write_stdin references unknown process session: {process_id}")
             shell_id = known_shell_id
@@ -1635,7 +1713,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
             process_id = record.process_id
             # Same reason as the write_stdin branch above: the lookup is
             # optional, the id every line after it uses is not.
-            completed_shell_id = self._process_shells.get((source_key, process_id))
+            completed_shell_id = self._process_shell(raw_event, process_id)
             if completed_shell_id is None:
                 completed_shell_id = self._pending_exec_shell_for_command(
                     source_key,

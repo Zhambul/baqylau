@@ -7,6 +7,7 @@ codes filtered out of it — that `read_screen` answers with what is VISIBLE.
 
 from __future__ import annotations
 
+import os
 import time
 from types import SimpleNamespace
 
@@ -68,6 +69,26 @@ def test_window_identity_does_not_repeat_after_terminal_restart():
             first.tabs.close_tab(TabCloseRequest(first_window.window_id))
         if second_window.window_id is not None:
             second.tabs.close_tab(TabCloseRequest(second_window.window_id))
+
+
+def test_window_metadata_reports_descendant_processes(terminal):
+    """A hook identifies the CLI child, not the shell that launched it."""
+    plugin, _ = terminal
+    _open(terminal, ("/bin/sh", "-c", "/bin/sleep 30 & wait"))
+    deadline = time.monotonic() + TIMEOUT_SECONDS
+
+    while time.monotonic() < deadline:
+        processes = plugin.metadata.windows()[0].processes
+        if any(
+            process.command and os.path.basename(process.command[0]) == "sleep"
+            for process in processes
+        ):
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError(f"PTY metadata omitted its sleep child: {processes}")
+
+    assert len(processes) >= 2
 
 
 def test_the_screen_is_what_is_visible_not_everything_that_was_printed(terminal):

@@ -34,8 +34,14 @@ class HttpTransport:
         document: object,
         adapter: TypeAdapter[T],
         accepted_statuses: set[int],
+        *,
+        timeout: float | None = None,
     ) -> tuple[int, T]:
-        response = self.client.post(path, json=document)
+        response = (
+            self.client.post(path, json=document)
+            if timeout is None
+            else self.client.post(path, json=document, timeout=timeout)
+        )
         return response.status_code, self._decode(
             "POST", path, response, adapter, accepted_statuses
         )

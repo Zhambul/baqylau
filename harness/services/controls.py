@@ -33,6 +33,7 @@ from harness.models import (
     SendText,
 )
 from harness.services.control_effects import ControlEffectRecorder
+from naming.service import AutomaticSessionNamer
 from repository.contract.session_data import SessionDataRepository
 from repository.contract.sessions import SessionRepository
 from terminal.adapter import TerminalAdapter
@@ -97,6 +98,7 @@ class HarnessControlService(HarnessReactorContext):
         audit_recorder: AuditRecorder,
         interrupt_registry: InterruptRegistry,
         control_effect_recorder: ControlEffectRecorder,
+        automatic_session_namer: AutomaticSessionNamer,
     ) -> None:
         self.sessions = session_repository
         self.terminal = terminal_adapter
@@ -105,6 +107,7 @@ class HarnessControlService(HarnessReactorContext):
         self.audit = audit_recorder
         self.interrupts = interrupt_registry
         self.control_effects = control_effect_recorder
+        self.automatic_namer = automatic_session_namer
 
     # One typed public method per gesture — the request type IS the parameter,
     # so a caller never builds a bare `ControlRequest` and this class never
@@ -238,17 +241,51 @@ class HarnessControlService(HarnessReactorContext):
                 (actor for actor in data.actors if actor.actor_id == data.session.lead_actor_id),
                 None,
             )
-        return plugin.controller.execute(
-            request,
-            ControlContext(
-                session=session,
-                terminal=self.plugin,
-                terminal_window_id=self.terminal.window_for_session(request.session_id),
-                current_effort=lead.effort if lead is not None else None,
-                lead_active=bool(lead and lead.statistics.active_since_internal is not None),
-                pending_attention=self._pending_attention(request),
-            ),
+        context = ControlContext(
+            session=session,
+            terminal=self.plugin,
+            terminal_window_id=self.terminal.window_for_session(request.session_id),
+            current_effort=lead.effort if lead is not None else None,
+            lead_active=bool(lead and lead.statistics.active_since_internal is not None),
+            pending_attention=self._pending_attention(request),
         )
+        if (
+            isinstance(request, AutoNameSession)
+            and not plugin.info.supports_native_automatic_renaming
+        ):
+            return self.automatic_namer.requested_name(
+                session,
+                request.request_id,
+                lambda title: self._apply_generated_title(request, context, title),
+            )
+        return plugin.controller.execute(request, context)
+
+    def _apply_generated_title(
+        self,
+        auto_name_session: AutoNameSession,
+        control_context: ControlContext,
+        title: str,
+    ) -> ControlOutcome:
+        session = control_context.session
+        plugin = session.plugin
+        if plugin is None or plugin.controller is None:
+            return ControlResult(
+                auto_name_session.request_id,
+                ControlAcknowledgement.REJECTED,
+                "unsupported control",
+            )
+        rename = RenameSession(
+            auto_name_session.session_id,
+            auto_name_session.request_id,
+            title,
+        )
+        outcome = plugin.controller.execute(rename, control_context)
+        if (
+            isinstance(outcome, DurableTitleResult)
+            and outcome.status == ControlAcknowledgement.ACKNOWLEDGED
+        ):
+            self.control_effects.session_renamed(session, rename)
+        return outcome
 
     def _pending_attention(self, request: ControlRequest) -> QuestionAsked | PlanProposed | None:
         """The question or plan THIS gesture is answering, if it is still open.

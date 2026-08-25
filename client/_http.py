@@ -52,6 +52,7 @@ LAUNCH_EFFORT_VARIABLE = "BAQYLAU_LAUNCH_EFFORT"
 # runs hooks like any other, and a client that shipped them would put a session
 # in the store that nobody started. Seeing this, a client does nothing.
 PROBE_VARIABLE = "BAQYLAU_USAGE_PROBE"
+INTERNAL_MODEL_VARIABLE = "BAQYLAU_INTERNAL_MODEL"
 WINDOW_ID_VARIABLES = ("KITTY_WINDOW_ID", "BAQYLAU_PTY_WINDOW_ID")
 
 

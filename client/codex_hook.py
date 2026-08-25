@@ -25,6 +25,8 @@ HARNESS = "codex"
 
 
 def main() -> None:
+    if os.environ.get(_http.INTERNAL_MODEL_VARIABLE):
+        return
     payload = sys.stdin.buffer.read()
     reply = _daemon.post(_http.HOOK_PATH % HARNESS, payload, {
         _http.TERMINAL_WINDOW_HEADER: _http.window_id(os.environ),

@@ -30,6 +30,7 @@ from domain.events import (
     ShellBackgrounded,
     ShellFinished,
     ShellOutputFinished,
+    ShellStarted,
     TurnFinished,
 )
 from domain.ids import (
@@ -46,6 +47,7 @@ from domain.ids import (
     WindowId,
 )
 from domain.sessiondata import (
+    ActorBackground,
     ActorFacts,
     ActorStatus,
     LifecycleState,
@@ -438,6 +440,95 @@ def test_version_eight_settles_codex_shell_finishes_added_after_the_turn(tmp_pat
             "SELECT version FROM schema_version WHERE id = 1"
         ).fetchone()
     assert version["version"] == MAIN_SCHEMA_VERSION
+
+
+def test_version_fourteen_closes_a_codex_shell_duplicated_after_restart(tmp_path):
+    path = str(tmp_path / "main.db")
+    old_database = main_database(path)
+    raw_events = SqliteRawEventRepository(old_database)
+    canonical = SqliteCanonicalEventRepository(old_database)
+    raw = a_raw_event()
+    raw_events.record([raw])
+    original_shell = ShellId("call-before-restart")
+    replacement_shell = ShellId("native-after-restart")
+    command = TextContent("sleep 25")
+    original_started = replace(
+        a_started_event("original-started"),
+        payload=ShellStarted(
+            original_shell,
+            command,
+            ExecutionMode.FOREGROUND,
+            None,
+        ),
+    )
+    backgrounded = replace(
+        a_started_event("original-backgrounded"),
+        payload=ShellBackgrounded(original_shell),
+    )
+    replacement_started = replace(
+        a_started_event("replacement-started"),
+        payload=ShellStarted(
+            replacement_shell,
+            command,
+            ExecutionMode.FOREGROUND,
+            None,
+        ),
+    )
+    replacement_finished = replace(
+        a_started_event("replacement-finished"),
+        payload=ShellFinished(
+            replacement_shell,
+            Outcome.SUCCEEDED,
+            TextContent("done"),
+            0,
+        ),
+    )
+    canonical.record_translation(
+        raw,
+        "7",
+        TranslationResult(
+            (
+                original_started,
+                backgrounded,
+                replacement_started,
+                replacement_finished,
+            ),
+            "translated",
+        ),
+        1001.0,
+    )
+    with old_database.write() as connection:
+        actor = replace(
+            AN_ACTOR,
+            actor_id=ACTOR,
+            background=ActorBackground(running_shell_ids=(original_shell,)),
+            status=ActorStatus.AWAITING_BACKGROUND,
+        )
+        connection.execute(
+            "INSERT INTO session_data_actors(session_id, actor_id, revision, payload) "
+            "VALUES(?, ?, ?, ?)",
+            (
+                str(SESSION),
+                str(ACTOR),
+                1,
+                encode_document(actor).decode(),
+            ),
+        )
+        connection.execute("UPDATE schema_version SET version = 14 WHERE id = 1")
+
+    upgraded = main_database(path)
+    upgraded.initialize()
+
+    repaired = SqliteCanonicalEventRepository(upgraded).find(
+        CanonicalEventId(
+            "migration:15:recovered-shell-output-finished:original-backgrounded"
+        )
+    )
+    assert repaired is not None
+    assert repaired.payload == ShellOutputFinished(
+        original_shell,
+        Outcome.SUCCEEDED,
+    )
 
 
 def test_version_nine_builds_the_pending_raw_event_queue(tmp_path):

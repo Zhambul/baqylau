@@ -16,7 +16,11 @@ from engine.interpret.translators import (
     ShellOutputTranslator,
 )
 from engine.interpret.interrupts import GRACE_SECONDS, PendingInterruptSource
-from engine.interpret.liveness import ProcessProbe, SessionLivenessSource
+from engine.interpret.liveness import (
+    ProcessProbe,
+    SessionLivenessSource,
+    SessionWindowLivenessSource,
+)
 from engine.interpret.output_source import ShellOutputRawEventSource
 from engine.interpret.loop import Interpreter, TerminalSnapshotSampler
 from engine.react.loop import ReactionLoop
@@ -37,6 +41,7 @@ from engine.interpret.reactions import (
     SessionUpsertCanonicalEventReaction,
 )
 from terminal.panes.reaction import PaneCanonicalEventReaction
+from terminal.models import SESSION_WINDOW_TAG, WindowInfo, WindowProcess
 from harness.contract import HarnessPlugin
 from harness.models import (
     HarnessInfo,
@@ -79,6 +84,7 @@ from domain.ids import (
     ShellId,
     RawEventId,
     SessionId,
+    TabId,
     TurnId,
     WindowId,
     stable_event_id,
@@ -833,6 +839,22 @@ def test_a_later_delivery_updates_the_live_columns_of_the_row(tmp_path):
     assert untouched is not None and untouched.terminal_window_id == "new-window"
 
 
+def test_a_file_start_does_not_erase_the_pid_from_the_hook_start(tmp_path):
+    database_path = str(tmp_path / "main.db")
+    sessions = SqliteSessionRepository(main_database(database_path))
+    sessions.save(HarnessName.CODEX, replace(
+        example_session(), terminal_window_id="session-window", harness_process_id=4242,
+    ))
+    reaction = SessionUpsertCanonicalEventReaction(sessions)
+
+    reaction.react(session_started_event())
+
+    updated = sessions.find(SessionId("session-one"))
+    assert updated is not None
+    assert updated.terminal_window_id == "session-window"
+    assert updated.harness_process_id == 4242
+
+
 def test_interpretation_commits_verdict_canonical_and_provenance_together(tmp_path):
     event = canonical_message()
     store, recorder, _sessions, interpreter = registered_runtime(
@@ -1289,6 +1311,103 @@ def test_the_liveness_source_verifies_the_process_is_still_the_cli():
         SessionLivenessSource(replace(session, harness_process_id=None), ProcessProbe())
 
 
+def test_terminal_ownership_transfer_finishes_the_old_session():
+    session = replace(
+        example_session(),
+        plugin=example_plugin(TranslationResult((), "ignored_nonsemantic")),
+        terminal_window_id=WindowId("window-one"),
+        harness_process_id=4242,
+    )
+    window = WindowInfo(
+        WindowId("window-one"),
+        TabId("tab-one"),
+        {SESSION_WINDOW_TAG: "session-two"},
+        120,
+        40,
+        True,
+        True,
+        True,
+        processes=(WindowProcess(4242, ("/opt/codex",)),),
+    )
+
+    raw_event = SessionLivenessSource(session, ProcessProbe(), (window,)).read(None)[0]
+
+    assert raw_event.source_position == "displaced"
+    translation = LivenessTranslator().translate(raw_event)
+    assert len(translation.canonical_events) == 1
+    assert translation.canonical_events[0].payload.reason == "terminal_reassigned"
+
+
+def test_a_copied_terminal_id_does_not_displace_its_session():
+    session = replace(
+        example_session(),
+        plugin=example_plugin(TranslationResult((), "ignored_nonsemantic")),
+        terminal_window_id=WindowId("window-one"),
+        harness_process_id=os.getpid(),
+    )
+    window = WindowInfo(
+        WindowId("window-one"),
+        TabId("tab-one"),
+        {SESSION_WINDOW_TAG: "session-two"},
+        120,
+        40,
+        True,
+        True,
+        True,
+        processes=(WindowProcess(4242, ("/opt/codex",)),),
+    )
+
+    assert SessionLivenessSource(session, ProcessProbe(), (window,)).read(None) == ()
+
+
+def test_resume_liveness_waits_for_the_session_tag_while_the_cli_is_present():
+    session = replace(
+        example_session(),
+        plugin=example_plugin(TranslationResult((), "ignored_nonsemantic")),
+        terminal_window_id=WindowId("window-one"),
+        harness_process_id=None,
+    )
+    window = WindowInfo(
+        WindowId("window-one"),
+        TabId("tab-one"),
+        {},
+        120,
+        40,
+        True,
+        True,
+        True,
+        processes=(WindowProcess(None, (f"/opt/{OWN_PROCESS_NAME}", "resume")),),
+    )
+
+    assert SessionWindowLivenessSource(session, (window,)).read(None) == ()
+
+
+def test_resume_liveness_finishes_a_missing_or_reassigned_window():
+    session = replace(
+        example_session(),
+        plugin=example_plugin(TranslationResult((), "ignored_nonsemantic")),
+        terminal_window_id=WindowId("window-one"),
+        harness_process_id=None,
+    )
+    reassigned = WindowInfo(
+        WindowId("window-one"),
+        TabId("tab-one"),
+        {SESSION_WINDOW_TAG: "session-two"},
+        120,
+        40,
+        True,
+        True,
+        True,
+        processes=(WindowProcess(None, (f"/opt/{OWN_PROCESS_NAME}", "resume")),),
+    )
+
+    missing = SessionWindowLivenessSource(session, ()).read(None)
+    transferred = SessionWindowLivenessSource(session, (reassigned,)).read(None)
+
+    assert [event.source_position for event in missing] == ["exited"]
+    assert [event.source_position for event in transferred] == ["exited"]
+
+
 def test_the_probe_pays_for_the_name_check_once(monkeypatch):
     """After one verified name check, a probe is a signal-0 syscall — the sources
     are rebuilt every tick, so the memory has to survive on the probe itself."""
@@ -1382,6 +1501,10 @@ class RecordingTerminal:
     def open_session_panes(self, request):
         self.calls.append(("open", request.session_id, request.anchor_window_id))
 
+    def window_hosts_process(self, window_id, process_id, process_name):
+        self.calls.append(("ownership", window_id, process_id, process_name))
+        return True
+
 
 def _pane_react_interpreter(tmp_path, *, window_id=None):
     started = session_started_event(
@@ -1416,7 +1539,10 @@ def test_panes_open_at_the_window_the_announcing_delivery_recorded(tmp_path):
     interpreter.tick()
     reactions.tick()
 
-    assert terminal.calls == [("open", SessionId("session-one"), "the-session-tab")]
+    assert terminal.calls == [
+        ("ownership", "the-session-tab", os.getpid(), OWN_PROCESS_NAME),
+        ("open", SessionId("session-one"), "the-session-tab"),
+    ]
 
 
 def test_a_headless_session_gets_no_panes(tmp_path):
@@ -1437,7 +1563,11 @@ def test_a_continuation_moves_the_panes_from_the_prior_session():
                 return None
             return type("SessionRow", (), {
                 "terminal_window_id": "the-session-tab",
+                "harness_process_id": 4242,
                 "working_directory": "/work",
+                "plugin": type("Plugin", (), {
+                    "info": type("Info", (), {"cli_process_name": "codex"})(),
+                })(),
             })()
 
     reaction = PaneCanonicalEventReaction(terminal, Sessions(), _PaneWidths())
@@ -1453,6 +1583,7 @@ def test_a_continuation_moves_the_panes_from_the_prior_session():
 
     assert terminal.calls == [
         ("close", SessionId("session-old")),
+        ("ownership", "the-session-tab", 4242, "codex"),
         ("open", SessionId("session-new"), "the-session-tab"),
     ]
 

@@ -209,6 +209,7 @@ CONTROL_SOURCE_TYPE = "control"
 RESUME_SOURCE_TYPE = "resume_launch"
 RESUME_LIVENESS_SOURCE_TYPE = "resume_liveness"
 TITLE_SOURCE_TYPE = "title"
+AUTOMATIC_TITLE_SOURCE_TYPE = "automatic_title"
 
 
 def output_location_raw_event(

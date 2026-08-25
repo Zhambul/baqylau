@@ -56,6 +56,7 @@ plugin = HarnessPlugin(
         supports_attachments=True,
         default_for_launch=True,
         supports_accounts=False,
+        supports_native_automatic_renaming=True,
         models=MODELS,
         rewind_modes=REWIND_MODES,
     ),

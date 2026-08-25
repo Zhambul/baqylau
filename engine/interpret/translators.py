@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from harness.contract import CoreTranslator
 from harness.models import (
+    AUTOMATIC_TITLE_SOURCE_TYPE,
     RawEvent,
     TranslationResult,
     canonical_event,
@@ -27,6 +28,7 @@ from domain.records import RecordedTranslationDecision
 from domain.values import ActorRole, OpenWorkKind, Outcome
 from harness.models.directives import (
     PlanDecisionObservation,
+    ProcessExit,
     SessionCloseWorkObservation,
     SessionRenameObservation,
     SessionResumeObservation,
@@ -59,7 +61,9 @@ class LivenessTranslator(CoreTranslator):
     clean exit and a kill converge on one fact."""
 
     def translate(self, raw_event: RawEvent) -> TranslationResult:
-        finished = SessionFinished(Outcome.UNKNOWN, "process_exited")
+        observation = decode_document(ProcessExit, raw_event.payload)
+        reason = "terminal_reassigned" if observation.state == "displaced" else "process_exited"
+        finished = SessionFinished(Outcome.UNKNOWN, reason)
         return TranslationResult(
             (canonical_event(raw_event, "session", str(raw_event.session_id), "finished", finished),),
             RecordedTranslationDecision.TRANSLATED,
@@ -163,7 +167,6 @@ class ControlTranslator(CoreTranslator):
             ),
             RecordedTranslationDecision.TRANSLATED,
         )
-
     @staticmethod
     def _session_close(raw_event: RawEvent) -> TranslationResult:
         observed = decode_document(SessionCloseWorkObservation, raw_event.payload)
@@ -203,5 +206,27 @@ class ControlTranslator(CoreTranslator):
             )
         return TranslationResult(
             (event,),
+            RecordedTranslationDecision.TRANSLATED,
+        )
+
+
+class AutomaticTitleTranslator(CoreTranslator):
+    """A generated title observation becomes a harness-independent fact."""
+
+    def translate(self, raw_event: RawEvent) -> TranslationResult:
+        if raw_event.source_type != AUTOMATIC_TITLE_SOURCE_TYPE:
+            raise ValueError("automatic title translator received another source type")
+        observation = decode_document(SessionRenameObservation, raw_event.payload)
+        changed = SessionTitleChanged(observation.title, observation.origin)
+        return TranslationResult(
+            (
+                canonical_event(
+                    raw_event,
+                    "session",
+                    str(raw_event.session_id),
+                    f"title:{observation.origin}:{raw_event.source_position}",
+                    changed,
+                ),
+            ),
             RecordedTranslationDecision.TRANSLATED,
         )

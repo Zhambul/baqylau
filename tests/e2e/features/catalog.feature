@@ -12,7 +12,7 @@ Feature: harness catalogs describe available session controls
 
     Examples:
       | harness     | controls |
-      | codex       | answer_question,apply_rewind,close_session,compact,decide_plan,interrupt,read_plan_choices,rename_session,select_effort,select_model,send_text |
+      | codex       | answer_question,apply_rewind,auto_name_session,close_session,compact,decide_plan,interrupt,read_plan_choices,rename_session,select_effort,select_model,send_text |
       | claude_code | answer_question,apply_rewind,auto_name_session,background,close_session,compact,decide_plan,interrupt,open_rewind,read_plan_choices,rename_session,select_effort,select_model,send_text |
 
   Scenario Outline: a harness catalog has usable model and command choices

@@ -16,7 +16,7 @@ from app.providers import Repositories, SessionDataStore, Sessions, Terminal
 from core.repository import RepositoryQueries, RepositoryStatus
 from domain.errors import UnknownReference
 from domain.ids import SessionId
-from domain.sessiondata import SessionData
+from domain.sessiondata import LifecycleState, SessionData
 from repository.contract.session_data import SessionDataRepository
 from repository.contract.sessions import SessionRepository
 from terminal.adapter import TerminalAdapter
@@ -56,7 +56,11 @@ def session_data_list(
             known[working_directory] = repositories.status(working_directory)
         return known[working_directory]
 
-    visible = read_model.visible()
+    visible = tuple(
+        data
+        for data in read_model.visible()
+        if data.session.state == LifecycleState.RUNNING
+    )
     live = terminal.live_sessions(data.session.session_id for data in visible)
     return SessionDataListResponse(
         cursor=cursor,
@@ -89,7 +93,7 @@ def session_data(
     data = _found(read_model, SessionId(session_id))
     return mapper.session_data(
         data,
-        live=_live(terminal, data.session.session_id),
+        live=_live(terminal, data),
         repository_status=repositories.status(data.session.working_directory),
         project_directory=_project_directory(
             session_storage,
@@ -128,13 +132,18 @@ def _found(session_data_repository: SessionDataRepository, session_id: SessionId
     return data
 
 
-def _live(terminal_adapter: TerminalAdapter, session_id: SessionId) -> bool:
-    """Whether a terminal window is attached right now.
+def _live(terminal_adapter: TerminalAdapter, data: SessionData) -> bool:
+    """Whether a running harness owns a terminal window right now.
 
-    The window id itself is never exposed — a frontend needs to know whether the
-    session is attended, not the handle it is attended through.
+    A shell tab can outlive its harness after `/exit`. Its existence does not
+    make the finished harness live. The window id itself is never exposed — a
+    frontend needs to know whether the session is attended, not the handle it
+    is attended through.
     """
-    return terminal_adapter.window_for_session(session_id) is not None
+    return (
+        data.session.state == LifecycleState.RUNNING
+        and terminal_adapter.window_for_session(data.session.session_id) is not None
+    )
 
 
 def _project_directory(

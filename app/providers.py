@@ -61,6 +61,7 @@ from engine.interpret.reactions import (
     SessionUpsertCanonicalEventReaction,
 )
 from engine.interpret.translators import (
+    AutomaticTitleTranslator,
     ControlTranslator,
     InterruptTranslator,
     LivenessTranslator,
@@ -72,6 +73,7 @@ from harness.contract import CanonicalEventReaction, CoreTranslator
 from harness.hooks.gateway import HookGatewayService
 from harness.impl import installed
 from harness.models import (
+    AUTOMATIC_TITLE_SOURCE_TYPE,
     CONTROL_SOURCE_TYPE,
     INTERRUPT_SOURCE_TYPE,
     LIVENESS_SOURCE_TYPE,
@@ -89,6 +91,10 @@ from harness.services.launch_effects import SessionLaunchEffectRecorder
 from harness.services.probe import TerminalInputService
 from harness.services.telemetry import TelemetryGatewayService
 from harness.services.usage import ApplicationUsageState, HarnessUsageService
+from inference.contract import ModelFactory
+from inference.default import DefaultModelFactory
+from naming.jobs import AutomaticNamingReaction, NamingJobWorker
+from naming.service import AutomaticSessionNamer
 from notify.presence import Presence
 from repository.contract.audit import (
     AuditReadRepository,
@@ -99,6 +105,7 @@ from repository.contract.facts import (
     RawEventRepository,
 )
 from repository.contract.session_data import SessionDataRepository
+from repository.contract.naming import NamingJobRepository
 from repository.contract.shell_output import ShellOutputRepository
 from repository.contract.preferences import (
     HiddenDirectoryRepository,
@@ -124,6 +131,7 @@ from repository.impl.sqlite.audit import (
     SqliteAuditWriteRepository,
 )
 from repository.impl.sqlite.session_data import SqliteSessionDataRepository
+from repository.impl.sqlite.naming import SqliteNamingJobRepository
 from repository.impl.sqlite.shell_output import SqliteShellOutputRepository
 from repository.impl.sqlite.preferences import (
     SqliteHiddenDirectoryRepository,
@@ -146,6 +154,7 @@ from terminal.adapter import TerminalAdapter
 from terminal.contract import TerminalPlugin
 from terminal.impl import resolve as resolve_terminal
 from terminal.impl.null import null_plugin
+from terminal.impl.pty.plugin import pty_plugin
 from terminal.panes.commands import PaneCommandService
 from terminal.panes.reaction import PaneCanonicalEventReaction
 from terminal.services.panes import PaneWidthService
@@ -339,6 +348,14 @@ AccountUsage = Annotated[AccountUsageRepository, Depends(account_usage)]
 
 
 @singleton
+def naming_jobs(database: MainDb) -> NamingJobRepository:
+    return SqliteNamingJobRepository(database)
+
+
+NamingJobs = Annotated[NamingJobRepository, Depends(naming_jobs)]
+
+
+@singleton
 def upload_storage(database: MainDb) -> UploadRepository:
     return SqliteUploadRepository(database)
 
@@ -420,22 +437,6 @@ ControlEffects = Annotated[ControlEffectRecorder, Depends(control_effects)]
 
 
 @singleton
-def controls(
-    session_storage: Sessions,
-    adapter: Terminal,
-    plugin: InstalledTerminal,
-    read_model: SessionDataStore,
-    audit: Recorder,
-    interrupts: InterruptTracking,
-    effects: ControlEffects,
-) -> HarnessControlService:
-    return HarnessControlService(session_storage, adapter, plugin, read_model, audit, interrupts, effects)
-
-
-Controls = Annotated[HarnessControlService, Depends(controls)]
-
-
-@singleton
 def catalog(harnesses: Registry) -> HarnessCatalogService:
     return HarnessCatalogService(harnesses)
 
@@ -449,6 +450,73 @@ def usage_state(harnesses: Registry, usage: AccountUsage) -> ApplicationUsageSta
 
 
 UsageState = Annotated[ApplicationUsageState, Depends(usage_state)]
+
+
+@singleton
+def model_terminal() -> TerminalPlugin:
+    """A private headless terminal whose windows can never become sessions."""
+    return pty_plugin()
+
+
+ModelTerminal = Annotated[TerminalPlugin, Depends(model_terminal)]
+
+
+@singleton
+def model_factory(terminal: ModelTerminal, usage: UsageState) -> ModelFactory:
+    return DefaultModelFactory(terminal, usage)
+
+
+InferenceModels = Annotated[ModelFactory, Depends(model_factory)]
+
+
+@singleton
+def automatic_namer(
+    models: InferenceModels,
+    jobs: NamingJobs,
+    raw: RawEvents,
+    read_model: SessionDataStore,
+    audit: Recorder,
+) -> AutomaticSessionNamer:
+    return AutomaticSessionNamer(models, jobs, raw, read_model, audit)
+
+
+AutomaticNamer = Annotated[AutomaticSessionNamer, Depends(automatic_namer)]
+
+
+@singleton
+def naming_worker(
+    jobs: NamingJobs,
+    session_storage: Sessions,
+    namer: AutomaticNamer,
+    audit: Recorder,
+) -> NamingJobWorker:
+    return NamingJobWorker(jobs, session_storage, namer, audit)
+
+
+@singleton
+def controls(
+    session_storage: Sessions,
+    adapter: Terminal,
+    plugin: InstalledTerminal,
+    read_model: SessionDataStore,
+    audit: Recorder,
+    interrupts: InterruptTracking,
+    effects: ControlEffects,
+    namer: AutomaticNamer,
+) -> HarnessControlService:
+    return HarnessControlService(
+        session_storage,
+        adapter,
+        plugin,
+        read_model,
+        audit,
+        interrupts,
+        effects,
+        namer,
+    )
+
+
+Controls = Annotated[HarnessControlService, Depends(controls)]
 
 
 @singleton
@@ -609,6 +677,7 @@ PaneCommands = Annotated[PaneCommandService, Depends(pane_commands)]
 @singleton
 def core_translators() -> Mapping[str, CoreTranslator]:
     return {
+        AUTOMATIC_TITLE_SOURCE_TYPE: AutomaticTitleTranslator(),
         CONTROL_SOURCE_TYPE: ControlTranslator(),
         OUTPUT_LOCATION_SOURCE_TYPE: ShellOutputTranslator(),
         LIVENESS_SOURCE_TYPE: LivenessTranslator(),
@@ -652,9 +721,12 @@ def reactions(
     widths: PaneWidths,
     interrupts: InterruptTracking,
     workspaces: Workspaces,
+    harnesses: Registry,
+    jobs: NamingJobs,
 ) -> tuple[CanonicalEventReaction, ...]:
     """What a committed fact CAUSES, in dependency order, on the reaction loop."""
     return (
+        AutomaticNamingReaction(harnesses, jobs),
         PaneCanonicalEventReaction(adapter, session_storage, widths),
         QueuedPromptCanonicalEventReaction(workspaces),
         InterruptCanonicalEventReaction(interrupts),

@@ -231,6 +231,44 @@ def test_the_session_list_maps_only_terminal_attached_sessions():
     repositories.status.assert_called_once_with("/work/baqylau")
 
 
+def test_a_finished_harness_is_not_live_when_its_shell_tab_remains():
+    finished = SessionData(
+        session=replace(FACTS, state=LifecycleState.FINISHED),
+        actors=(replace(ACTOR, state=LifecycleState.FINISHED, status=None),),
+        cursor=16,
+    )
+    read_model = Mock(spec=SessionDataRepository)
+    read_model.high_water_cursor.return_value = 16
+    read_model.visible.return_value = (finished,)
+    read_model.read.return_value = finished
+    terminal = Mock(spec=TerminalAdapter)
+    terminal.live_sessions.return_value = frozenset({SESSION})
+    terminal.window_for_session.return_value = "shell-window"
+    repositories = Mock(spec=RepositoryQueries)
+    repositories.status.return_value = None
+    repositories.project_directory.return_value = "/work/baqylau"
+    session_storage = Mock(spec=SessionRepository)
+    session_storage.find.return_value = None
+
+    listed = routes.session_data_list(
+        read_model,
+        terminal,
+        repositories,
+        session_storage,
+    )
+    single = routes.session_data(
+        str(SESSION),
+        read_model,
+        terminal,
+        repositories,
+        session_storage,
+    )
+
+    assert listed.sessions == ()
+    assert single.live is False
+    terminal.window_for_session.assert_not_called()
+
+
 def test_repository_identity_maps_a_linked_worktree_to_its_main_checkout(tmp_path):
     source = tmp_path / "project"
     linked = tmp_path / "project-worktree"

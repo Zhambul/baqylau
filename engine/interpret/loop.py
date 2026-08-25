@@ -279,11 +279,10 @@ class Interpreter:
         terminal_windows: TerminalWindows,
     ) -> HarnessRawEventSource:
         if session.harness_process_id is not None:
-            return SessionLivenessSource(session, self.liveness)
+            return SessionLivenessSource(session, self.liveness, terminal_windows)
         if self.terminal is not None:
             return SessionWindowLivenessSource(
                 session,
-                self.terminal,
                 terminal_windows,
             )
         raise ValueError(f"session has no liveness source: {session.session_id}")

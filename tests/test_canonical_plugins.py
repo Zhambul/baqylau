@@ -1309,6 +1309,57 @@ def test_codex_session_start_announces_only_a_lead_rollout(tmp_path, monkeypatch
     assert child.canonical_events == ()
 
 
+def test_a_later_codex_lead_hook_recovers_a_missed_run_start(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    rollout_path = (
+        tmp_path
+        / "sessions"
+        / "2026"
+        / "08"
+        / "25"
+        / "rollout-2026-08-25T10-00-00-session-one.jsonl"
+    )
+    rollout_path.parent.mkdir(parents=True)
+    rollout_path.write_text(json.dumps({
+        "type": "session_meta",
+        "payload": {
+            "id": "session-one",
+            "cwd": "/work",
+            "thread_source": "user",
+        },
+    }) + "\n")
+
+    def hook_raw(name: str, raw_id: str):
+        return replace(
+            raw_event(
+                {
+                    "session_id": "session-one",
+                    "transcript_path": str(rollout_path),
+                    "cwd": "/work",
+                    "hook_event_name": name,
+                    "hook_event_id": raw_id,
+                },
+                harness=HarnessName.CODEX,
+                source_type="hook",
+                raw_event_id=raw_id,
+            ),
+            terminal_window_id=WindowId("window-one"),
+            harness_process_id=4242,
+        )
+
+    translator = CodexCanonicalTranslator()
+    native_start = translator.translate(hook_raw("SessionStart", "native-start"))
+    later_hook = translator.translate(hook_raw("PreToolUse", "later-tool"))
+
+    assert [type(item.payload) for item in later_hook.canonical_events] == [
+        SessionStarted,
+        ActorStarted,
+    ]
+    assert [item.event_id for item in later_hook.canonical_events] == [
+        item.event_id for item in native_start.canonical_events
+    ]
+
+
 def test_codex_0149_base_instruction_source_is_a_closed_vocabulary():
     metadata = SessionMetaPayload.model_validate(
         {
@@ -2209,7 +2260,9 @@ def test_terminal_adapter_resolves_the_active_tab_without_window_environment():
 
 
 def test_terminal_adapter_reads_the_session_window_from_evidence_and_checks_it_lives():
-    terminal = FakeTerminal(windows=[window("window-one")])
+    terminal = FakeTerminal(windows=[
+        window("window-one", tags={SESSION_WINDOW_TAG: "session-one"})
+    ])
     sessions = FakeSessions({"session-one": "window-one", "session-two": "window-gone"})
     adapter = TerminalAdapter(terminal.plugin(), sessions)
 
@@ -2217,6 +2270,36 @@ def test_terminal_adapter_reads_the_session_window_from_evidence_and_checks_it_l
     # the row outlived its window: a session id alone is not liveness
     assert adapter.window_for_session(SessionId("session-two")) is None
     assert adapter.window_for_session(SessionId("session-missing")) is None
+
+
+def test_terminal_adapter_does_not_give_an_untagged_window_to_a_session():
+    terminal = FakeTerminal(windows=[window("window-one")])
+    adapter = TerminalAdapter(
+        terminal.plugin(),
+        FakeSessions({"session-one": "window-one"}),
+    )
+
+    assert adapter.window_for_session(SessionId("session-one")) is None
+    assert adapter.live_sessions((SessionId("session-one"),)) == frozenset()
+
+
+def test_terminal_adapter_rejects_a_copied_window_from_another_foreground_process():
+    terminal = FakeTerminal(windows=[replace(
+        window("window-one"),
+        processes=(WindowProcess(101, ("/opt/codex", "resume")),),
+    )])
+    adapter = TerminalAdapter(terminal.plugin(), FakeSessions())
+
+    assert adapter.window_hosts_process(
+        WindowId("window-one"),
+        202,
+        "claude",
+    ) is False
+    assert adapter.window_hosts_process(
+        WindowId("window-one"),
+        101,
+        "codex",
+    ) is True
 
 
 def test_terminal_adapter_checks_liveness_against_a_given_window_snapshot():
@@ -5077,6 +5160,115 @@ def test_codex_exec_that_outlives_its_yield_is_announced_as_background_once():
     output_finished = payloads(finished, ShellOutputFinished)
     assert len(output_finished) == 1
     assert output_finished[0].payload.shell_id == backgrounded[0].payload.shell_id
+
+
+@pytest.mark.parametrize(
+    ("call_result", "call_output"),
+    (
+        (
+            "text(JSON.stringify(r));",
+            ('Script completed\nOutput:\n{"session_id":22816,"output":"","wall_time_seconds":1.0}'),
+        ),
+        (
+            'text(r.output || `session_id:${r.session_id}`);',
+            "Script completed\nOutput:\nsession_id:22816",
+        ),
+    ),
+)
+def test_codex_yielded_exec_closes_the_original_shell_after_translator_restart(
+    tmp_path,
+    call_result,
+    call_output,
+):
+    call = {
+        "type": "response_item",
+        "payload": {
+            "type": "custom_tool_call",
+            "name": "exec",
+            "call_id": "call-before-restart",
+            "input": (
+                'const r = await tools.exec_command({cmd:"sleep 25",yield_time_ms:1000});'
+                + call_result
+            ),
+        },
+    }
+    yielded = {
+        "type": "response_item",
+        "payload": {
+            "type": "custom_tool_call_output",
+            "call_id": "call-before-restart",
+            "output": call_output,
+        },
+    }
+    completed = {
+        "type": "event_msg",
+        "payload": {
+            "type": "item_completed",
+            "item": {
+                "type": "CommandExecution",
+                "id": "native-after-restart",
+                "process_id": "22816",
+                "command": ["/bin/zsh", "-lc", "sleep 25"],
+                "status": "completed",
+                "aggregated_output": "done\n",
+                "exit_code": 0,
+            },
+        },
+    }
+    source = tmp_path / "rollout.jsonl"
+    documents = (call, yielded, completed)
+    lines = tuple(json.dumps(document) + "\n" for document in documents)
+    source.write_text("".join(lines), encoding="utf-8")
+    positions = []
+    position = 0
+    for line in lines:
+        position += len(line.encode())
+        positions.append(str(position))
+
+    before_restart = CodexCanonicalTranslator()
+    started = before_restart.translate(
+        replace(
+            raw_event(
+                call,
+                harness=HarnessName.CODEX,
+                source_type="rollout",
+                raw_event_id="call-before-restart",
+                source_position=positions[0],
+            ),
+            source_name=str(source),
+        )
+    )
+    backgrounded = before_restart.translate(
+        replace(
+            raw_event(
+                yielded,
+                harness=HarnessName.CODEX,
+                source_type="rollout",
+                raw_event_id="yield-before-restart",
+                source_position=positions[1],
+            ),
+            source_name=str(source),
+        )
+    )
+    shell_id = payloads(started, ShellStarted)[0].payload.shell_id
+    assert payloads(backgrounded, ShellBackgrounded)[0].payload.shell_id == shell_id
+
+    after_restart = CodexCanonicalTranslator().translate(
+        replace(
+            raw_event(
+                completed,
+                harness=HarnessName.CODEX,
+                source_type="rollout",
+                raw_event_id="completion-after-restart",
+                source_position=positions[2],
+            ),
+            source_name=str(source),
+        )
+    )
+
+    assert payloads(after_restart, ShellStarted) == []
+    assert payloads(after_restart, ShellFinished)[0].payload.shell_id == shell_id
+    assert payloads(after_restart, ShellOutputFinished)[0].payload.shell_id == shell_id
 
 
 def test_codex_fast_exec_uses_the_authoritative_item_exit_code():

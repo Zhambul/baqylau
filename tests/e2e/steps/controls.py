@@ -10,7 +10,9 @@ from api.controls.models.control_outcome_response import (
 )
 from api.sessiondata.models.entry import MessageBodyResponse
 from sdk.client import BaqylauClient
+from sdk.state import SessionSnapshot
 from tests.e2e.testkit.references import Controls, Sessions, Turns
+from tests.e2e.testkit.policy import WaitPolicy
 
 
 @when(parsers.parse(
@@ -85,6 +87,44 @@ def auto_name_session(
     control_name: str,
 ) -> None:
     controls.bind(control_name, client.sessions.auto_name(sessions.get(session_name)))
+
+
+@then(parsers.parse('session "{session_name}" has a concise title unlike \'{fallback}\''))
+def session_has_concise_title(
+    client: BaqylauClient,
+    sessions: Sessions,
+    wait_policy: WaitPolicy,
+    session_name: str,
+    fallback: str,
+) -> None:
+    def concise(snapshot: SessionSnapshot) -> bool | None:
+        title = snapshot.data.session.title
+        if not title or title == fallback:
+            return None
+        return True if (
+            "\n" not in title
+            and len(title) <= 80
+            and 3 <= len(title.split()) <= 8
+            and "http" not in title.casefold()
+            and "<" not in title
+            and ">" not in title
+        ) else None
+
+    client.sessions.watch(sessions.get(session_name)).wait(
+        f"session {session_name!r} to receive a concise automatic title",
+        concise,
+        timeout=wait_policy.feed,
+    )
+
+
+@then(parsers.parse('the application contains exactly session "{session_name}"'))
+def application_contains_exactly_session(
+    client: BaqylauClient,
+    sessions: Sessions,
+    session_name: str,
+) -> None:
+    found = tuple(item.session.session_id for item in client.sessions.list().sessions)
+    assert found == (sessions.get(session_name).session_id,)
 
 
 @when(parsers.parse(

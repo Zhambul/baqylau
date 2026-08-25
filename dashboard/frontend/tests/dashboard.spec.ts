@@ -88,6 +88,167 @@ test('loads the production shell and session list without browser failures', asy
   expect(failures).toEqual([]);
 });
 
+test('recovers a launch after the hidden page loses its global stream', async ({
+  page,
+  request,
+}) => {
+  const failures = watchBrowserFailures(page);
+  const listResponse = await request.get('/sessionData');
+  expect(listResponse.ok()).toBe(true);
+  const list: unknown = await listResponse.json();
+  if (!isRecord(list) || !Array.isArray(list.sessions))
+    throw new Error('the session list fixture is not an object');
+  const sessions = list.sessions as unknown[];
+  const source: unknown = sessions[0];
+  if (!isRecord(source) || !isRecord(source.session))
+    throw new Error('the session fixture is not an object');
+  const sourceActors: unknown[] = Array.isArray(source.actors)
+    ? (source.actors as unknown[])
+    : [];
+
+  await page.addInitScript(() => {
+    type ControlledWindow = Window & {
+      controlledEventSources?: ControlledEventSource[];
+      setControlledVisibility?: (state: DocumentVisibilityState) => void;
+      dropControlledGlobalStream?: () => void;
+      emitControlledGlobalFrame?: (frame: unknown) => void;
+    };
+
+    class ControlledEventSource extends EventTarget {
+      readonly url: string;
+      onopen: ((event: Event) => void) | null = null;
+      onerror: ((event: Event) => void) | null = null;
+      closed = false;
+
+      constructor(url: string | URL) {
+        super();
+        this.url = String(url);
+        const controlled = window as ControlledWindow;
+        controlled.controlledEventSources ??= [];
+        controlled.controlledEventSources.push(this);
+        setTimeout(() => {
+          this.onopen?.(new Event('open'));
+        }, 0);
+      }
+
+      close(): void {
+        this.closed = true;
+      }
+    }
+
+    const controlled = window as ControlledWindow;
+    controlled.controlledEventSources = [];
+    let visibility: DocumentVisibilityState = 'visible';
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => visibility,
+    });
+    controlled.setControlledVisibility = (state) => {
+      visibility = state;
+      document.dispatchEvent(new Event('visibilitychange'));
+    };
+    controlled.dropControlledGlobalStream = () => {
+      const stream = controlled.controlledEventSources?.find((candidate) =>
+        candidate.url.includes('/sessionData/stream'),
+      );
+      if (stream === undefined)
+        throw new Error('the global event stream did not open');
+      stream.onerror?.(new Event('error'));
+    };
+    controlled.emitControlledGlobalFrame = (frame) => {
+      const streams = controlled.controlledEventSources?.filter((candidate) =>
+        candidate.url.includes('/sessionData/stream'),
+      );
+      const stream = streams?.at(-1);
+      if (stream === undefined)
+        throw new Error('the recovered global event stream did not open');
+      stream.dispatchEvent(
+        new MessageEvent('sessionData', { data: JSON.stringify(frame) }),
+      );
+    };
+    Reflect.set(window, 'EventSource', ControlledEventSource);
+  });
+
+  await page.route('**/api/sessions', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.fallback();
+      return;
+    }
+    await route.fulfill({
+      status: 202,
+      json: { status: 'started', window_id: 'fixture-window', reason: null },
+    });
+  });
+  await page.goto('/');
+  await expect(page.locator('#conn')).toHaveAttribute('data-on', '1');
+  await page.evaluate(() => {
+    const controlled = window as Window & {
+      setControlledVisibility?: (state: DocumentVisibilityState) => void;
+      dropControlledGlobalStream?: () => void;
+    };
+    controlled.setControlledVisibility?.('hidden');
+    controlled.dropControlledGlobalStream?.();
+    controlled.setControlledVisibility?.('visible');
+  });
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as Window & {
+              controlledEventSources?: { url: string }[];
+            }
+          ).controlledEventSources?.filter((source) =>
+            source.url.includes('/sessionData/stream'),
+          ).length ?? 0,
+      ),
+    )
+    .toBe(2);
+
+  await page.evaluate((session: Record<string, unknown>) => {
+    const controlled = window as Window & {
+      emitControlledGlobalFrame?: (frame: unknown) => void;
+    };
+    controlled.emitControlledGlobalFrame?.({
+      sessions: [{ ...session, state: 'finished', finished_at: Date.now() }],
+      actors: [],
+    });
+  }, source.session);
+  await expect(
+    page.locator('.scard').filter({ hasText: 'Frontend parity work' }),
+  ).toHaveCount(0);
+
+  const workingDirectory = String(source.session.working_directory);
+  await page.getByRole('button', { name: '+ session' }).click();
+  const dialog = page.getByRole('dialog', { name: 'new session' });
+  await dialog.getByLabel('directory').fill(workingDirectory);
+  await dialog
+    .getByPlaceholder(/what should .* start on\?/)
+    .fill('Show the recovered session.');
+  const launchResponse = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === '/api/sessions' &&
+      response.request().method() === 'POST',
+  );
+  await dialog.getByRole('button', { name: 'launch', exact: true }).click();
+  await launchResponse;
+  await expect(page.getByText('starting session')).toBeVisible();
+
+  await page.evaluate(
+    (frame) => {
+      const controlled = window as Window & {
+        emitControlledGlobalFrame?: (frame: unknown) => void;
+      };
+      controlled.emitControlledGlobalFrame?.(frame);
+    },
+    { sessions: [source.session], actors: sourceActors },
+  );
+
+  await expect(page).toHaveURL(/#\/s\/fixture-active$/);
+  await expect(page.locator('.shead .proj')).toHaveText('Frontend parity work');
+  expect(failures).toEqual([]);
+});
+
 test('keeps activity details readable and expandable', async ({ page }) => {
   const failures = watchBrowserFailures(page);
   await page.goto('/#/s/fixture-active');

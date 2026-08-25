@@ -19,6 +19,8 @@ import time
 from itertools import count
 from uuid import uuid4
 
+import psutil
+
 from terminal.models.values import TabId, WindowId
 from terminal.contract import (
     TerminalInput,
@@ -222,7 +224,7 @@ class PtyMetadata(TerminalMetadata):
                 # the user is looking at is on screen.
                 tab_is_focused=False,
                 is_active_in_tab=True,
-                processes=(WindowProcess(window.process.pid, window.command),),
+                processes=_window_processes(window),
             )
             for window in self.pty_windows.windows.values()
             if window.process.poll() is None
@@ -240,6 +242,22 @@ class PtyMetadata(TerminalMetadata):
     def current_window_id(self) -> WindowId | None:
         # The process asking is never inside one of these: it OWNS them.
         return None
+
+
+def _window_processes(window: PtyWindow) -> tuple[WindowProcess, ...]:
+    """The wrapper and every live descendant hosted by this PTY window."""
+    try:
+        root = psutil.Process(window.process.pid)
+        process_tree = (root, *root.children(recursive=True))
+    except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
+        return (WindowProcess(window.process.pid, window.command),)
+    reported: list[WindowProcess] = []
+    for process in process_tree:
+        try:
+            reported.append(WindowProcess(process.pid, tuple(process.cmdline())))
+        except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
+            continue
+    return tuple(reported) or (WindowProcess(window.process.pid, window.command),)
 
 
 class PtyInput(TerminalInput):

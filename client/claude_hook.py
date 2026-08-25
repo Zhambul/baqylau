@@ -28,6 +28,8 @@ HARNESS = "claude_code"
 
 
 def main() -> None:
+    if os.environ.get(_http.INTERNAL_MODEL_VARIABLE):
+        return
     payload = sys.stdin.buffer.read()
     # The daemon's own read-only probe of this harness: its hooks are not a
     # raw event of anybody's session, so they are read and dropped.

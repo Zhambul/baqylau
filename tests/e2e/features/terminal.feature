@@ -79,3 +79,79 @@ Feature: a real terminal owns one composable session surface
       | harness     | model        |
       | codex       | gpt-5.6-luna |
       | claude_code | haiku        |
+
+  Scenario Outline: a detached harness cannot inherit another session terminal
+    Given session configuration "host" uses <host_harness> with model <host_model> and low effort
+    And session configuration "detached" uses <detached_harness> with model <detached_model> and low effort
+    When I start journey session "host" from the terminal as turn "host start" with prompt
+      """
+      Remember the marker detached-terminal-owner-731. Reply with exactly this text and no other text: HOST_READY
+      """
+    Then turn "host start" completes
+    And turn "host start" has final answer 'HOST_READY'
+    When I run unattended session "detached" with the terminal environment from journey session "host" and prompt
+      """
+      Reply with exactly this text and no other text: DETACHED_READY
+      """
+    Then session "detached" finishes
+    When I close session "detached" as control "close detached"
+    Then control "close detached" response is rejected
+    And control "close detached" outcome is rejected
+    When I continue journey session "host" from the terminal as turn "host after detached close" with prompt
+      """
+      If you remember detached-terminal-owner-731, reply with exactly this text and no other text: HOST_STILL_READY
+      """
+    Then turn "host after detached close" completes
+    And turn "host after detached close" has final answer 'HOST_STILL_READY'
+
+    Examples:
+      | host_harness | host_model   | detached_harness | detached_model |
+      | codex        | gpt-5.6-luna | claude_code      | haiku          |
+      | claude_code  | haiku        | codex            | gpt-5.6-luna   |
+
+  Scenario Outline: native exit finishes the harness but keeps the shell tab
+    Given session configuration "primary" uses <harness> with model <model> and low effort
+    When I start journey session "primary" from the terminal as turn "before native exit" with prompt
+      """
+      Reply with exactly this text and no other text: BEFORE_NATIVE_EXIT
+      """
+    Then turn "before native exit" completes
+    And turn "before native exit" has final answer 'BEFORE_NATIVE_EXIT'
+    When I submit native command '/exit' to journey session "primary"
+    Then session "primary" finishes
+    And session "primary" is not live
+    And a fresh application session list does not contain session "primary"
+    And journey session "primary" keeps its shell tab
+
+    Examples:
+      | harness     | model        |
+      | codex       | gpt-5.6-luna |
+      | claude_code | haiku        |
+
+  Scenario Outline: native new transfers one terminal to one new session
+    Given session configuration "original" uses <harness> with model <model> and low effort
+    When I start journey session "original" from the terminal as turn "before native new" with prompt
+      """
+      Reply with exactly this text and no other text: BEFORE_NATIVE_NEW
+      """
+    Then turn "before native new" completes
+    And turn "before native new" has final answer 'BEFORE_NATIVE_NEW'
+    When I start journey session "replacement" with native /new in journey session "original" as turn "after native new" with prompt
+      """
+      Reply with exactly this text and no other text: AFTER_NATIVE_NEW
+      """
+    Then session "original" finishes
+    And session "original" is not live
+    And a fresh application session list does not contain session "original"
+    And session "replacement" is live
+    And journey session "replacement" reuses the terminal from journey session "original"
+    When I close session "original" as control "close replaced session"
+    Then control "close replaced session" response is rejected
+    And control "close replaced session" outcome is rejected
+    Then turn "after native new" completes
+    And turn "after native new" has final answer 'AFTER_NATIVE_NEW'
+
+    Examples:
+      | harness     | model        |
+      | codex       | gpt-5.6-luna |
+      | claude_code | haiku        |

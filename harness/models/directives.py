@@ -38,12 +38,12 @@ class ShellOutputChunk:
 
 @dataclass(frozen=True)
 class ProcessExit:
-    """The CLI process this session was running in is gone."""
+    """The CLI process is gone, or its terminal now belongs to a new session."""
 
     __pydantic_config__ = STORED
 
     process_id: int | None
-    state: Literal["exited"]
+    state: Literal["exited", "displaced"]
 
 
 @dataclass(frozen=True)

@@ -46,6 +46,7 @@ from terminal.models import (
 # live terminal window — converts explicitly at the boundary rather than
 # reusing one NewType across it.
 from terminal.models.values import WindowId as NativeWindowId
+from terminal.ownership import window_hosts_process
 
 if TYPE_CHECKING:
     from repository.contract.sessions import SessionRepository
@@ -141,7 +142,29 @@ class TerminalAdapter:
         if window is None:
             return False
         owner = window.tags.get(SESSION_WINDOW_TAG)
-        return not owner or owner == str(session_id)
+        return owner == str(session_id)
+
+    def window_hosts_process(
+        self,
+        window_id: WindowId,
+        process_id: int | None,
+        process_name: str,
+    ) -> bool:
+        """Whether the named harness is the foreground process in this window.
+
+        KITTY_WINDOW_ID is inherited by every child command. It is a location
+        hint, not ownership proof. A hook's resolved CLI PID is exact. A
+        resume-launch observation can arrive before its hook and has no PID,
+        so that one case uses the plugin's exact executable name.
+        """
+        native = NativeWindowId(str(window_id))
+        window = next(
+            (item for item in self._plugin.metadata.windows() if item.window_id == native),
+            None,
+        )
+        if window is None:
+            return False
+        return window_hosts_process(window, process_id, process_name)
 
     def live_sessions(self, session_ids: Iterable[SessionId]) -> frozenset[SessionId]:
         """The subset whose window is still on screen — `window_for_session`
@@ -159,7 +182,7 @@ class TerminalAdapter:
                 continue
             native = NativeWindowId(str(window_id))
             owner = on_screen.get(native)
-            if native in on_screen and (not owner or owner == str(session_id)):
+            if native in on_screen and owner == str(session_id):
                 live.add(session_id)
         return frozenset(live)
 

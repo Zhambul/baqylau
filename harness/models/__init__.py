@@ -49,6 +49,7 @@ from harness.models.controls import (
 )
 from domain.records import RecordedTranslationDecision
 from harness.models.raw_events import (
+    AUTOMATIC_TITLE_SOURCE_TYPE,
     CONTROL_SOURCE_TYPE,
     INTERRUPT_SOURCE_TYPE,
     LIVENESS_SOURCE_TYPE,
@@ -102,6 +103,7 @@ __all__ = [
     "ApplyRewind",
     "AttachmentReference",
     "AutoNameSession",
+    "AUTOMATIC_TITLE_SOURCE_TYPE",
     "CloseSession",
     "CommandOption",
     "CommandResult",

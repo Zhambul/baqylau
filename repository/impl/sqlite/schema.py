@@ -25,7 +25,7 @@ columns, half of them null, and none of them queried.
 
 from __future__ import annotations
 
-MAIN_SCHEMA_VERSION = 13
+MAIN_SCHEMA_VERSION = 15
 AUDIT_SCHEMA_VERSION = 1
 
 # Version 4 rewrote the canonical vocabulary, so files older than that remain
@@ -50,6 +50,9 @@ AUDIT_SCHEMA_VERSION = 1
 # removes two correlated history reads from every interpreter tick.
 # Version 13 stores the stable owner checkout observed when a session starts.
 # A linked worktree can later be removed, but its project group must not change.
+# Version 14 adds the durable, idempotent automatic-title job queue.
+# Version 15 closes a yielded Codex shell whose native completion was recorded
+# as a second shell after an application restart lost transient correlation.
 MAIN_MIGRATIONS: dict[int, tuple[str, ...]] = {
     5: (
         """
@@ -288,6 +291,120 @@ MAIN_MIGRATIONS: dict[int, tuple[str, ...]] = {
         ADD COLUMN project_directory TEXT
         """,
     ),
+    14: (
+        """
+        CREATE TABLE IF NOT EXISTS naming_jobs(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_key TEXT NOT NULL UNIQUE,
+            session_id TEXT NOT NULL,
+            prompt TEXT NOT NULL,
+            state TEXT NOT NULL CHECK(state IN ('pending', 'running', 'completed', 'failed')),
+            title TEXT,
+            error TEXT
+        )
+        """,
+    ),
+    15: (
+        """
+        WITH duplicate_completions AS (
+            SELECT
+                backgrounded.event_id AS backgrounded_event_id,
+                backgrounded.schema_version AS schema_version,
+                backgrounded.session_id AS session_id,
+                backgrounded.actor_id AS actor_id,
+                backgrounded.turn_id AS turn_id,
+                backgrounded.parent_actor_id AS parent_actor_id,
+                backgrounded.harness AS harness,
+                replacement_finished.occurred_at AS occurred_at,
+                replacement_finished.terminal_window_id AS terminal_window_id,
+                replacement_finished.harness_process_id AS harness_process_id,
+                replacement_finished.accepted_at AS accepted_at,
+                json_extract(backgrounded.payload, '$.shell_id') AS shell_id,
+                json_extract(replacement_finished.payload, '$.outcome') AS outcome,
+                ROW_NUMBER() OVER (
+                    PARTITION BY backgrounded.event_id
+                    ORDER BY replacement_started.cursor
+                ) AS candidate_order
+            FROM session_data_actors AS actor_state
+            JOIN json_each(
+                actor_state.payload,
+                '$.background.running_shell_ids'
+            ) AS running_shell
+            JOIN canonical_events AS backgrounded
+              ON backgrounded.session_id = actor_state.session_id
+             AND backgrounded.actor_id = actor_state.actor_id
+             AND backgrounded.event_type = 'shell.backgrounded'
+             AND json_extract(backgrounded.payload, '$.shell_id') =
+                 running_shell.value
+            JOIN canonical_events AS original_started
+              ON original_started.session_id = backgrounded.session_id
+             AND original_started.actor_id = backgrounded.actor_id
+             AND original_started.event_type = 'shell.started'
+             AND json_extract(original_started.payload, '$.shell_id') =
+                 json_extract(backgrounded.payload, '$.shell_id')
+             AND original_started.cursor < backgrounded.cursor
+            JOIN canonical_events AS replacement_started
+              ON replacement_started.session_id = backgrounded.session_id
+             AND replacement_started.actor_id = backgrounded.actor_id
+             AND replacement_started.event_type = 'shell.started'
+             AND replacement_started.cursor > backgrounded.cursor
+             AND json_extract(replacement_started.payload, '$.shell_id') !=
+                 json_extract(backgrounded.payload, '$.shell_id')
+             AND json_extract(replacement_started.payload, '$.command.text') =
+                 json_extract(original_started.payload, '$.command.text')
+            JOIN interpretation_events AS replacement_started_source
+              ON replacement_started_source.event_id = replacement_started.event_id
+             AND replacement_started_source.storage_result = 'accepted'
+            JOIN canonical_events AS replacement_finished
+              ON replacement_finished.session_id = replacement_started.session_id
+             AND replacement_finished.actor_id = replacement_started.actor_id
+             AND replacement_finished.event_type = 'shell.finished'
+             AND json_extract(replacement_finished.payload, '$.shell_id') =
+                 json_extract(replacement_started.payload, '$.shell_id')
+            JOIN interpretation_events AS replacement_finished_source
+              ON replacement_finished_source.event_id = replacement_finished.event_id
+             AND replacement_finished_source.raw_event_id =
+                 replacement_started_source.raw_event_id
+             AND replacement_finished_source.event_order >
+                 replacement_started_source.event_order
+             AND replacement_finished_source.storage_result = 'accepted'
+            WHERE backgrounded.harness = 'codex'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM canonical_events AS original_closed
+                  WHERE original_closed.session_id = backgrounded.session_id
+                    AND original_closed.actor_id = backgrounded.actor_id
+                    AND original_closed.event_type IN (
+                        'shell.finished', 'shell.output_finished'
+                    )
+                    AND json_extract(original_closed.payload, '$.shell_id') =
+                        json_extract(backgrounded.payload, '$.shell_id')
+              )
+        )
+        INSERT INTO canonical_events(
+            event_id, schema_version, event_type, session_id, actor_id,
+            turn_id, parent_actor_id, harness, occurred_at,
+            terminal_window_id, harness_process_id, accepted_at, payload
+        )
+        SELECT
+            'migration:15:recovered-shell-output-finished:' ||
+                backgrounded_event_id,
+            schema_version,
+            'shell.output_finished',
+            session_id,
+            actor_id,
+            turn_id,
+            parent_actor_id,
+            harness,
+            occurred_at,
+            terminal_window_id,
+            harness_process_id,
+            accepted_at,
+            json_object('shell_id', shell_id, 'outcome', outcome)
+        FROM duplicate_completions
+        WHERE candidate_order = 1
+        """,
+    ),
 }
 
 
@@ -354,6 +471,19 @@ CREATE TABLE IF NOT EXISTS pending_raw_events(
     raw_event_id TEXT NOT NULL UNIQUE,
     FOREIGN KEY(raw_event_id) REFERENCES raw_events(raw_event_id)
         ON DELETE CASCADE
+);
+
+-- Model-backed titles are not generated on the interpretation or reaction
+-- critical path. The key is the durable exactly-once boundary across duplicate
+-- prompt facts and daemon restarts.
+CREATE TABLE IF NOT EXISTS naming_jobs(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_key TEXT NOT NULL UNIQUE,
+    session_id TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('pending', 'running', 'completed', 'failed')),
+    title TEXT,
+    error TEXT
 );
 
 CREATE TABLE IF NOT EXISTS interpretations(

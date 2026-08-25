@@ -26,6 +26,15 @@ def session_has_no_auxiliary_panes(
     real_terminal_driver.wait_for_no_auxiliary_panes(session_journeys.get(session_name))
 
 
+@then(parsers.parse('journey session "{session_name}" keeps its shell tab'))
+def session_keeps_shell_tab(
+    real_terminal_driver: RealTerminalDriver,
+    session_journeys: SessionJourneys,
+    session_name: str,
+) -> None:
+    real_terminal_driver.assert_host_window_exists(session_journeys.get(session_name))
+
+
 @when(parsers.parse('I remember journey session "{session_name}" pane geometry as "{geometry_name}"'))
 def remember_pane_geometry(
     real_terminal_driver: RealTerminalDriver,

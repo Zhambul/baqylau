@@ -74,6 +74,81 @@ def close_journey_terminal(
     journey_driver.stop_terminal(session_journeys.get(session_name))
 
 
+@when(parsers.parse(
+    'I submit native command \'{command}\' to journey session "{session_name}"'
+))
+def submit_native_journey_command(
+    journey_driver: JourneyDriver,
+    session_journeys: SessionJourneys,
+    session_name: str,
+    command: str,
+) -> None:
+    journey_driver.submit_native_command(
+        session_journeys.get(session_name),
+        command,
+    )
+
+
+@when(parsers.parse(
+    'I start journey session "{new_name}" with native /new in journey session '
+    '"{old_name}" as turn "{turn_name}" with prompt'
+))
+def start_new_native_journey_session(
+    journey_driver: JourneyDriver,
+    session_journeys: SessionJourneys,
+    sessions: Sessions,
+    turns: Turns,
+    new_name: str,
+    old_name: str,
+    turn_name: str,
+    docstring: str,
+) -> None:
+    started = journey_driver.start_new_native_session(
+        session_journeys.get(old_name),
+        docstring.strip(),
+    )
+    session_journeys.bind(new_name, started.journey)
+    sessions.bind(new_name, started.journey.session)
+    turns.bind(turn_name, started.turn)
+
+
+@then(parsers.parse(
+    'journey session "{new_name}" reuses the terminal from journey session "{old_name}"'
+))
+def journey_session_reuses_terminal(
+    session_journeys: SessionJourneys,
+    new_name: str,
+    old_name: str,
+) -> None:
+    new = session_journeys.get(new_name)
+    old = session_journeys.get(old_name)
+    assert new.session != old.session
+    assert new.window_id == old.window_id
+
+
+@when(parsers.parse(
+    'I run unattended session "{detached_name}" with the terminal environment '
+    'from journey session "{host_name}" and prompt'
+))
+def run_unattended_session_with_host_environment(
+    journey_driver: JourneyDriver,
+    session_specs: SessionSpecs,
+    session_journeys: SessionJourneys,
+    sessions: Sessions,
+    detached_name: str,
+    host_name: str,
+    docstring: str,
+) -> None:
+    sessions.bind(
+        detached_name,
+        journey_driver.run_unattended_with_inherited_window(
+            session_specs.get(detached_name),
+            session_journeys.get(host_name),
+            docstring.strip(),
+        ),
+    )
+
+
 @when(parsers.parse('I resume journey session "{session_name}" from the {origin} as turn "{turn_name}" with prompt'))
 def resume_journey_session(
     journey_driver: JourneyDriver,

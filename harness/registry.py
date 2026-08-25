@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from harness.contract import HarnessPlugin
+from harness.models import ControlName
 from domain.events import SCHEMA_VERSION
 from domain.errors import UnknownReference
 from domain.ids import HarnessName
@@ -49,6 +50,21 @@ class HarnessRegistry:
         defaults = [plugin for plugin in launchable if plugin.info.default_for_launch]
         if launchable and not defaults:
             raise HarnessRegistryError("no launchable harness is marked as the launch default")
+        for plugin in self._plugins.values():
+            has_native_handler = bool(
+                plugin.controller
+                and ControlName.AUTO_NAME_SESSION in plugin.controller.handlers
+            )
+            if plugin.info.supports_native_automatic_renaming and not has_native_handler:
+                raise HarnessRegistryError(
+                    f"harness {plugin.info.name!r} advertises native automatic naming "
+                    "without an auto-name handler"
+                )
+            if not plugin.info.supports_native_automatic_renaming and has_native_handler:
+                raise HarnessRegistryError(
+                    f"harness {plugin.info.name!r} registers native automatic naming "
+                    "without declaring native support"
+                )
 
     def plugin(self, harness: HarnessName) -> HarnessPlugin:
         try:

@@ -71,6 +71,7 @@ ERROR_FRAME = TypeAdapter(ErrorFrame)
 SESSION_STREAM = TypeAdapter(SessionStreamFrame)
 GLOBAL_STREAM = TypeAdapter(GlobalStreamFrame)
 PANE_COMMAND = TypeAdapter(PaneCommandResponse)
+AUTOMATIC_NAME_TIMEOUT_SECONDS = 120.0
 
 
 @dataclass(frozen=True)
@@ -387,6 +388,8 @@ class SessionsResource:
         session: SessionRef,
         control_name: str,
         document: dict[str, object] | None = None,
+        *,
+        timeout: float | None = None,
     ) -> ActionReceipt:
         cursor = self.snapshot(session).cursor
         request_id = f"e2e-{control_name}-{uuid.uuid4()}"
@@ -395,12 +398,21 @@ class SessionsResource:
         )
         body: dict[str, object] = {"request_id": request_id}
         body.update(document or {})
-        status, outcome = self.transport.post(
-            path,
-            body,
-            CONTROL,
-            {200, 202, 409},
-        )
+        if timeout is None:
+            status, outcome = self.transport.post(
+                path,
+                body,
+                CONTROL,
+                {200, 202, 409},
+            )
+        else:
+            status, outcome = self.transport.post(
+                path,
+                body,
+                CONTROL,
+                {200, 202, 409},
+                timeout=timeout,
+            )
         return ActionReceipt(request_id, status, outcome, cursor)
 
     def send(
@@ -430,7 +442,11 @@ class SessionsResource:
         return self._control(session, "rename-session", {"name": name})
 
     def auto_name(self, session: SessionRef) -> ActionReceipt:
-        return self._control(session, "auto-name-session")
+        return self._control(
+            session,
+            "auto-name-session",
+            timeout=AUTOMATIC_NAME_TIMEOUT_SECONDS,
+        )
 
     def open_rewind(self, session: SessionRef) -> ActionReceipt:
         return self._control(session, "open-rewind")

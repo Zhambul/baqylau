@@ -18,7 +18,7 @@ from api.application.models.insights.application_insights_response import (
 )
 from api.application.models.resume.resumable_session_response import ResumableSessionResponse
 from app.providers import Catalog, Insights, Registry, ResumableSessions
-from harness.models import QueryContext
+from harness.models import ControlName, QueryContext
 from harness.registry import HarnessRegistryError
 from domain.ids import HarnessName, SessionId
 
@@ -34,9 +34,10 @@ def harnesses(registry: Registry) -> list[HarnessDescriptionResponse]:
             launchable=plugin.launcher is not None,
             default_for_launch=plugin.info.default_for_launch,
             supports_attachments=plugin.info.supports_attachments,
-            control_names=(
-                tuple(sorted(plugin.controller.handlers)) if plugin.controller else ()
-            ),
+            control_names=tuple(sorted({
+                *(plugin.controller.handlers if plugin.controller else ()),
+                *(() if plugin.info.supports_native_automatic_renaming else (ControlName.AUTO_NAME_SESSION,)),
+            })),
             supports_accounts=plugin.info.supports_accounts,
             supports_terminal_input=plugin.terminal_probe is not None,
             requires_initial_message=plugin.info.requires_initial_message,

@@ -54,6 +54,31 @@ Feature: live harness sessions survive a Baqylau restart
       | claude_code | haiku        | lead     |
       | claude_code | haiku        | subagent |
 
+  Scenario Outline: a yielded command closes its original job after restart
+    Given session configuration "primary" uses <harness> with model <model> and low effort
+    When I start journey session "primary" from the dashboard as turn "yield before restart" with prompt
+      """
+      Use the shell execution tool with a 1000 ms yield time to run
+      `python -c 'import time; time.sleep(25); print("yield-restart-done")'`.
+      Do not poll the process after it yields. Reply only with YIELD_RESTART_STARTED.
+      """
+    Then turn "yield before restart" completes
+    And turn "yield before restart" has final answer 'YIELD_RESTART_STARTED'
+    When I name the only background job in turn "yield before restart" containing 'time.sleep(25)' "yielded restart command"
+    Then job "yielded restart command" is running
+    When I restart Baqylau as application restart "yielded command restart"
+    Then application restart "yielded command restart" replaces the server process
+    And job "yielded restart command" has output containing 'yield-restart-done'
+    And job "yielded restart command" ends
+    And command "yielded restart command" has state succeeded
+    And session "primary" has no running work
+    And the lead in session "primary" has status awaiting_response
+    And session "primary" has no repeated entry identity
+
+    Examples:
+      | harness | model        |
+      | codex   | gpt-5.6-luna |
+
   Scenario Outline: history preferences queue and resume state survive restart
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I start journey session "primary" from the dashboard as turn "active work" with prompt
