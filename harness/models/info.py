@@ -29,6 +29,7 @@ class HarnessInfo:
     supports_attachments: bool = False
     default_for_launch: bool = False
     supports_accounts: bool = False
+    supports_native_automatic_renaming: bool = False
     # Whether a launch MUST carry a first message. True for a harness that
     # announces its session only once the first TURN begins — its session-start
     # raw event lands with the first prompt, never at startup. Launched with an

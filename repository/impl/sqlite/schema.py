@@ -25,7 +25,7 @@ columns, half of them null, and none of them queried.
 
 from __future__ import annotations
 
-MAIN_SCHEMA_VERSION = 13
+MAIN_SCHEMA_VERSION = 14
 AUDIT_SCHEMA_VERSION = 1
 
 # Version 4 rewrote the canonical vocabulary, so files older than that remain
@@ -50,6 +50,7 @@ AUDIT_SCHEMA_VERSION = 1
 # removes two correlated history reads from every interpreter tick.
 # Version 13 stores the stable owner checkout observed when a session starts.
 # A linked worktree can later be removed, but its project group must not change.
+# Version 14 adds the durable, idempotent automatic-title job queue.
 MAIN_MIGRATIONS: dict[int, tuple[str, ...]] = {
     5: (
         """
@@ -288,6 +289,19 @@ MAIN_MIGRATIONS: dict[int, tuple[str, ...]] = {
         ADD COLUMN project_directory TEXT
         """,
     ),
+    14: (
+        """
+        CREATE TABLE IF NOT EXISTS naming_jobs(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_key TEXT NOT NULL UNIQUE,
+            session_id TEXT NOT NULL,
+            prompt TEXT NOT NULL,
+            state TEXT NOT NULL CHECK(state IN ('pending', 'running', 'completed', 'failed')),
+            title TEXT,
+            error TEXT
+        )
+        """,
+    ),
 }
 
 
@@ -354,6 +368,19 @@ CREATE TABLE IF NOT EXISTS pending_raw_events(
     raw_event_id TEXT NOT NULL UNIQUE,
     FOREIGN KEY(raw_event_id) REFERENCES raw_events(raw_event_id)
         ON DELETE CASCADE
+);
+
+-- Model-backed titles are not generated on the interpretation or reaction
+-- critical path. The key is the durable exactly-once boundary across duplicate
+-- prompt facts and daemon restarts.
+CREATE TABLE IF NOT EXISTS naming_jobs(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_key TEXT NOT NULL UNIQUE,
+    session_id TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('pending', 'running', 'completed', 'failed')),
+    title TEXT,
+    error TEXT
 );
 
 CREATE TABLE IF NOT EXISTS interpretations(

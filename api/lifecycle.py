@@ -1,7 +1,7 @@
 # api/lifecycle.py — what the daemon runs BESIDE the request loop, owned by the
 # ASGI lifespan instead of by hand around uvicorn.
 #
-# The three threads and the one boot chore used to live in the server's
+# The background threads and the one boot chore used to live in the server's
 # try/finally block.
 # They live here because they need exactly what the routes need — the same
 # interpreter, the same usage state — and the singleton registry is the app's, so
@@ -49,6 +49,7 @@ def background_workers(instances: Instances) -> Iterator[None]:
     interpreter = resolve(instances, providers.interpreter)
     reactions = resolve(instances, providers.reaction_loop)
     usage_state = resolve(instances, providers.usage_state)
+    naming_worker = resolve(instances, providers.naming_worker)
     # Attachments are pruned from the ROW, not by walking the directory and
     # trusting mtimes: what we wrote is what we know about.
     resolve(instances, providers.uploads).prune()
@@ -57,11 +58,13 @@ def background_workers(instances: Instances) -> Iterator[None]:
     reaction_stop = threading.Event()
     usage_stop = threading.Event()
     notifier_stop = threading.Event()
+    naming_stop = threading.Event()
     observation = _worker("baqylau-interpreter", interpreter.run, observation_stop)
     # The second loop of the two: the interpreter appends facts, this follows
     # them. Decoupled by the canonical cursor, so neither waits on the other.
     reaction = _worker("baqylau-reactions", reactions.run, reaction_stop)
     usage = _worker("baqylau-usage", usage_state.run, usage_stop)
+    naming = _worker("baqylau-naming", naming_worker.run, naming_stop)
     # The notifier used to be the one worker with no stop event and no join: it
     # died with the process. It stops like its siblings now.
     notifier = _worker("baqylau-notifier", _notifier(instances).run, notifier_stop)
@@ -72,7 +75,9 @@ def background_workers(instances: Instances) -> Iterator[None]:
         reaction_stop.set()
         usage_stop.set()
         notifier_stop.set()
+        naming_stop.set()
         observation.join(timeout=2)
         reaction.join(timeout=2)
         usage.join(timeout=2)
         notifier.join(timeout=2)
+        naming.join(timeout=2)

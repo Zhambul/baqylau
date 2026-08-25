@@ -1,5 +1,21 @@
 Feature: session controls change live session state
 
+  Scenario Outline: a first prompt receives a concise isolated automatic title
+    Given session configuration "primary" uses <harness> with model <model> and low effort
+    When I launch session "primary" as turn "automatic initial name" with prompt
+      """
+      https://example.invalid/a/very/long/request <section>Run the migration</section>
+      Command output: processing-row-1 processing-row-2 processing-row-3.
+      Reply only with READY_AFTER_LONG_PROMPT.
+      """
+    Then turn "automatic initial name" completes
+    And session "primary" has a concise title unlike 'https://example.invalid/a/very/long/request <section>Run the migration</section>'
+    And the application contains exactly session "primary"
+
+    Examples:
+      | harness | model |
+      | codex   | gpt-5.6-luna |
+
   Scenario Outline: closing a session stops its active work
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" and assign work "work during close" to the <worker> with prompt
@@ -76,9 +92,13 @@ Feature: session controls change live session state
     Then control "automatic name" response is accepted
     And control "automatic name" outcome is acknowledged
     And session "primary" title is not 'Temporary E2E title'
+    When I request an automatic name for session "primary" as control "second automatic name"
+    Then control "second automatic name" response is accepted
+    And control "second automatic name" outcome is acknowledged
 
     Examples:
       | harness     | model |
+      | codex       | gpt-5.6-luna |
       | claude_code | haiku |
 
   Scenario Outline: a parked session keeps a durable custom name
@@ -103,5 +123,28 @@ Feature: session controls change live session state
 
     Examples:
       | harness     | model        | parked_title                  |
-      | codex       | gpt-5.6-luna | Parked Codex title 82451      |
       | claude_code | haiku        | Parked Claude Code title 82451 |
+
+  Scenario Outline: a parked generic session can replace a custom title automatically
+    Given session configuration "primary" uses <harness> with model <model> and low effort
+    When I launch session "primary" as turn "parked generic name" with prompt
+      """
+      Reply only with PARKED_GENERIC_READY.
+      """
+    Then turn "parked generic name" completes
+    When I close session "primary" as control "park generic session"
+    Then control "park generic session" response is accepted
+    And control "park generic session" outcome is acknowledged
+    And session "primary" finishes
+    When I rename session "primary" to 'Temporary parked generic title' as control "temporary parked name"
+    Then control "temporary parked name" response is accepted
+    And control "temporary parked name" outcome is acknowledged
+    And session "primary" has title 'Temporary parked generic title'
+    When I request an automatic name for session "primary" as control "automatic parked name"
+    Then control "automatic parked name" response is accepted
+    And control "automatic parked name" outcome is acknowledged
+    And session "primary" title is not 'Temporary parked generic title'
+
+    Examples:
+      | harness | model |
+      | codex   | gpt-5.6-luna |

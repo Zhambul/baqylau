@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from harness.contract import CoreTranslator
 from harness.models import (
+    AUTOMATIC_TITLE_SOURCE_TYPE,
     RawEvent,
     TranslationResult,
     canonical_event,
@@ -203,5 +204,27 @@ class ControlTranslator(CoreTranslator):
             )
         return TranslationResult(
             (event,),
+            RecordedTranslationDecision.TRANSLATED,
+        )
+
+
+class AutomaticTitleTranslator(CoreTranslator):
+    """A generated title observation becomes a harness-independent fact."""
+
+    def translate(self, raw_event: RawEvent) -> TranslationResult:
+        if raw_event.source_type != AUTOMATIC_TITLE_SOURCE_TYPE:
+            raise ValueError("automatic title translator received another source type")
+        observation = decode_document(SessionRenameObservation, raw_event.payload)
+        changed = SessionTitleChanged(observation.title, observation.origin)
+        return TranslationResult(
+            (
+                canonical_event(
+                    raw_event,
+                    "session",
+                    str(raw_event.session_id),
+                    f"title:{observation.origin}:{raw_event.source_position}",
+                    changed,
+                ),
+            ),
             RecordedTranslationDecision.TRANSLATED,
         )

@@ -55,6 +55,15 @@ subscription_count  # RouteDecision
 # attribute looks like from inside our own graph.
 _.total_tokens
 
+# Naming jobs are invoked through the repository Protocol. Vulture keeps the
+# concrete and Protocol declarations separate from those attribute call sites,
+# even though mypy verifies both implementations against the same contract.
+_.enqueue
+_.register_running
+_.claim_next
+_.complete
+_.fail
+
 # pydantic's own config attribute (harness/impl/codex/canonical/records.py,
 # harness/impl/codex/usage.py): pydantic's metaclass reads `model_config` off
 # every BaseModel subclass to build its validator. We only ever ASSIGN it —
