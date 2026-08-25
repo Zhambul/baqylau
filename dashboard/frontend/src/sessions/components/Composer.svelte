@@ -43,6 +43,8 @@
   let mounted = true;
   let timer: ReturnType<typeof setTimeout> | null = null;
 
+  window.addEventListener('pagehide', persistDraft);
+
   const canSend = $derived(
     view.live === true && view.capabilities?.send === true,
   );
@@ -98,11 +100,8 @@
 
   onDestroy(() => {
     mounted = false;
-    if (timer !== null) {
-      clearTimeout(timer);
-      timer = null;
-      dispatchDraft(draft);
-    }
+    window.removeEventListener('pagehide', persistDraft);
+    flushDraft();
     attachmentTray.clear();
   });
 
@@ -121,6 +120,17 @@
     ).catch((error: unknown) => {
       failure = error instanceof Error ? error.message : String(error);
     });
+  }
+
+  function flushDraft(): void {
+    if (timer === null) return;
+    clearTimeout(timer);
+    timer = null;
+    dispatchDraft(draft);
+  }
+
+  function persistDraft(): void {
+    flushDraft();
   }
 
   function scheduleDraft(): void {
