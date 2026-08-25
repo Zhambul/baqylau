@@ -16,7 +16,7 @@ from repository.mapper import facts as mapper
 
 _COLUMNS = (
     "session_id, lead_actor_id, harness, harness_session_id, source_reference, "
-    "working_directory, terminal_window_id, harness_process_id, created_at"
+    "working_directory, project_directory, terminal_window_id, harness_process_id, created_at"
 )
 
 
@@ -32,8 +32,9 @@ class SqliteSessionRepository(SessionRepository):
     def save(self, harness: HarnessName, session: Session) -> None:
         with self.sqlite_database.write() as connection:
             connection.execute(
-                f"INSERT INTO sessions({_COLUMNS}) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                f"INSERT INTO sessions({_COLUMNS}) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(session_id) DO UPDATE SET "
+                "  project_directory = COALESCE(sessions.project_directory, excluded.project_directory),"
                 "  terminal_window_id = excluded.terminal_window_id,"
                 "  harness_process_id = excluded.harness_process_id",
                 mapper.session_values(harness, session, time.time()),
@@ -41,23 +42,14 @@ class SqliteSessionRepository(SessionRepository):
 
     def find(self, session_id: SessionId) -> Session | None:
         with self.sqlite_database.read() as connection:
-            row = connection.execute(
-                "SELECT * FROM sessions WHERE session_id=?", (str(session_id),)
-            ).fetchone()
+            row = connection.execute("SELECT * FROM sessions WHERE session_id=?", (str(session_id),)).fetchone()
         return self._session(row) if row is not None else None
 
     def watchable(self) -> tuple[Session, ...]:
         with self.sqlite_database.read() as connection:
             found = connection.execute(
-                "SELECT sessions.* FROM sessions "
-                "WHERE NOT EXISTS ("
-                "  SELECT 1 FROM canonical_events "
-                "  WHERE canonical_events.session_id = sessions.session_id "
-                "  AND canonical_events.event_type = 'session.finished'"
-                ") ORDER BY ("
-                "  SELECT MAX(raw_events.observed_at) FROM raw_events "
-                "  WHERE raw_events.session_id = sessions.session_id"
-                ") DESC, sessions.created_at DESC",
+                "SELECT * FROM sessions WHERE lifecycle = 'running' "
+                "ORDER BY created_at DESC",
             ).fetchall()
         return tuple(self._session(row) for row in found)
 

@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import sqlite3
 
-from domain.ids import SessionId
-from domain.workspace import ComposerDraft, ComposerQueue, DialogDraft, SessionWorkspace
+from domain.ids import RequestId, SessionId
+from domain.workspace import ComposerDraft, DialogDraft, QueuedMessage, SessionWorkspace
 from repository.contract.workspace import SessionWorkspaceRepository
 from repository.impl.sqlite import rows
 from repository.impl.sqlite.connection import SqliteDatabase
@@ -69,19 +69,36 @@ class SqliteSessionWorkspaceRepository(SessionWorkspaceRepository):
             )
         return True
 
-    def save_composer_queue(self, session_id: SessionId, composer_queue: ComposerQueue) -> None:
+    def enqueue_composer_message(
+        self,
+        session_id: SessionId,
+        queued_message: QueuedMessage,
+        origin: str,
+    ) -> None:
         with self.sqlite_database.write() as connection:
             self._ensure(connection, session_id)
             connection.execute(
                 "UPDATE session_workspaces SET queue_origin=? WHERE session_id=?",
-                (composer_queue.origin, str(session_id)),
+                (origin, str(session_id)),
             )
             connection.execute(
-                "DELETE FROM composer_queue_items WHERE session_id=?", (str(session_id),)
+                "INSERT OR IGNORE INTO composer_queue_items("
+                "session_id, position, request_id, text) "
+                "VALUES(?, (SELECT COALESCE(MAX(position), -1) + 1 "
+                "FROM composer_queue_items WHERE session_id=?), ?, ?)",
+                (
+                    str(session_id),
+                    str(session_id),
+                    str(queued_message.request_id),
+                    queued_message.text,
+                ),
             )
-            connection.executemany(
-                "INSERT INTO composer_queue_items(session_id, position, text) VALUES(?, ?, ?)",
-                mapper.queue_item_values(session_id, composer_queue),
+
+    def remove_queued_message(self, session_id: SessionId, request_id: RequestId) -> None:
+        with self.sqlite_database.write() as connection:
+            connection.execute(
+                "DELETE FROM composer_queue_items WHERE session_id=? AND request_id=?",
+                (str(session_id), str(request_id)),
             )
 
     def save_dialog_draft(self, session_id: SessionId, dialog_draft: DialogDraft) -> None:

@@ -29,23 +29,24 @@ from typing import Callable, Final
 
 from pydantic import JsonValue
 
+from audit.failures import CoalescingFailureRecorder
 from audit.recorder import AuditRecorder
 from domain.entries import (
     EntryBody,
     EntryTypeName,
     FileBody,
+    FileState,
     MessageBody,
     ReasoningBody,
     SearchBody,
     SessionEntry,
-    ShellFinishedBody,
     ShellOutputBody,
     WebBody,
 )
 from domain.events import EVENT_TYPES, CanonicalEvent, EventPayload
 from domain.ids import SessionId
 from domain.sessiondata import ActorFacts
-from domain.values import Content, content_text
+from domain.values import Content, FileAction, content_text
 from engine.sessiondata.contract import (
     AggregateState,
     AppliedActorListener,
@@ -68,7 +69,6 @@ EMPTY_BODY_SUSPECT: Final[Mapping[EntryTypeName, str]] = {
     EntryTypeName.MESSAGE: "content",         # the message itself
     EntryTypeName.REASONING: "content",       # the thinking a reader expands to read
     EntryTypeName.SHELL_OUTPUT: "content",    # the chunk that IS the entry
-    EntryTypeName.SHELL_FINISHED: "result",   # the output a non-streaming harness attaches to its finish
     EntryTypeName.FILE: "content",            # the diff, or the file's text
     EntryTypeName.SEARCH: "result",           # what the search found
     EntryTypeName.WEB: "result",              # what the fetch returned
@@ -85,8 +85,6 @@ def _content_field(entry_body: EntryBody) -> Content | None:
         return entry_body.content
     if isinstance(entry_body, ShellOutputBody):
         return entry_body.content
-    if isinstance(entry_body, ShellFinishedBody):
-        return entry_body.result
     if isinstance(entry_body, FileBody):
         return entry_body.content
     if isinstance(entry_body, SearchBody):
@@ -126,6 +124,7 @@ class ReactionLoop:
         self.harnesses = harness_registry
         self.controls = harness_reactor_context  # handed to harness reactors per call
         self.audit = audit_recorder
+        self.failures = CoalescingFailureRecorder(audit_recorder, "reactions")
         self.clock = clock
 
     def run(self, stop_event: threading.Event) -> None:
@@ -256,12 +255,7 @@ class ReactionLoop:
     ) -> None:
         """Record a swallowed failure, then carry on. Guarded, so a broken
         auditor can never take down the loop it exists to explain."""
-        try:
-            self.audit.error(
-                str(context.get("session_id", "")), f"reactions ({where})", context
-            )
-        except Exception:
-            pass
+        self.failures.record(where, context)
 
     def _audit_empty_body(
         self, canonical_event: CanonicalEvent[EventPayload], session_entry: SessionEntry
@@ -273,6 +267,11 @@ class ReactionLoop:
         leaves a trace pointing at the fact that caused it.
         """
         if session_entry.entry_type not in EMPTY_BODY_SUSPECT:
+            return
+        if isinstance(session_entry.body, FileBody) and (
+            session_entry.body.action == FileAction.RENAMED
+            or session_entry.body.state == FileState.FAILED
+        ):
             return
         content = _content_field(session_entry.body)
         if content is None or content_text(content).strip() != "":

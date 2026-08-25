@@ -53,9 +53,7 @@ def every_harness_is_launchable(harness_lists: HarnessLists, name: str) -> None:
     assert not found, f"harness list {name!r} has harnesses that cannot launch: {found}"
 
 
-@then(parsers.parse(
-    'harness {harness} in list "{name}" advertises control {control_name}'
-))
+@then(parsers.parse('harness {harness} in list "{name}" advertises control {control_name}'))
 def harness_advertises_control(
     harness_lists: HarnessLists,
     name: str,
@@ -66,6 +64,21 @@ def harness_advertises_control(
     assert len(matches) == 1
     assert control_name in matches[0].control_names, (
         f"harness {harness!r} advertises controls {matches[0].control_names}"
+    )
+
+
+@then(parsers.parse("harness {harness} in list \"{name}\" advertises exactly controls '{control_names}'"))
+def harness_advertises_exact_controls(
+    harness_lists: HarnessLists,
+    name: str,
+    harness: str,
+    control_names: str,
+) -> None:
+    matches = [item for item in harness_lists.get(name) if item.name == harness]
+    assert len(matches) == 1
+    expected = tuple(sorted(control_names.split(",")))
+    assert matches[0].control_names == expected, (
+        f"harness {harness!r} advertises controls {matches[0].control_names}; expected {expected}"
     )
 
 
@@ -109,3 +122,14 @@ def catalog_has_command(
 ) -> None:
     found = [item for item in harness_catalogs.get(name).commands if item.command == command]
     assert len(found) == 1, f"catalog {name!r} has {len(found)} commands named {command!r}"
+
+
+@then(parsers.parse("catalog \"{name}\" advertises exactly rewind modes '{rewind_modes}'"))
+def catalog_advertises_exact_rewind_modes(
+    harness_catalogs: HarnessCatalogs,
+    name: str,
+    rewind_modes: str,
+) -> None:
+    actual = tuple(mode.value for mode in harness_catalogs.get(name).rewind_modes)
+    expected = tuple(rewind_modes.split(","))
+    assert actual == expected, f"catalog {name!r} advertises rewind modes {actual}; expected {expected}"

@@ -15,9 +15,8 @@ import hashlib
 import re
 import time
 
-from domain.ids import AccountId, HarnessName, RawEventId, SessionId
+from domain.ids import HarnessName, RawEventId, SessionId
 from harness.contract import HarnessTelemetryGateway
-from harness.impl.claude_code import account
 from harness.impl.claude_code.ids import ClaudeCodeSessionId, session_id_from_claude_code
 from harness.impl.claude_code.canonical import records
 from harness.models import (
@@ -153,16 +152,12 @@ class ClaudeTelemetryGateway(HarnessTelemetryGateway):
             # A fresh account before its first API response: leave the last good
             # snapshot in place rather than overwrite it with nothing.
             return None
-        # The status-line client stamped its own environment's two account values
-        # on the way past, raw and unvalidated (`client/claude_statusline.py`).
-        account_id, display_name = account.normalize(
-            AccountId(document.account_id) if document.account_id else None,
-            document.account_name,
-        )
         return AccountUsageSnapshot(
             harness=HARNESS,
-            account_id=account_id,
-            display_name=display_name,
+            # Claude Code has one default account. A status-line process can
+            # still contain old switcher variables until it exits.
+            account_id=None,
+            display_name="claude",
             captured_at=float(document.captured_at or time.time()),
             windows=samples,
         )

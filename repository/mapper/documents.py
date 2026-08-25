@@ -9,7 +9,9 @@ document, with nothing holding the two halves together.
 
 from __future__ import annotations
 
-from typing import TypeVar
+from collections.abc import Hashable
+from functools import cache
+from typing import Any, TypeVar, cast
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -22,18 +24,24 @@ class StoredDocumentError(ValueError):
     never a valid instance of the shape asked for."""
 
 
+@cache
+def _adapter(shape: Hashable) -> TypeAdapter[Any]:
+    """Build one adapter for each stored document type."""
+    return TypeAdapter(cast(Any, shape))
+
+
 def encode_document(value: DocumentType) -> bytes:
     """`value`'s own runtime type IS the shape to validate and dump against —
     the whole reason this takes a type parameter instead of `object`: the
     adapter it builds is for exactly the caller's type, not a generic one."""
-    adapter: TypeAdapter[DocumentType] = TypeAdapter(type(value))
+    adapter = _adapter(cast(Hashable, type(value)))
     return adapter.dump_json(value)
 
 
 def decode_document(shape: type[DocumentType], encoded: bytes | str) -> DocumentType:
     """The inverse, against the shape the caller expects."""
-    adapter: TypeAdapter[DocumentType] = TypeAdapter(shape)
+    adapter = _adapter(cast(Hashable, shape))
     try:
-        return adapter.validate_json(encoded)
+        return cast(DocumentType, adapter.validate_json(encoded))
     except ValidationError as error:
         raise StoredDocumentError(f"not a {shape.__name__}: {error}") from error

@@ -4,7 +4,7 @@ import { lastActiveAt } from './model';
 const ARCHIVE_SECONDS = 3 * 24 * 60 * 60;
 
 export type SessionGroup = {
-  readonly workingDirectory: string;
+  readonly projectDirectory: string;
   readonly count: number;
   readonly active: readonly SessionSnapshot[];
   readonly parked: readonly SessionSnapshot[];
@@ -36,7 +36,7 @@ export function groupSessions(
 ): readonly SessionGroup[] {
   const byDirectory = new Map<string, SessionSnapshot[]>();
   for (const snapshot of sessions) {
-    const directory = snapshot.session.workingDirectory;
+    const directory = snapshot.projectDirectory;
     const group = byDirectory.get(directory) ?? [];
     group.push(snapshot);
     byDirectory.set(directory, group);
@@ -50,11 +50,11 @@ export function groupSessions(
     .filter(
       ([directory, group]) => !isHidden(directory, group, hiddenDirectories),
     )
-    .map(([workingDirectory, group]) => {
+    .map(([projectDirectory, group]) => {
       const active = group.filter((snapshot) => snapshot.live);
       const inactive = group.filter((snapshot) => !snapshot.live);
       return {
-        workingDirectory,
+        projectDirectory,
         count: group.length,
         active,
         parked: inactive.filter(

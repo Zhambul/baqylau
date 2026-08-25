@@ -44,6 +44,7 @@ from domain.records import (
 )
 from harness.models import RawEvent, Session
 from repository.mapper.documents import StoredDocumentError
+from repository.mapper import raw_payloads
 from repository.model.facts import (
     CanonicalEventRow,
     ShellOutputRow,
@@ -63,6 +64,7 @@ def session(session_row: SessionRow) -> Session:
         working_directory=session_row.working_directory,
         terminal_window_id=session_row.terminal_window_id,
         harness_process_id=session_row.harness_process_id,
+        project_directory=session_row.project_directory,
     )
 
 
@@ -74,6 +76,7 @@ def session_values(harness: HarnessName, session: Session, created_at: float) ->
         str(session.session_id),
         session.source_reference,
         session.working_directory,
+        session.project_directory,
         session.terminal_window_id,
         session.harness_process_id,
         created_at,
@@ -99,7 +102,7 @@ def raw_event(raw_event_row: RawEventRow) -> RawEvent:
         ),
         observed_at=raw_event_row.observed_at,
         encoding=raw_event_row.encoding,
-        payload=raw_event_row.payload,
+        payload=raw_payloads.restored(raw_event_row.payload, raw_event_row.payload_codec),
         source_identity=raw_event_row.source_identity,
         terminal_window_id=raw_event_row.terminal_window_id,
         harness_process_id=raw_event_row.harness_process_id,
@@ -109,6 +112,7 @@ def raw_event(raw_event_row: RawEventRow) -> RawEvent:
 
 
 def raw_event_values(raw_event: RawEvent) -> SqlValues:
+    stored_payload, payload_codec = raw_payloads.stored(raw_event.payload)
     return (
         str(raw_event.raw_event_id),
         str(raw_event.session_id),
@@ -121,7 +125,8 @@ def raw_event_values(raw_event: RawEvent) -> SqlValues:
         str(raw_event.parent_actor_id) if raw_event.parent_actor_id is not None else None,
         raw_event.observed_at,
         raw_event.encoding,
-        raw_event.payload,
+        stored_payload,
+        payload_codec,
         raw_event.terminal_window_id,
         raw_event.harness_process_id,
         raw_event.account_id,

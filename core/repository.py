@@ -21,10 +21,11 @@ class RepositoryQueries:
     def canonical_directory(working_directory: str) -> str:
         return os.path.realpath(working_directory) if working_directory else ""
 
-    def project_directory(self, working_directory: str) -> str:
+    @classmethod
+    def project_directory(cls, working_directory: str) -> str:
         if not working_directory:
             return ""
-        canonical_directory = self.canonical_directory(working_directory)
+        canonical_directory = cls.canonical_directory(working_directory)
         current_directory = canonical_directory
         while os.path.isdir(current_directory):
             git_marker = os.path.join(current_directory, ".git")

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from domain.ids import AttentionId, SessionId
+from domain.ids import AttentionId, RequestId, SessionId
 
 
 @dataclass(frozen=True)
@@ -22,6 +22,7 @@ class SessionWorkspaceRow:
 class ComposerQueueItemRow:
     session_id: SessionId
     position: int
+    request_id: RequestId
     text: str
 
 

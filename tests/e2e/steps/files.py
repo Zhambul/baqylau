@@ -30,17 +30,30 @@ def file_operation_fixture_does_not_exist(file_operation_path: str) -> None:
     assert not os.path.exists(file_operation_path)
 
 
+@given("the file rename fixtures do not exist")
+def file_rename_fixtures_do_not_exist(file_rename_paths: tuple[str, str]) -> None:
+    present = [path for path in file_rename_paths if os.path.exists(path)]
+    assert not present, f"file rename fixtures exist: {present}"
+
+
+@given("the missing file fixture does not exist")
+def missing_file_fixture_does_not_exist(missing_file_path: str) -> None:
+    assert not os.path.exists(missing_file_path)
+
+
+@given(parsers.parse("the rewind file contains '{text}'"))
+def rewind_file_has_initial_content(rewind_file_path: str, text: str) -> None:
+    with open(rewind_file_path, encoding="utf-8") as fixture:
+        assert fixture.read().strip() == text
+
+
 @then("the file operation fixture is absent")
 def file_operation_fixture_is_absent(file_operation_path: str) -> None:
     assert not os.path.exists(file_operation_path)
 
 
-@when(parsers.parse(
-    'I name the {action} fixture operation in turn "{turn_name}" "{operation_name}"'
-))
-@when(parsers.parse(
-    'I name the {action} fixture operation in work "{turn_name}" "{operation_name}"'
-))
+@when(parsers.parse('I name the {action} fixture operation in turn "{turn_name}" "{operation_name}"'))
+@when(parsers.parse('I name the {action} fixture operation in work "{turn_name}" "{operation_name}"'))
 def name_fixture_operation(
     client: BaqylauClient,
     turns: Turns,
@@ -62,14 +75,16 @@ def name_fixture_operation(
     file_operations.bind(operation_name, found)
 
 
-@when(parsers.parse(
-    'I name the {action} operation in turn "{turn_name}" for workspace file '
-    '\'{relative_path}\' "{operation_name}"'
-))
-@when(parsers.parse(
-    'I name the {action} operation in work "{turn_name}" for workspace file '
-    '\'{relative_path}\' "{operation_name}"'
-))
+@when(
+    parsers.parse(
+        'I name the {action} operation in turn "{turn_name}" for workspace file \'{relative_path}\' "{operation_name}"'
+    )
+)
+@when(
+    parsers.parse(
+        'I name the {action} operation in work "{turn_name}" for workspace file \'{relative_path}\' "{operation_name}"'
+    )
+)
 def name_workspace_file_operation(
     client: BaqylauClient,
     workspace: str,
@@ -108,7 +123,7 @@ def file_operation_has_state(
     )
 
 
-@then(parsers.parse('file operation "{name}" has content containing \'{text}\''))
+@then(parsers.parse("file operation \"{name}\" has content containing '{text}'"))
 def file_operation_has_content(
     client: BaqylauClient,
     file_operations: FileOperations,
@@ -159,8 +174,34 @@ def file_operation_has_removed_lines(
     )
 
 
-@then(parsers.parse('the file operation fixture contains \'{text}\''))
+@then(
+    parsers.parse(
+        "file operation \"{name}\" moved workspace file '{previous_relative_path}' to '{current_relative_path}'"
+    )
+)
+def file_operation_moved_workspace_file(
+    client: BaqylauClient,
+    workspace: str,
+    file_operations: FileOperations,
+    name: str,
+    previous_relative_path: str,
+    current_relative_path: str,
+) -> None:
+    reference = file_operations.get(name)
+    operation = _operation(client.sessions.snapshot(reference.session), reference)
+    assert operation.previous_path == os.path.join(workspace, previous_relative_path)
+    assert operation.path == os.path.join(workspace, current_relative_path)
+
+
+@then(parsers.parse("the file operation fixture contains '{text}'"))
 def file_operation_fixture_contains(file_operation_path: str, text: str) -> None:
     with open(file_operation_path, encoding="utf-8") as fixture:
         content = fixture.read()
     assert text in content, f"file operation fixture does not contain {text!r}: {content!r}"
+
+
+@then(parsers.parse("the rewind file contains exactly '{text}'"))
+def rewind_file_contains_exactly(rewind_file_path: str, text: str) -> None:
+    with open(rewind_file_path, encoding="utf-8") as fixture:
+        content = fixture.read().strip()
+    assert content == text, f"rewind file contains {content!r}"

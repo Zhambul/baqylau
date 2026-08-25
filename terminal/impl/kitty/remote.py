@@ -28,12 +28,20 @@ from terminal.models.values import WindowId
 FOREIGN = ConfigDict(extra="ignore", frozen=True)
 
 
+class KittyProcess(BaseModel):
+    model_config = FOREIGN
+    pid: int | None = None
+    cmdline: list[str] | None = None
+
+
 class KittyWindowInfo(BaseModel):
     model_config = FOREIGN
     id: int | str | None = None
     columns: int | None = None
     lines: int | None = None
     user_vars: dict[str, str] | None = None
+    foreground_processes: list[KittyProcess] | None = None
+    is_active: bool | None = None
 
 
 class KittyTab(BaseModel):
@@ -72,7 +80,12 @@ class GetTextRcPayload:
     ansi: bool = False
 
 
-KittyRcPayload = SetTabColorRcPayload | GetTextRcPayload
+@dataclasses.dataclass(frozen=True)
+class LsRcPayload:
+    """The kitty `ls` command has no required payload fields."""
+
+
+KittyRcPayload = SetTabColorRcPayload | GetTextRcPayload | LsRcPayload
 
 # The variable kitty exports into every process it starts in a window. Named
 # rather than inlined because a stdlib-only client observes its own window from
@@ -145,8 +158,7 @@ def resolve_listen_on() -> str:
         if _is_socket(f"/tmp/kitty-{pid}"):
             return f"unix:/tmp/kitty-{pid}"
         try:
-            out = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)],
-                                 capture_output=True, text=True).stdout.strip()
+            out = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
             pid = int(out)
         except (ValueError, OSError):
             break
@@ -188,10 +200,12 @@ class KittyRemote:
         if self.kitten is None:
             return 1
         try:
-            return subprocess.run([self.kitten, "@", "--to", self.listen, *args],
-                                  stdout=subprocess.DEVNULL,
-                                  stderr=subprocess.DEVNULL,
-                                  timeout=KITTEN_TIMEOUT_SECONDS).returncode
+            return subprocess.run(
+                [self.kitten, "@", "--to", self.listen, *args],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=KITTEN_TIMEOUT_SECONDS,
+            ).returncode
         except Exception:
             return 1
 
@@ -200,8 +214,7 @@ class KittyRemote:
         if self.kitten is None:
             return None
         try:
-            r = subprocess.run([self.kitten, "@", "--to", self.listen, *args],
-                               capture_output=True, timeout=timeout)
+            r = subprocess.run([self.kitten, "@", "--to", self.listen, *args], capture_output=True, timeout=timeout)
         except Exception:
             return None
         if r.returncode != 0:
@@ -219,7 +232,10 @@ class KittyRemote:
         as EVERY window having just closed — safe for a caller that only
         paints the screen, wrong for one that decides whether to push an
         alert about a session that is still there."""
-        out = self.capture("ls", timeout=KITTEN_QUERY_TIMEOUT_SECONDS)
+        response = self.raw("ls", LsRcPayload(), want_response=True)
+        out = response.data if isinstance(response, KittyRcResponse) and response.ok else None
+        if out is None:
+            out = self.capture("ls", timeout=KITTEN_QUERY_TIMEOUT_SECONDS)
         if out is None:
             return None
         try:
@@ -242,8 +258,7 @@ class KittyRemote:
         stealing) — unlike `windows()`, a focus probe has no earlier answer
         worth repeating, so its failure default stays "not focused"."""
         try:
-            return any(osw.is_focused
-                       for osw in ((self.ls() if tree is None else tree) or []))
+            return any(osw.is_focused for osw in ((self.ls() if tree is None else tree) or []))
         except Exception:
             return False
 
@@ -262,19 +277,21 @@ class KittyRemote:
         if self.kitten is None:
             return False
         try:
-            argv = [self.kitten, "@", "--to", self.listen, "send-text",
-                    "--match", f"id:{win}", "--stdin"]
-            text_argv = argv[:-1] + ["--bracketed-paste=enable", "--stdin"] \
-                if bracketed else argv
-            r = subprocess.run(text_argv, input=text.encode("utf-8"),
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                               timeout=KITTEN_TIMEOUT_SECONDS)
+            argv = [self.kitten, "@", "--to", self.listen, "send-text", "--match", f"id:{win}", "--stdin"]
+            text_argv = argv[:-1] + ["--bracketed-paste=enable", "--stdin"] if bracketed else argv
+            r = subprocess.run(
+                text_argv,
+                input=text.encode("utf-8"),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=KITTEN_TIMEOUT_SECONDS,
+            )
             if r.returncode != 0:
                 return False
             time.sleep(SEND_ENTER_DELAY_SECONDS)
-            r = subprocess.run(argv, input=b"\r",
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                               timeout=KITTEN_TIMEOUT_SECONDS)
+            r = subprocess.run(
+                argv, input=b"\r", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=KITTEN_TIMEOUT_SECONDS
+            )
             return r.returncode == 0
         except Exception:
             return False
@@ -316,8 +333,13 @@ class KittyRemote:
         # Deferred: this is the only site, and every hook process imports this
         # module — a top-level socket import would be paid by all of them.
         import socket  # noqa: PLC0415
-        obj = {"cmd": cmd, "version": KITTY_RC_VERSION,
-               "no_response": not want_response, "payload": dataclasses.asdict(payload)}
+
+        obj = {
+            "cmd": cmd,
+            "version": KITTY_RC_VERSION,
+            "no_response": not want_response,
+            "payload": dataclasses.asdict(payload),
+        }
         try:
             s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             try:
@@ -334,7 +356,7 @@ class KittyRemote:
                     buf += b
             finally:
                 s.close()
-            reply = buf[buf.index(RC_CMD_KEY) + len(RC_CMD_KEY):buf.index(RC_ST)]
+            reply = buf[buf.index(RC_CMD_KEY) + len(RC_CMD_KEY) : buf.index(RC_ST)]
             return KittyRcResponse.model_validate_json(reply)
         except Exception:
             return None

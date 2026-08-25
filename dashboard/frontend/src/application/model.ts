@@ -15,6 +15,7 @@ export type UsageRow = {
   readonly accountId: string | null;
   readonly displayName: string;
   readonly switchable: boolean;
+  readonly defaultForLaunch: boolean;
   readonly plan: string | null;
   readonly windows: readonly UsageWindow[];
   readonly schedulingScore: string | null;
@@ -25,6 +26,7 @@ export type UsageRow = {
     readonly resetsAt: number | null;
   } | null;
   readonly authenticationError: string | null;
+  readonly collectionError: string | null;
 };
 
 export type GlobalApplication = {

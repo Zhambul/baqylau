@@ -22,9 +22,16 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import StrEnum
 
-from domain.ids import ActorId, AttentionId, HarnessName, SessionId, ShellId, TaskId
+from domain.ids import ActorId, AssignmentId, AttentionId, HarnessName, SessionId, ShellId, TaskId
 from domain.stored import STORED
-from domain.values import AccountReference, ActorRole, ModelReference, TaskState, TokenUsage
+from domain.values import (
+    AccountReference,
+    ActorRole,
+    GoalState,
+    ModelReference,
+    TaskState,
+    TokenUsage,
+)
 
 
 class ActorStatus(StrEnum):
@@ -52,7 +59,8 @@ class SessionGoal:
     __pydantic_config__ = STORED
 
     objective: str | None
-    completed: bool
+    state: GoalState
+    reason: str | None
 
 
 @dataclass(frozen=True)
@@ -175,6 +183,10 @@ class ActorFacts:
     # pending, so a restart resumes on the same branch rather than one where
     # nothing was ever asked.
     pending_attention_internal: tuple[AttentionId, ...] = ()
+    # Work assigned by this actor and not yet finished. A lead can end its own
+    # turn while a subagent continues. This set keeps that state from becoming
+    # the green `awaiting_response` state.
+    running_assignment_ids_internal: tuple[AssignmentId, ...] = ()
 
 
 @dataclass(frozen=True)

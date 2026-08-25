@@ -16,17 +16,15 @@ was the only channel.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
-from domain.ids import AccountId, HarnessName
+from domain.ids import HarnessName
 from harness.contract import HarnessUsage
 from harness.models import AccountUsageSnapshot, UsageRow, UsageWindow, UsageWindowSample
 from harness.models.usage import UsageWindowScope
 from repository.contract.usage import AccountUsageRepository
-from harness.impl.claude_code import account
-from harness.impl.claude_code.account import AccountRecord
 from harness.impl.claude_code.usage import live
 
 HARNESS = HarnessName.CLAUDE_CODE
+DISPLAY_NAME = "claude"
 # The account-wide windows. A per-model cap is one of these keys with the model
 # appended — `seven_day_fable` is the weekly Fable bucket under the weekly bar —
 # which is what lets one vocabulary carry both.
@@ -116,37 +114,24 @@ class ClaudeCodeUsage(HarnessUsage):
             for snapshot in account_usage_repository.snapshots()
             if snapshot.harness == HARNESS
         )
-        accounts = account.registry()
         default_snapshot = next(
             (snapshot for snapshot in snapshots if snapshot.account_id is None),
             None,
         )
-        if not accounts and default_snapshot is not None:
-            accounts = [AccountRecord("", default_snapshot.display_name, "")]
-        return tuple(
+        collection = live.collect()
+        return (
             self._row(
-                record,
-                next(
-                    (
-                        snapshot
-                        for snapshot in snapshots
-                        if snapshot.account_id
-                        == (AccountId(record.slug) if record.slug else None)
-                    ),
-                    None,
-                ),
-                live.usage(
-                    account.config_directory(AccountId(record.slug) if record.slug else None)
-                ),
-            )
-            for record in accounts
+                default_snapshot,
+                collection.usage,
+                collection.error,
+            ),
         )
 
     @staticmethod
     def _row(
-        account_record: AccountRecord,
         account_usage_snapshot: AccountUsageSnapshot | None,
         live_usage: live.LiveUsage | None,
+        collection_error: str | None,
     ) -> UsageRow:
         samples = merge(account_usage_snapshot, live_usage)
         windows = []
@@ -163,21 +148,19 @@ class ClaudeCodeUsage(HarnessUsage):
                     model_name=model,
                 )
             )
-        five_hour = next(
-            (sample.used_percent for sample in samples if sample.key == "five_hour"), None
-        )
-        scheduling_score = Decimal(100) - five_hour if five_hour is not None else None
         return UsageRow(
             harness=HARNESS,
-            account_id=AccountId(account_record.slug) if account_record.slug else None,
-            display_name=account_record.label,
-            switchable=bool(account_record.slug),
+            account_id=None,
+            display_name=DISPLAY_NAME,
+            switchable=False,
+            default_for_launch=True,
             plan=live_usage.plan if live_usage is not None else None,
             windows=tuple(windows),
-            scheduling_score=scheduling_score,
-            scheduling_allowed=True,
+            scheduling_score=None,
+            scheduling_allowed=False,
             limit=None,
             authentication_error=None,
+            collection_error=collection_error,
         )
 
 

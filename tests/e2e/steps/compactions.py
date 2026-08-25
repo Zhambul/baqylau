@@ -5,6 +5,7 @@ from __future__ import annotations
 from pytest_bdd import parsers, then, when
 
 from sdk.client import BaqylauClient
+from api.sessiondata.models.entry import CompactionFinishedBodyResponse
 from sdk.state import CompactionState, SessionSnapshot
 from tests.e2e.testkit import selectors
 from tests.e2e.testkit.policy import WaitPolicy
@@ -79,5 +80,37 @@ def compaction_leaves_actor_ready(
             and not snapshot.actor(reference.actor_id).context.compacting
             else None
         ),
+        timeout=wait_policy.feed,
+    )
+
+
+@then(parsers.parse('compaction "{name}" has one finished feed entry'))
+def compaction_has_one_finished_feed_entry(
+    client: BaqylauClient,
+    compactions: Compactions,
+    wait_policy: WaitPolicy,
+    name: str,
+) -> None:
+    reference = compactions.get(name)
+
+    def one_finish(snapshot: SessionSnapshot) -> bool | None:
+        lifecycle = _compaction(snapshot, reference)
+        if not lifecycle.finished:
+            return None
+        finishes = [
+            entry
+            for entry in snapshot.entries
+            if entry.actor_id == reference.actor_id
+            and entry.cursor > reference.started_cursor
+            and isinstance(entry.body, CompactionFinishedBodyResponse)
+        ]
+        assert len(finishes) == 1, (
+            f"compaction {name!r} has {len(finishes)} finished feed entries"
+        )
+        return True
+
+    client.sessions.watch(reference.session).wait(
+        f"compaction {name!r} to have one finished feed entry",
+        one_finish,
         timeout=wait_policy.feed,
     )

@@ -13,6 +13,9 @@ export async function saveComposerDraft(
     apiClient.POST('/api/sessions/{session_id}/application/composer-draft', {
       params: { path: { session_id: sessionId } },
       body: { text, origin, sequence },
+      // Composer drafts are small and must finish when a person reloads or
+      // leaves the page before the debounce timer settles.
+      keepalive: true,
       ...(signal === undefined ? {} : { signal }),
     }),
   );

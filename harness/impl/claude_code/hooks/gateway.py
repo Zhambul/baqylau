@@ -29,7 +29,7 @@ from harness.impl.claude_code.ids import (
     session_id_from_claude_code,
 )
 from harness.impl.claude_code.hooks import foreground
-from harness.impl.claude_code import account, model
+from harness.impl.claude_code import model
 from repository.mapper.documents import encode_document
 
 HARNESS = HarnessName.CLAUDE_CODE
@@ -70,11 +70,6 @@ class ClaudeHookGateway(HarnessHookGateway):
             if native_event_id_value is not None
             else native_event_id
         )
-        # The client forwarded its environment's two account values raw; what a
-        # valid account id looks like is decided here.
-        account_id, account_display_name = account.normalize(
-            harness_hook_request.account_id, harness_hook_request.account_display_name
-        )
         source_type = "hook"
         if (
             hook_name == "SubagentStart"
@@ -101,8 +96,10 @@ class ClaudeHookGateway(HarnessHookGateway):
                 source_identity=f"claude_code:hook:{session_id}",
                 terminal_window_id=harness_hook_request.terminal_window_id,
                 harness_process_id=harness_hook_request.harness_process_id,
-                account_id=account_id,
-                account_display_name=account_display_name,
+                # Claude Code has one default account. Ignore legacy account
+                # headers from hook processes that started before this change.
+                account_id=None,
+                account_display_name=None,
             )
         ]
         if hook_name == "SessionStart" and (harness_hook_request.launch_model or harness_hook_request.launch_effort):

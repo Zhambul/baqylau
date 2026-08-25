@@ -19,9 +19,10 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from audit.models import ApplicationError
+from domain.events import CanonicalEvent, EventPayload, MessageCreated
 from domain.ids import AttentionId, SessionId
 from domain.preferences import DEFAULT_VIEW_MODE, ViewMode
-from domain.values import TextContent
+from domain.values import MessagePhase, MessageRole, TextContent, content_text
 from domain.workspace import (
     AnswerSelection,
     ComposerDraft,
@@ -34,6 +35,7 @@ from domain.workspace import (
 from domain.entries import MessageBody, QuestionAskedBody
 from domain.sessiondata import SessionTask
 from domain.values import AttentionPrompt
+from harness.contract import CanonicalEventReaction
 from repository.contract.session_data import SessionDataRepository
 from harness.models import TerminalSessionState
 from repository.contract.audit import AuditReadRepository
@@ -136,14 +138,6 @@ class SessionApplicationService:
         """Save the newest browser draft; return False for an older concurrent write."""
         return self.session_workspace_repository.save_composer_draft(session_id, ComposerDraft(text, origin, sequence))
 
-    def save_composer_queue(
-        self,
-        session_id: SessionId,
-        messages: tuple[QueuedMessage, ...],
-        origin: str,
-    ) -> None:
-        self.session_workspace_repository.save_composer_queue(session_id, ComposerQueue(messages, origin))
-
     def save_dialog_draft(
         self,
         session_id: SessionId,
@@ -187,11 +181,7 @@ class SessionApplicationService:
         delivered = self._delivered_prompts(session_id)
         queue = None
         if workspace.queue is not None:
-            messages = tuple(
-                message
-                for message in workspace.queue.items
-                if message.text.strip() and not self._delivered(message.text, delivered)
-            )
+            messages = self._remaining_messages(workspace.queue.items, delivered)
             queue = ComposerQueue(messages, workspace.queue.origin) if messages else None
 
         pending_attention_ids = set(self._pending_questions(session_id))
@@ -238,6 +228,63 @@ class SessionApplicationService:
         return tuple(prompts)
 
     @staticmethod
-    def _delivered(text: str, prompts: tuple[str, ...]) -> bool:
-        normalized = text.strip()
-        return bool(normalized) and any(prompt.endswith(normalized) for prompt in prompts)
+    def _remaining_messages(
+        messages: tuple[QueuedMessage, ...],
+        delivered: tuple[str, ...],
+    ) -> tuple[QueuedMessage, ...]:
+        """Consume one queue item per native prompt, in queue order."""
+        unmatched_prompts = list(delivered)
+        remaining = []
+        for message in messages:
+            match = next(
+                (
+                    index
+                    for index, prompt in enumerate(unmatched_prompts)
+                    if _prompt_matches(message.text, prompt)
+                ),
+                None,
+            )
+            if match is None:
+                remaining.append(message)
+            else:
+                unmatched_prompts.pop(match)
+        return tuple(remaining)
+
+
+def _prompt_matches(queued_text: str, delivered_text: str) -> bool:
+    normalized = queued_text.strip()
+    return bool(normalized) and delivered_text.strip().endswith(normalized)
+
+
+class QueuedPromptCanonicalEventReaction(CanonicalEventReaction):
+    """Remove one durable queued send when its native prompt commits."""
+
+    def __init__(self, session_workspace_repository: SessionWorkspaceRepository) -> None:
+        self.workspaces = session_workspace_repository
+
+    def react(self, canonical_event: CanonicalEvent[EventPayload]) -> None:
+        payload = canonical_event.payload
+        if (
+            not isinstance(payload, MessageCreated)
+            or payload.role != MessageRole.USER
+            or payload.phase != MessagePhase.PROMPT
+        ):
+            return
+        delivered = content_text(payload.content)
+        workspace = self.workspaces.find(canonical_event.session_id)
+        queue = workspace.queue if workspace is not None else None
+        if queue is None:
+            return
+        queued = next(
+            (
+                message
+                for message in queue.items
+                if _prompt_matches(message.text, delivered)
+            ),
+            None,
+        )
+        if queued is not None:
+            self.workspaces.remove_queued_message(
+                canonical_event.session_id,
+                queued.request_id,
+            )

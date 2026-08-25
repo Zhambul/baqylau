@@ -16,7 +16,7 @@ from notify import channels
 from notify.channels import NotificationHandle
 from notify.presence import Presence
 from domain.ids import SessionId
-from domain.sessiondata import ActorStatus, SessionData
+from domain.sessiondata import ActorStatus
 from repository.contract.session_data import SessionDataRepository
 from terminal.adapter import TerminalAdapter
 from repository.contract.preferences import (
@@ -73,18 +73,6 @@ class _Alertable:
     status: ActorStatus | None
 
 
-def _lead_status(session_data: SessionData) -> ActorStatus | None:
-    """The session's own status, which is its LEAD actor's.
-
-    A tab shows a session and a session shows its lead: a subagent asking itself
-    a question is not the session asking you one.
-    """
-    for actor in session_data.actors:
-        if actor.actor_id == session_data.session.lead_actor_id:
-            return actor.status
-    return None
-
-
 @dataclass
 class DeliveredNotification:
     session_id: SessionId
@@ -126,6 +114,10 @@ class Notifier:
     def scan(self) -> None:
         # ATTENDED sessions only: a notification is a nudge back to a window,
         # and a parked session has none to nudge you to.
+        visible = self.read_model.lead_sessions()
+        attended = self.terminal.live_sessions(
+            data.session.session_id for data in visible
+        )
         items = tuple(
             _Alertable(
                 session_id=data.session.session_id,
@@ -134,10 +126,10 @@ class Notifier:
                     self.repositories.project_directory(data.session.working_directory) or ""
                 )
                 or str(data.session.session_id),
-                status=_lead_status(data),
+                status=data.lead.status if data.lead is not None else None,
             )
-            for data in self.read_model.visible()
-            if self.terminal.window_for_session(data.session.session_id) is not None
+            for data in visible
+            if data.session.session_id in attended
         )
         current_states = {item.session_id: item.status for item in items}
         self._muted = self.notification_settings.muted_session_ids()

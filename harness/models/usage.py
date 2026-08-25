@@ -66,9 +66,11 @@ class UsageRow:
     account_id: AccountId | None
     display_name: str
     switchable: bool
+    default_for_launch: bool
     plan: str | None
     windows: tuple[UsageWindow, ...]
     scheduling_score: Decimal | None
     scheduling_allowed: bool
     limit: UsageBlock | None
     authentication_error: str | None
+    collection_error: str | None = None

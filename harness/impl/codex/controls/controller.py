@@ -20,6 +20,7 @@ from harness.models import (
     ControlName,
     ControlRequest,
     ControlResult,
+    DurableTitleResult,
     DecidePlan,
     DeliveryResult,
     Interrupt,
@@ -43,6 +44,7 @@ from terminal.models import (
 )
 from domain.events import QuestionAsked
 from domain.ids import WindowId
+
 # The terminal's own window id: `terminal/` may depend on nothing outside
 # itself, so this module — the harness boundary that talks to a live
 # terminal — converts explicitly wherever a domain `WindowId` reaches a
@@ -63,17 +65,12 @@ class _TerminalDriver(Driver):
 
     def get_text(self, window_id: WindowId, extent: str = "screen", ansi: bool = False) -> str | None:
         del extent
-        response = self.terminal.viewport.read_screen(
-            ScreenReadRequest(NativeWindowId(str(window_id)), ansi=ansi)
-        )
+        response = self.terminal.viewport.read_screen(ScreenReadRequest(NativeWindowId(str(window_id)), ansi=ansi))
         return response.text
 
     def send_key(self, window_id: WindowId, *keys: str) -> bool:
         native = NativeWindowId(str(window_id))
-        return all(
-            self.terminal.input.send_key(KeySendRequest(native, str(key))).succeeded
-            for key in keys
-        )
+        return all(self.terminal.input.send_key(KeySendRequest(native, str(key))).succeeded for key in keys)
 
     def send_text(self, window_id: WindowId, text: str) -> bool:
         return self.terminal.input.submit_text(
@@ -114,9 +111,7 @@ class SendTextHandler(ControlHandler):
             raise TypeError("send_text handler requires SendText")
         window_id = control_context.terminal_window_id
         if window_id is None:
-            return DeliveryResult(
-                request.request_id, ControlAcknowledgement.REJECTED, "session is not live"
-            )
+            return DeliveryResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
         if request.replace_terminal_draft:
             try:
                 composer.clear(_TerminalDriver(control_context.terminal), window_id)
@@ -129,7 +124,12 @@ class SendTextHandler(ControlHandler):
         attachment_text = " ".join(attachment.local_path for attachment in request.attachments)
         message = attachment_text + ("\n" if attachment_text and request.text else "") + request.text
         result = _submit(request, control_context, message)
-        return DeliveryResult(result.request_id, result.status, result.reason, queued=False)
+        return DeliveryResult(
+            result.request_id,
+            result.status,
+            result.reason,
+            queued=control_context.lead_active,
+        )
 
 
 def _rollout_abort_state(path: str, position: int) -> tuple[bool, bool]:
@@ -155,10 +155,7 @@ def _rollout_abort_state(path: str, position: int) -> tuple[bool, bool]:
             abort_index = len(records) - 1
     if abort_index is None:
         return False, False
-    queued = any(
-        isinstance(record, (TaskStartedRecord, PromptRecord))
-        for record in records[abort_index + 1:]
-    )
+    queued = any(isinstance(record, (TaskStartedRecord, PromptRecord)) for record in records[abort_index + 1 :])
     return True, queued
 
 
@@ -214,8 +211,15 @@ class CloseSessionHandler(ControlHandler):
         window_id = control_context.terminal_window_id
         if window_id is None:
             return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
+        if control_context.lead_active:
+            InterruptHandler()(
+                Interrupt(request.session_id, request.request_id),
+                control_context,
+            )
         result = terminal.tabs.close_tab(TabCloseRequest(NativeWindowId(str(window_id))))
-        return _result(request, result.succeeded, result.reason or "terminal tab was not closed")
+        if not result.succeeded:
+            return _result(request, False, result.reason or "terminal tab was not closed")
+        return _result(request, True, "terminal tab was not closed")
 
 
 class RenameSessionHandler(ControlHandler):
@@ -234,7 +238,10 @@ class RenameSessionHandler(ControlHandler):
                 return ControlResult(
                     request.request_id, ControlAcknowledgement.INDETERMINATE, "native title store is unavailable"
                 )
-            return ControlResult(request.request_id, ControlAcknowledgement.ACKNOWLEDGED)
+            return DurableTitleResult(
+                request.request_id,
+                ControlAcknowledgement.ACKNOWLEDGED,
+            )
         result = _submit(request, control_context, f"/rename {request.name}")
         if result.status == ControlAcknowledgement.ACKNOWLEDGED:
             durable = title.titles.set_title(session.source_reference, request.name)
@@ -349,10 +356,7 @@ def _native_prompts(question_asked: QuestionAsked) -> list[dialog.Prompt]:
             id=prompt.prompt_id,
             header=prompt.title or "",
             question=prompt.prompt,
-            options=tuple(
-                dialog.PromptChoice(choice.label, choice.description or "")
-                for choice in prompt.choices
-            ),
+            options=tuple(dialog.PromptChoice(choice.label, choice.description or "") for choice in prompt.choices),
         )
         for prompt in question_asked.questions
     ]
@@ -371,7 +375,8 @@ class AnswerQuestionHandler(ControlHandler):
         try:
             answers = (
                 TypeAdapter(list[dialog.Answer]).validate_json(request.answers.json_text)
-                if request.answers is not None else []
+                if request.answers is not None
+                else []
             )
         except ValidationError:
             return ControlResult(
@@ -383,8 +388,12 @@ class AnswerQuestionHandler(ControlHandler):
                     _TerminalDriver(terminal),
                     window_id,
                     _native_prompts(control_context.pending_attention),
-                    request.discussion or "",
+                    "Continue in chat.",
                 )
+                if request.discussion:
+                    delivered = _submit(request, control_context, request.discussion)
+                    if delivered.status != ControlAcknowledgement.ACKNOWLEDGED:
+                        return delivered
             else:
                 dialog.drive(
                     _TerminalDriver(terminal),
@@ -416,10 +425,7 @@ class ReadPlanChoicesHandler(ControlHandler):
         return PlanChoicesResult(
             request.request_id,
             ControlAcknowledgement.ACKNOWLEDGED,
-            choices=tuple(
-                PlanChoice(row.digit, row.label)
-                for row in rows
-            ),
+            choices=tuple(PlanChoice(row.digit, row.label) for row in rows),
         )
 
 

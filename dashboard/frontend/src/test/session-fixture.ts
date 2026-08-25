@@ -68,7 +68,12 @@ export function wireSession(
     finished_at: null,
     account: { account_id: 'account-one', display_name: 'Personal' },
     lead_actor_id: 'actor-lead',
-    goal: { objective: 'Ship it', completed: false },
+    goal: {
+      objective: 'Ship it',
+      state: 'active',
+      reason: null,
+      completed: false,
+    },
     tasks: [
       {
         task_id: 'task-one',
@@ -90,6 +95,7 @@ export function wireSnapshot(
     session: wireSession(id, directory),
     actors: [wireActor(id)],
     live: true,
+    project_directory: directory,
     repository: { branch: 'main', worktree: null, dirty: true },
   };
 }

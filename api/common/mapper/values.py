@@ -110,7 +110,9 @@ def maybe_repository_status(
     if repository_status is None:
         return None
     return RepositoryStatusResponse(
-        branch=repository_status.branch, worktree=repository_status.worktree, dirty=repository_status.dirty
+        branch=repository_status.branch,
+        worktree=repository_status.worktree,
+        dirty=repository_status.dirty,
     )
 
 
@@ -120,6 +122,7 @@ def usage_row(usage_row: UsageRow) -> UsageRowResponse:
         account_id=usage_row.account_id,
         display_name=usage_row.display_name,
         switchable=usage_row.switchable,
+        default_for_launch=usage_row.default_for_launch,
         plan=usage_row.plan,
         windows=tuple(
             UsageWindowResponse(
@@ -144,4 +147,5 @@ def usage_row(usage_row: UsageRow) -> UsageRowResponse:
             )
         ),
         authentication_error=usage_row.authentication_error,
+        collection_error=usage_row.collection_error,
     )

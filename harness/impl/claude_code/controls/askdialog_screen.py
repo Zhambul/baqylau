@@ -159,7 +159,28 @@ def current_question(
         text = "".join((q.question or "").split())
         if text and text in flat and len(text) > best_len:
             best, best_len = i, len(text)
-    return best
+    if best is not None:
+        return best
+
+    # A tall dialog can move the question text above the viewport while its
+    # option rows and footer remain visible. In that case, use exact option
+    # labels as a second identifier. Do not select a question when two
+    # questions have the same best match. A wrong answer is worse than an
+    # indeterminate control result.
+    visible_labels = {row.label for row in rows(screen)}
+    matches: list[tuple[int, int]] = []
+    for i, question in enumerate(questions):
+        option_labels = {
+            label
+            for option in (question.options or ())
+            if (label := (option.label or "").strip())
+        }
+        matches.append((len(visible_labels & option_labels), i))
+    best_count = max((count for count, _ in matches), default=0)
+    winners = [i for count, i in matches if count == best_count]
+    if best_count > 0 and len(winners) == 1:
+        return winners[0]
+    return None
 
 
 def cursor_row(screen: str) -> Row | None:

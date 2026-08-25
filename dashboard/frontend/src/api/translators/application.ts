@@ -10,6 +10,7 @@ function translateUsageRow(wire: Schemas['UsageRowResponse']): UsageRow {
     accountId: wire.account_id,
     displayName: wire.display_name,
     switchable: wire.switchable,
+    defaultForLaunch: wire.default_for_launch,
     plan: wire.plan,
     windows: wire.windows.map((window) => ({
       key: window.key,
@@ -31,6 +32,7 @@ function translateUsageRow(wire: Schemas['UsageRowResponse']): UsageRow {
             resetsAt: wire.limit.resets_at,
           },
     authenticationError: wire.authentication_error,
+    collectionError: wire.collection_error ?? null,
   };
 }
 

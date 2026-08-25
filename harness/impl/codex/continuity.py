@@ -74,3 +74,8 @@ class RewindContinuity:
             del self._pending_by_window[window_id]
             self._resolved_by_session[session_id] = pending.session_id
             return pending.session_id
+
+    def release(self, session_id: SessionId) -> None:
+        """Release a completed rewind relation."""
+        with self._lock:
+            self._resolved_by_session.pop(session_id, None)

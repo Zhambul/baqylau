@@ -24,9 +24,9 @@ class TitleWriteOutcome(StrEnum):
     `True / False / None` tri-state whose three meanings were documented
     only in prose."""
 
-    RENAMED = "renamed"            # the harness's own store now carries the new name
-    UNSUPPORTED = "unsupported"    # this source is not one this harness can rename
-    UNAVAILABLE = "unavailable"    # the store or the row is missing; the caller reports a failure
+    RENAMED = "renamed"  # the harness's own store now carries the new name
+    UNSUPPORTED = "unsupported"  # this source is not one this harness can rename
+    UNAVAILABLE = "unavailable"  # the store or the row is missing; the caller reports a failure
 
 
 class AnswerDecision(StrEnum):
@@ -73,6 +73,7 @@ class ControlContext:
     terminal: TerminalPlugin
     terminal_window_id: WindowId | None
     current_effort: str | None
+    lead_active: bool
     pending_attention: QuestionAsked | PlanProposed | None
 
 
@@ -210,6 +211,11 @@ class ControlResult:
 
 
 @dataclass(frozen=True)
+class DurableTitleResult(ControlResult):
+    """A title was written directly to a parked harness session store."""
+
+
+@dataclass(frozen=True)
 class DeliveryResult(ControlResult):
     queued: bool = False
     restored_text: str = ""
@@ -254,9 +260,5 @@ class PlanChoicesResult(ControlResult):
 
 
 ControlOutcome: TypeAlias = (
-    ControlResult
-    | DeliveryResult
-    | CommandResult
-    | RewindResult
-    | PlanChoicesResult
+    ControlResult | DurableTitleResult | DeliveryResult | CommandResult | RewindResult | PlanChoicesResult
 )

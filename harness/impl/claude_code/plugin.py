@@ -55,7 +55,7 @@ plugin = HarnessPlugin(
         cli_process_name=CLI_PROCESS_NAME,
         supports_attachments=True,
         default_for_launch=True,
-        supports_accounts=True,
+        supports_accounts=False,
         models=MODELS,
         rewind_modes=REWIND_MODES,
     ),

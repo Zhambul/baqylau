@@ -43,6 +43,7 @@ def session(row: sqlite3.Row) -> SessionRow:
         harness=row["harness"],
         source_reference=row["source_reference"],
         working_directory=row["working_directory"],
+        project_directory=row["project_directory"],
         terminal_window_id=row["terminal_window_id"],
         harness_process_id=row["harness_process_id"],
         created_at=row["created_at"],
@@ -64,6 +65,7 @@ def raw_event(row: sqlite3.Row) -> RawEventRow:
         observed_at=row["observed_at"],
         encoding=row["encoding"],
         payload=row["payload"],
+        payload_codec=row["payload_codec"],
         terminal_window_id=row["terminal_window_id"],
         harness_process_id=row["harness_process_id"],
         account_id=row["account_id"],
@@ -125,6 +127,7 @@ def composer_queue_item(row: sqlite3.Row) -> ComposerQueueItemRow:
     return ComposerQueueItemRow(
         session_id=row["session_id"],
         position=row["position"],
+        request_id=row["request_id"],
         text=row["text"],
     )
 

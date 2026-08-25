@@ -24,7 +24,13 @@ CLEAR_LINES_MAX = 50    # ceiling on the per-line kill loop: a corrupt/huge
 COMPOSER_READY_TIMEOUT_S = 3.0
 
 
-def type_command(screen_driver: ScreenDriver, win: WindowId, text: str) -> tuple[bool, bool]:
+def type_command(
+    screen_driver: ScreenDriver,
+    win: WindowId,
+    text: str,
+    *,
+    ensure_submit: bool = False,
+) -> tuple[bool, bool]:
     """Put a SLASH COMMAND into a session's input box and submit it. Returns
     (ok, cleared_clipboard_image).
 
@@ -47,10 +53,9 @@ def type_command(screen_driver: ScreenDriver, win: WindowId, text: str) -> tuple
     the typed `/rewind` did not. The Enter rides outside the paste
     (the terminal's own submit convention), so it still submits.
 
-    The clipboard-image guard comes with it: a bracketed paste makes Claude Code
-    attach whatever IMAGE is on the board, so no caller may paste without it — folding the two together here is
-    the point of the single owner. THIS host declares
-    `paste_grabs_clipboard_image`; a host that doesn't pays no osascript.
+    The clipboard-image guard comes with it: a bracketed paste can make Claude
+    Code attach an unrelated image from the board. No caller can paste before
+    this one delivery owner clears that accidental input.
 
     DELIVERY IS VERIFIED, not assumed. Even with the CR as its own delayed
     keystroke, the submit is swallowed intermittently (measured 2026-08-15,
@@ -59,8 +64,8 @@ def type_command(screen_driver: ScreenDriver, win: WindowId, text: str) -> tuple
     itself is read back: if the message is still sitting there, Enter is
     re-sent with backoff, and a message that never leaves the draft is a FAILED
     delivery — the caller reports indeterminate instead of lying. Multi-line
-    pastes collapse into Claude Code's placeholder and cannot be verified; they
-    keep the optimistic contract."""
+    pastes collapse into Claude Code's placeholder. Attachment delivery uses
+    `ensure_submit`, which sends the bounded Enter retry budget for that case."""
     _screen, ready = poll_until(
         screen_driver,
         win,
@@ -73,9 +78,14 @@ def type_command(screen_driver: ScreenDriver, win: WindowId, text: str) -> tuple
     if not screen_driver.paste_text(win, text):
         return False, clip
     marker = _submission_marker(text)
+    time.sleep(SUBMIT_SETTLE_S)
+    if ensure_submit:
+        for delay in SUBMIT_RETRY_DELAYS_S:
+            if not screen_driver.send_key(win, "enter"):
+                return False, clip
+            time.sleep(delay)
     if not marker:
         return True, clip
-    time.sleep(SUBMIT_SETTLE_S)
     for delay in SUBMIT_RETRY_DELAYS_S:
         if not _submission_pending(screen_driver, win, marker):
             return True, clip
@@ -124,22 +134,42 @@ def clear_input(
     prev_text: str = "",
     sleep: Callable[[float], None] = time.sleep,
 ) -> int:
-    """Kill whatever is in the input box, so the paste that follows REPLACES it
-    instead of gluing onto it. Returns the number of lines killed.
+    """Clear a draft and verify each removed logical line on the screen.
 
-    Ctrl+U (to line start) + Ctrl+K (to line end) clear ONE line, and the text
-    the web left there can be MULTI-LINE (session 8b9f870b, 2026-07-29: a 3-line
-    take-back came back, only its last line died, and the resend glued onto the
-    two survivors) — so `prev_text` (the stash, when we have it) drives the loop:
-    one kill per newline, with a backspace between kills consuming the newline to
-    hop up a line. The cursor sits on the LAST line after a restore. With no
-    stash the historical single-line kill stands, and the cursor position within
-    a line never mattered."""
-    lines = prev_text.count("\n") + 1 if prev_text else 1
-    for i in range(min(lines, CLEAR_LINES_MAX)):
-        if i:
-            screen_driver.send_key(win, "backspace")
+    Ctrl+U and Ctrl+K clear one logical line. A backspace then consumes the
+    preceding newline. The terminal probe normalizes line breaks, so a stored
+    line count is not reliable for a restored multiline prompt. Read the box
+    after each removal and stop when it is empty or when the visible text no
+    longer changes. `prev_text` is only a fallback when the screen is not
+    readable."""
+    fallback_lines = min(prev_text.count("\n") + 1 if prev_text else 1, CLEAR_LINES_MAX)
+    before = _input_text(screen_driver, win)
+    killed = 0
+    for _ in range(CLEAR_LINES_MAX):
         screen_driver.send_key(win, "ctrl+u")
         screen_driver.send_key(win, "ctrl+k")
-    sleep(CLEAR_GAP_S)
-    return lines
+        killed += 1
+        sleep(CLEAR_GAP_S)
+        after = _input_text(screen_driver, win)
+        if after == "":
+            return killed
+        if after is not None and after == before:
+            return killed
+        if after is None and killed >= fallback_lines:
+            return killed
+        screen_driver.send_key(win, "backspace")
+        joined = _input_text(screen_driver, win)
+        before = joined if joined is not None else after
+    return killed
+
+
+def _input_text(screen_driver: ScreenDriver, win: WindowId) -> str | None:
+    """Read real composer text, with a plain-screen fallback for PTY tests."""
+    for ansi in (True, False):
+        screen = screen_driver.get_text(win, ansi=ansi)
+        if screen is None:
+            continue
+        if not suggestion.input_box_visible(screen):
+            return None
+        return suggestion.typed(screen) or ""
+    return None

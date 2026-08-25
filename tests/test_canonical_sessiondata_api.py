@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 import time
 from dataclasses import replace
+from unittest.mock import Mock
 
 import pytest
 
@@ -61,6 +63,7 @@ from domain.values import (
     AttentionPrompt,
     ExecutionMode,
     FileAction,
+    GoalState,
     MessagePhase,
     MessageRole,
     ModelReference,
@@ -73,12 +76,16 @@ from domain.values import (
     TokenUsage,
     WorktreeAction,
 )
-from api.sessiondata import mapper, streams
-from core.repository import RepositoryStatus
+from api.sessiondata import mapper, routes, streams
+from core.repository import RepositoryQueries, RepositoryStatus
 from decimal import Decimal
 from repository.contract.session_data import SessionDataChanges
+from repository.contract.session_data import SessionDataRepository
+from repository.contract.sessions import SessionRepository
+from harness.models import Session
 from repository.impl.sqlite.databases import main_database
 from repository.impl.sqlite.session_data import SqliteSessionDataRepository
+from terminal.adapter import TerminalAdapter
 
 SESSION = SessionId("session-one")
 LEAD = ActorId("session-one:lead")
@@ -144,7 +151,11 @@ def test_the_snapshot_carries_the_facts_the_world_state_and_one_cursor():
     data = SessionData(
         session=replace(
             FACTS,
-            goal=SessionGoal("ship the redesign", False),
+            goal=SessionGoal(
+                "ship the redesign",
+                GoalState.BLOCKED,
+                "waiting for approval",
+            ),
             tasks=(SessionTask(TaskId("t1"), "Fix the reconnect", None, TaskState.IN_PROGRESS, LEAD),),
             continued_from=SessionId("session-before-rewind"),
         ),
@@ -163,6 +174,9 @@ def test_the_snapshot_carries_the_facts_the_world_state_and_one_cursor():
     assert response.session.working_directory == "/work/baqylau"
     assert response.session.account.display_name == "zhambyl"
     assert response.session.goal.objective == "ship the redesign"
+    assert response.session.goal.state == "blocked"
+    assert response.session.goal.reason == "waiting for approval"
+    assert response.session.goal.completed is False
     assert [task.subject for task in response.session.tasks] == ["Fix the reconnect"]
     assert response.session.continued_from == "session-before-rewind"
     # Beside the facts, not inside them: an SSE frame carries the same `session`
@@ -170,6 +184,78 @@ def test_the_snapshot_carries_the_facts_the_world_state_and_one_cursor():
     assert response.live is True
     assert response.repository.branch == "main"
     assert not hasattr(response.session, "live")
+
+
+def test_the_session_list_maps_only_terminal_attached_sessions():
+    live = SessionData(session=FACTS, actors=(ACTOR,), cursor=12)
+    parked_id = SessionId("session-parked")
+    parked = SessionData(
+        session=replace(
+            FACTS,
+            session_id=parked_id,
+            lead_actor_id=ActorId("session-parked:lead"),
+            working_directory="/work/parked",
+        ),
+        actors=(),
+        cursor=11,
+    )
+    read_model = Mock(spec=SessionDataRepository)
+    read_model.high_water_cursor.return_value = 15
+    read_model.visible.return_value = (live, parked)
+    terminal = Mock(spec=TerminalAdapter)
+    terminal.live_sessions.return_value = frozenset({SESSION})
+    repositories = Mock(spec=RepositoryQueries)
+    repositories.status.return_value = RepositoryStatus("main", None, False)
+    repositories.project_directory.return_value = "/work/baqylau"
+    session_storage = Mock(spec=SessionRepository)
+    session_storage.find.return_value = Session(
+        SESSION,
+        LEAD,
+        "/work/session.jsonl",
+        "/work/baqylau",
+        project_directory="/work/baqylau",
+    )
+
+    response = routes.session_data_list(
+        read_model,
+        terminal,
+        repositories,
+        session_storage,
+    )
+
+    assert response.cursor == 15
+    assert [item.session.session_id for item in response.sessions] == ["session-one"]
+    assert response.sessions[0].live is True
+    assert response.sessions[0].project_directory == "/work/baqylau"
+    terminal.live_sessions.assert_called_once()
+    repositories.status.assert_called_once_with("/work/baqylau")
+
+
+def test_repository_identity_maps_a_linked_worktree_to_its_main_checkout(tmp_path):
+    source = tmp_path / "project"
+    linked = tmp_path / "project-worktree"
+    source.mkdir()
+    commands = (
+        ("init", "--initial-branch=main"),
+        ("config", "user.name", "Baqylau Test"),
+        ("config", "user.email", "baqylau@example.invalid"),
+        ("commit", "--allow-empty", "-m", "initial"),
+        ("worktree", "add", "-b", "worktree", str(linked)),
+    )
+    for arguments in commands:
+        subprocess.run(
+            ("git", "-C", str(source), *arguments),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    status = RepositoryQueries.status(str(linked))
+    project_directory = RepositoryQueries.project_directory(str(linked))
+
+    assert status is not None
+    assert status.worktree == linked.name
+    assert project_directory == str(source)
 
 
 def test_an_actor_carries_one_model_name_and_never_the_ids_behind_it():

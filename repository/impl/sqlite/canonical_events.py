@@ -60,6 +60,10 @@ class SqliteCanonicalEventRepository(CanonicalEventRepository):
                 ") VALUES(?, ?, ?, ?, ?)",
                 mapper.interpretation_record_values(record),
             )
+            connection.execute(
+                "DELETE FROM pending_raw_events WHERE raw_event_id=?",
+                (str(raw_event.raw_event_id),),
+            )
             for event_order, event in enumerate(translation_result.canonical_events):
                 storage_result = self._append(connection, event, completed_at)
                 connection.execute(
@@ -138,4 +142,3 @@ class SqliteCanonicalEventRepository(CanonicalEventRepository):
                 (cursor, limit),
             ).fetchall()
         return tuple(mapper.row_canonical_event(rows.canonical_event(row)) for row in found)
-

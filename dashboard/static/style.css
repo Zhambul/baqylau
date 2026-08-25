@@ -644,7 +644,7 @@ body.in-session #accounts { display: none; }
     color-mix(in srgb, var(--red, #b5484d) 60%, transparent), var(--red, #b5484d));
   box-shadow: 0 0 6px color-mix(in srgb, var(--red, #b5484d) 50%, transparent); }
 /* fixed width + right-align so 0% / 10% / 100% occupy the same column and the
-   "resets …" text that follows stays aligned across the c1/c2 account rows */
+   "resets …" text that follows stays aligned across usage rows */
 .ubar .upct { color: var(--text); font: 650 10px/1 var(--mono);
   min-width: 4ch; text-align: right; flex: none; }
 /* the limit-hit chip + its reset ride ONE trailing cell, so the two are a single
@@ -655,7 +655,7 @@ body.in-session #accounts { display: none; }
    pinning it aligns the dividers. 17ch is the WIDEST resetAgo() output:
    "resets in 23h 59m" (17) beats the days form "resets in 6d 23h" (16), and at
    16ch an hours-and-minutes reset overflowed its column and pushed everything
-   after it — the c1-has-days / c2-has-hours misalignment. The span is rendered
+   after it. The span is rendered
    even when the window has no reset, so the empty column still holds. */
 .ubar .ureset { min-width: 17ch; flex: none; margin-left: 6px; }
 /* de-emphasise the "resets in" prefix; the duration keeps the ureset weight */
@@ -880,10 +880,18 @@ body.in-session #accounts { display: none; }
   box-shadow: var(--card-hover);
   border-left: 3px solid var(--gold);
 }
+.planhead { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .plantitle {
   flex: 1; color: var(--gold); font: 650 11px/1.3 var(--sans);
   text-transform: uppercase; letter-spacing: .1em;
 }
+.planchat {
+  border: none; border-radius: 999px; padding: 4px 11px; cursor: pointer;
+  background: var(--panel2); color: var(--text-soft);
+  font: 500 11.5px/1.3 var(--sans);
+}
+.planchat:hover:not(:disabled) { color: var(--text); box-shadow: var(--card-hover); }
+.planchat:disabled { opacity: .55; cursor: default; }
 .planbody {
   max-height: 42vh; overflow-y: auto; margin: 4px 0 10px;
   padding: 9px 12px; border-radius: 8px;
@@ -1444,6 +1452,7 @@ body.modal-open { overflow: hidden; }
   color: var(--dim); font: 12px/1.5 var(--mono);
 }
 .blk[data-quiet] .bchips, .blk[data-quiet] .ol { gap: 8px; }
+.blk[data-quiet] .ol { align-items: center; }
 .blk[data-quiet]:hover > .bhead .bsum,
 .blk[data-quiet]:hover > .bhead .cqt { color: var(--text-soft); }
 .btail, .blinks { flex: none; }
@@ -1658,15 +1667,27 @@ body.modal-open { overflow: hidden; }
 }
 .waiting { color: var(--dim); padding: 30px 0; text-align: center; }
 
-/* the lazy-backlog "load older" affordance, pinned at the bottom of the feed */
-.loadmore {
-  display: block; width: 100%; margin: 10px 0 2px; padding: 8px 12px;
-  background: var(--panel); color: var(--dim); cursor: pointer; border: none;
-  box-shadow: var(--card); border-radius: var(--r);
-  font: 500 11.5px/1 var(--sans);
+/* The feed sentinel stays quiet until its automatic page read is in flight. */
+.load-sentinel { display: grid; min-height: 24px; margin: 2px 0; place-items: center; }
+.feed-loader { display: grid; place-items: center; }
+.feed-spinner {
+  width: 12px; height: 12px; border: 2px solid var(--dim2);
+  border-top-color: var(--dim); border-radius: 50%;
+  animation: feed-spin .8s linear infinite;
 }
-.loadmore:hover { color: var(--text); box-shadow: var(--card-hover); }
-.loadmore[hidden] { display: none; }
+@keyframes feed-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .feed-spinner { animation: none; border-top-color: var(--dim); }
+}
+.older-failure {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  color: var(--dim); padding: 8px 0; font: 500 11.5px/1 var(--sans);
+}
+.older-failure button {
+  border: 0; background: none; color: var(--blue); cursor: pointer;
+  font: inherit; padding: 2px 4px;
+}
+.older-failure button:hover { color: var(--text); }
 
 /* main-thread conversation blocks, interleaved into the web stream only
    (the terminal mirror deliberately omits them — the main pane shows them) */
@@ -2017,14 +2038,27 @@ body.attn-on .rail { top: calc(101px + var(--sat)); max-height: calc(100vh - 114
 .tdiff .dl .ln { flex: none; width: 3.5em; text-align: right; color: var(--dim2);
   user-select: none; }
 .tdiff .dl .tx { min-width: 0; color: var(--text-soft); }
-.tdiff .removed { background: color-mix(in srgb, var(--red) 14%, transparent); }
-.tdiff .added { background: color-mix(in srgb, var(--green) 14%, transparent); }
+.tdiff .removed, .tdiff .added { border-left: 2px solid transparent; }
+.tdiff .removed {
+  border-left-color: var(--red);
+  background: color-mix(in srgb, var(--red) 24%, transparent);
+}
+.tdiff .added {
+  border-left-color: var(--green);
+  background: color-mix(in srgb, var(--green) 24%, transparent);
+}
+.tdiff .removed .ln, .tdiff .added .ln {
+  display: flex; justify-content: flex-end; gap: .45em;
+}
+.tdiff .dm { width: 1ch; font-weight: 800; }
+.tdiff .removed .dm { color: var(--red); }
+.tdiff .added .dm { color: var(--green); }
 .tdiff .sep .tx { color: var(--dim2); }
 .tdiff mark.changed { color: inherit; border-radius: 2px; padding: 0; }
 .tdiff .removed mark.changed {
-  background: color-mix(in srgb, var(--red) 38%, transparent); }
+  background: color-mix(in srgb, var(--red) 52%, transparent); }
 .tdiff .added mark.changed {
-  background: color-mix(in srgb, var(--green) 34%, transparent); }
+  background: color-mix(in srgb, var(--green) 48%, transparent); }
 /* definition list: Grep/Glob/WebFetch/WebSearch/Task/SendMessage key fields */
 .tdl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px;
   margin: 0; font-family: var(--mono); font-size: 12px; }
@@ -2171,7 +2205,7 @@ html { touch-action: manipulation; }
   /* tap targets toward the 44px HIG guideline (a modest 36–40px keeps the
      information density; padding grows the hit area, not the type) */
   .ghost, .vmode, .xclose, .sstop, .sresume, .nsbtn, .dirnew, .dirhide,
-  .askchat, .planopt, .loadmore, .rwmenu .rwopt, .csend, .micbtn, .cattach,
+  .askchat, .planopt, .older-failure button, .rwmenu .rwopt, .csend, .micbtn, .cattach,
   .chint {
     min-height: 36px;
   }

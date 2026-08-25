@@ -20,6 +20,10 @@ function watchBrowserFailures(page: Page): readonly string[] {
   return failures;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
 async function expectAccessible(page: Page): Promise<void> {
   // The established design uses deliberately low-contrast tertiary metadata.
   // Keep that visual contract separate from structural accessibility failures.
@@ -59,10 +63,22 @@ test('loads the production shell and session list without browser failures', asy
     Buffer.from([0, 0, 1, 0]),
   );
   await expect(page.getByText('2 sessions')).toBeVisible();
-
-  await page.getByRole('button', { name: /parked · 2/ }).click();
-  await expect(page.getByText('Frontend parity work')).toBeVisible();
-  await expect(page.getByText('Finished migration research')).toBeVisible();
+  await expect(
+    page.locator('.scard').filter({ hasText: 'Frontend parity work' }),
+  ).toBeVisible();
+  const waiting = page.locator('.scard').filter({
+    hasText: 'Waiting for subagent',
+  });
+  await expect(waiting).toHaveAttribute('data-tab', 'awaiting_background');
+  await expect(waiting.locator('.badge')).toContainText('running');
+  await expect(waiting.locator('.badge .st')).toHaveCSS(
+    'background-color',
+    'rgb(97, 175, 239)',
+  );
+  await expect(waiting.locator('.badge .st')).not.toHaveCSS(
+    'background-color',
+    'rgb(152, 195, 121)',
+  );
   await expect(page.locator('#conn')).toHaveAttribute('data-on', '1');
 
   await expectAccessible(page);
@@ -126,6 +142,150 @@ test('keeps activity details readable and expandable', async ({ page }) => {
     labelStyles.every((style) => style.background === 'rgba(0, 0, 0, 0)'),
   ).toBe(true);
 
+  const backgroundRow = page.locator('.ol').filter({ has: background });
+  const markerOffset = await backgroundRow.evaluate((row) => {
+    const marker = row.querySelector<HTMLElement>('.anmark');
+    if (marker === null)
+      throw new Error('the background row has no status dot');
+    const rowBounds = row.getBoundingClientRect();
+    const markerBounds = marker.getBoundingClientRect();
+    const rowCenter = rowBounds.top + rowBounds.height / 2;
+    const markerCenter = markerBounds.top + markerBounds.height / 2;
+    return Math.abs(rowCenter - markerCenter);
+  });
+  expect(markerOffset).toBeLessThanOrEqual(1);
+
+  expect(failures).toEqual([]);
+});
+
+test('loads older activity when the feed bottom enters the viewport', async ({
+  page,
+  request,
+}) => {
+  const failures = watchBrowserFailures(page);
+  const initialResponse = await request.get(
+    '/sessionData/fixture-active/entries?limit=40',
+  );
+  expect(initialResponse.ok()).toBe(true);
+  const initialPage: unknown = await initialResponse.json();
+  if (!isRecord(initialPage))
+    throw new Error('the entry fixture is not an object');
+
+  await page.addInitScript((fixture: Record<string, unknown>) => {
+    const originalFetch = window.fetch.bind(window);
+    const testWindow = window as Window & {
+      finishOlderPageRequest?: () => void;
+      olderPageRequests?: number;
+    };
+    testWindow.olderPageRequests = 0;
+    window.fetch = async (input, init): Promise<Response> => {
+      const requestUrl =
+        typeof input === 'string' || input instanceof URL
+          ? new URL(input, window.location.href)
+          : new URL(input.url);
+      if (requestUrl.pathname !== '/sessionData/fixture-active/entries')
+        return originalFetch(input, init);
+      if (!requestUrl.searchParams.has('before'))
+        return Response.json({ ...fixture, oldest_cursor: 1, has_more: true });
+
+      const count = (testWindow.olderPageRequests ?? 0) + 1;
+      testWindow.olderPageRequests = count;
+      if (count > 1)
+        return Response.json({
+          items: [],
+          oldest_cursor: 0,
+          has_more: false,
+        });
+      return new Promise<Response>((resolve) => {
+        testWindow.finishOlderPageRequest = () => {
+          resolve(
+            Response.json({
+              items: null,
+              oldest_cursor: 0,
+              has_more: false,
+            }),
+          );
+        };
+      });
+    };
+  }, initialPage);
+
+  await page.goto('/#/s/fixture-active');
+  await expect(page.getByRole('button', { name: /load older/i })).toHaveCount(
+    0,
+  );
+
+  const sentinel = page.locator('.load-sentinel');
+  await sentinel.scrollIntoViewIfNeeded();
+  await expect(
+    page.getByRole('status', { name: 'loading older activity' }),
+  ).toBeVisible();
+  await page.evaluate(() => {
+    window.scrollTo(0, document.body.scrollHeight);
+  });
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as Window & { olderPageRequests?: number })
+            .olderPageRequests ?? 0,
+      ),
+    )
+    .toBe(1);
+
+  await page.evaluate(() => {
+    const finish = (window as Window & { finishOlderPageRequest?: () => void })
+      .finishOlderPageRequest;
+    if (finish === undefined)
+      throw new Error('the older page request did not start');
+    finish();
+  });
+  const retry = page.getByRole('button', { name: 'retry' });
+  await expect(retry).toBeVisible();
+  await retry.click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as Window & { olderPageRequests?: number })
+            .olderPageRequests ?? 0,
+      ),
+    )
+    .toBe(2);
+  await expect(sentinel).toHaveCount(0);
+  expect(failures).toEqual([]);
+});
+
+test('starts rewind target selection without opening a native menu', async ({
+  page,
+}) => {
+  const failures = watchBrowserFailures(page);
+  let nativeOpenRequests = 0;
+  page.on('request', (request) => {
+    if (request.url().includes('/controls/open-rewind'))
+      nativeOpenRequests += 1;
+  });
+  await page.route('**/sessionData/fixture-active', async (route) => {
+    const response = await route.fetch();
+    const value: unknown = await response.json();
+    if (!isRecord(value) || !Array.isArray(value.actors))
+      throw new Error('the session fixture has no actor list');
+    const actors = value.actors.map((actor: unknown) =>
+      isRecord(actor) && actor.actor_id === 'fixture-active:lead'
+        ? { ...actor, status: 'awaiting_response' }
+        : actor,
+    );
+    const body = { ...value, live: true, actors };
+    await route.fulfill({ response, json: body });
+  });
+
+  await page.goto('/#/s/fixture-active');
+  const rewind = page.getByRole('button', { name: '↶ rewind' });
+  await expect(rewind).toBeEnabled();
+  await rewind.click();
+
+  await expect(page.locator('.stream')).toHaveClass(/rwpick/);
+  expect(nativeOpenRequests).toBe(0);
   expect(failures).toEqual([]);
 });
 
@@ -139,6 +299,14 @@ test('preserves the session, agent, monitor, and statistics routes', async ({
   await expect(page.locator('.askcard .askqtext')).toHaveText(
     'How should the old entry be retired?',
   );
+  const recordedAnswer = page.locator('.msg.answer').filter({
+    hasText: 'All 120',
+  });
+  await expect(recordedAnswer.locator('.ansqt')).toHaveText([
+    'Which incidents do I close to Done?',
+    'Add a comment on each closed incident?',
+  ]);
+  await expect(recordedAnswer).not.toContainText('you ▸ answered0All 120');
   await expect(page.locator('.rchip.rk-monitor')).toHaveText(/monitor/);
   await expect(page.getByText('Audit the old router')).toBeVisible();
   await expect(page.getByRole('button', { name: '↶ rewind' })).toBeDisabled();
@@ -160,6 +328,7 @@ test('preserves the session, agent, monitor, and statistics routes', async ({
   ).toBeVisible();
   await expect(page).toHaveScreenshot('session-mirror.png', {
     fullPage: true,
+    maxDiffPixels: 10,
   });
 
   await page.getByRole('link', { name: /Audit the old router/ }).click();
@@ -185,7 +354,7 @@ test('preserves the session, agent, monitor, and statistics routes', async ({
 
   await page.goto('/#/stats');
   await expect(page.getByRole('heading', { name: 'Insights' })).toBeVisible();
-  await expect(page.getByText('2 sessions all-time')).toBeVisible();
+  await expect(page.getByText('3 sessions all-time')).toBeVisible();
   await expectAccessible(page);
   expect(failures).toEqual([]);
 });

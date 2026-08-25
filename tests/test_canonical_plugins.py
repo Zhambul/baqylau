@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 import os
+import sqlite3
 from decimal import Decimal
 from dataclasses import replace
 from pathlib import Path
@@ -14,6 +15,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
+from app import providers as app_providers
 from canonical_runtime import ProviderGraph
 from audit.recorder import AuditRecorder
 from repository.impl.sqlite.databases import audit_database
@@ -25,18 +27,23 @@ from engine.interpret.reactions import ShellOutputCanonicalEventReaction
 from harness.models import (
     AnswerQuestion,
     AttachmentReference,
+    CloseSession,
     ControlContext,
     ControlResult,
+    DeliveryResult,
+    DurableTitleResult,
     HarnessHookRequest,
     InterruptRegistry,
     Interrupt,
     LIVENESS_SOURCE_TYPE,
     LaunchRequest,
+    LaunchRejected,
     OUTPUT_LOCATION_SOURCE_TYPE,
     QueryContext,
     RawEvent,
     RenameSession,
     SelectModel,
+    SendText,
     Session,
     TranslationError,
 )
@@ -46,6 +53,7 @@ from terminal.models import (
     ACTIVITY_PANE_TAG,
     SCOREBOARD_PANE_TAG,
     SESSION_WINDOW_TAG,
+    WindowProcess,
 )
 from core.daemon.contract import HOST_ADDRESS, PORT_NUMBER
 from repository.mapper import facts as mapper
@@ -105,12 +113,12 @@ from domain.ids import (
     WindowId,
 )
 from domain.values import (
-    AccountReference,
     AttentionPrompt,
     ModelReference,
     Outcome,
     ShellFollowUntil,
     TextContent,
+    TitleOrigin,
     TokenUsage,
 )
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
@@ -118,12 +126,13 @@ from harness.impl.claude_code.canonical.records import HookPayload, MessageUsage
 from harness.impl.claude_code.canonical.sources import (
     ClaudeRawEventSources,
     ClaudeTaskRawEventSource,
+    ClaudeTeammateIdleRawEventSource,
     ClaudeTranscriptRawEventSource,
 )
-from harness.impl.claude_code import account
 from harness.impl.claude_code.hooks import gateway as claude_hooks
 from harness.impl.claude_code.hooks import foreground as claude_foreground
 from harness.impl.claude_code.controls import (
+    controller as claude_controller,
     confirmdialog,
     plandialog,
     rewindmenu,
@@ -133,6 +142,7 @@ from harness.impl.claude_code.usage.rows import usage_reader as claude_usage_rea
 from harness.impl.claude_code.usage import live as claude_live_usage
 from harness.impl.claude_code.reactors import ClaudeOtelCanonicalEventReactor
 from harness.impl.codex.canonical.translator import CodexCanonicalTranslator
+from harness.impl.codex.canonical import sources as codex_sources
 from harness.impl.codex.canonical.sources import (
     CodexRawEventSources,
     CodexRolloutRawEventSource,
@@ -146,6 +156,8 @@ from harness.impl.codex.continuity import RewindContinuity
 from harness.impl.codex.controls import backtrack, composer
 from harness.impl.codex.controls.controller import _rollout_abort_state
 from harness.impl.codex.model import BaseInstructionsSourceType, CodexEffort, CodexModel
+from harness.impl.codex.launcher import CodexLauncher
+from harness.impl.codex.resume import CodexResumeLocator
 from harness.impl.claude_code.otel import gateway as claude_telemetry
 from harness.models import HarnessTelemetryRequest
 from repository.impl.sqlite.databases import main_database
@@ -235,7 +247,6 @@ def raw_event(
     )
 
 
-
 def stored_payloads(runtime, session_id, payload_type):
     """Every fact of one kind a session accumulated, in the order it was accepted.
 
@@ -243,11 +254,7 @@ def stored_payloads(runtime, session_id, payload_type):
     about: the evidence became these facts. Folding them into something a reader
     sees belongs to the read model, and has its own tests.
     """
-    return [
-        item.payload
-        for item in runtime.store.page_from(0, 100_000)
-        if isinstance(item.payload, payload_type)
-    ]
+    return [item.payload for item in runtime.store.page_from(0, 100_000) if isinstance(item.payload, payload_type)]
 
 
 def shell_output_text(runtime, session_id, shell_id):
@@ -294,24 +301,26 @@ def test_claude_registers_no_automatic_account_migration_reactor():
     # run's `session.finished` would keep the session out of `watchable()`.
     reactors = ProviderGraph().registry.plugin("claude_code").reactors
 
-    assert [type(reactor).__name__ for reactor in reactors] == [
-        "ClaudeOtelCanonicalEventReactor"
-    ]
+    assert [type(reactor).__name__ for reactor in reactors] == ["ClaudeOtelCanonicalEventReactor"]
 
 
 def test_claude_stop_failure_rate_limit_yields_the_usage_limited_goal_fact():
-    translation = ClaudeCanonicalTranslator().translate(raw_event(
-        {"hook_event_name": "StopFailure", "error": "rate_limit"},
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="hook",
-        raw_event_id="stop-failure",
-    ))
-    unrelated = ClaudeCanonicalTranslator().translate(raw_event(
-        {"hook_event_name": "StopFailure", "error": "network"},
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="hook",
-        raw_event_id="stop-network",
-    ))
+    translation = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {"hook_event_name": "StopFailure", "error": "rate_limit"},
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="stop-failure",
+        )
+    )
+    unrelated = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {"hook_event_name": "StopFailure", "error": "network"},
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="stop-network",
+        )
+    )
 
     goals = payloads(translation, GoalChanged)
     assert [goal.payload.state for goal in goals] == ["usage_limited"]
@@ -326,9 +335,9 @@ def test_claude_reactor_starts_telemetry_on_session_start(monkeypatch):
         lambda: telemetry_starts.append("started"),
     )
     reactor = ClaudeOtelCanonicalEventReactor()
-    reactor.react(_committed(
-        SessionStarted("/work", "/work/session.jsonl", None, None, None, None, None)
-    ), RecordingControls())
+    reactor.react(
+        _committed(SessionStarted("/work", "/work/session.jsonl", None, None, None, None, None)), RecordingControls()
+    )
     reactor.react(_committed(GoalChanged("Ship it", "active", None)), RecordingControls())
 
     assert telemetry_starts == ["started"]
@@ -393,11 +402,67 @@ def test_file_sources_preserve_the_exact_complete_line(tmp_path):
         assert source.read(raw_events[-1].source_position) == ()
 
 
-def test_codex_title_source_reports_native_title_changes(monkeypatch, tmp_path):
-    source_path = tmp_path / (
-        "rollout-2026-08-23T01-02-03-"
-        "00000000-0000-0000-0000-000000000001.jsonl"
+def test_claude_parent_queue_attributes_a_background_completion_to_its_child(tmp_path):
+    parent_path = tmp_path / "session-one.jsonl"
+    child_path = tmp_path / "session-one" / "subagents" / "agent-child-one.jsonl"
+    child_path.parent.mkdir(parents=True)
+    child_path.write_text(
+        json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "background-op-one",
+                            "name": "Bash",
+                            "input": {"command": "sleep 1", "run_in_background": True},
+                        }
+                    ],
+                },
+            }
+        )
+        + "\n"
     )
+    parent_path.write_text(
+        json.dumps(
+            {
+                "type": "queue-operation",
+                "operation": "enqueue",
+                "content": (
+                    "<task-notification><task-id>bkdr7jbeo</task-id>"
+                    "<tool-use-id>background-op-one</tool-use-id>"
+                    "<status>completed</status>"
+                    '<summary>Background command "Wait" completed (exit code 0)</summary>'
+                    "</task-notification>"
+                ),
+            }
+        )
+        + "\n"
+    )
+    session = Session(
+        SessionId("session-one"),
+        ActorId("session-one:lead"),
+        str(parent_path),
+        "/work",
+    )
+
+    raw = ClaudeTranscriptRawEventSource(session.source_context).read(None)[0]
+    translated = ClaudeCanonicalTranslator().translate(raw)
+
+    assert raw.actor_id == ActorId("child-one")
+    assert raw.parent_actor_id == ActorId("session-one:lead")
+    assert payloads(translated, ShellOutputFinished)[0].actor_id == ActorId("child-one")
+
+
+def test_codex_title_source_reports_native_title_changes(monkeypatch, tmp_path):
+    from harness.impl.codex.canonical.title import (
+        CodexNativeTitle,
+        CodexTitleStoreMarker,
+    )
+
+    source_path = tmp_path / ("rollout-2026-08-23T01-02-03-00000000-0000-0000-0000-000000000001.jsonl")
     source_path.write_text("")
     session = Session(
         SessionId("session-one"),
@@ -405,10 +470,19 @@ def test_codex_title_source_reports_native_title_changes(monkeypatch, tmp_path):
         str(source_path),
         "/work",
     )
-    titles = ["Generated title"]
+    titles = [CodexNativeTitle("Generated title", TitleOrigin.AUTOMATIC)]
+    marker = [1]
     monkeypatch.setattr(
         "harness.impl.codex.canonical.sources.native_title.titles.read_title",
         lambda _path: titles[0],
+    )
+    monkeypatch.setattr(
+        "harness.impl.codex.canonical.sources.native_title.title_store_marker",
+        lambda _path: CodexTitleStoreMarker(
+            "state.sqlite",
+            (1, marker[0], 1),
+            None,
+        ),
     )
     source = CodexTitleRawEventSource(session.source_context)
     translator = CodexCanonicalTranslator()
@@ -417,15 +491,109 @@ def test_codex_title_source_reports_native_title_changes(monkeypatch, tmp_path):
     initial_title = payloads(translator.translate(initial), SessionTitleChanged)[0]
     assert initial_title.payload == SessionTitleChanged("Generated title", "automatic")
 
-    titles[0] = "Chosen title"
+    titles[0] = CodexNativeTitle("Chosen title", TitleOrigin.CUSTOM)
+    marker[0] = 2
     changed = source.read(initial.source_position)[0]
     changed_title = payloads(translator.translate(changed), SessionTitleChanged)[0]
     assert changed_title.payload == SessionTitleChanged("Chosen title", "custom")
 
+    titles[0] = CodexNativeTitle("Generated title", TitleOrigin.AUTOMATIC)
+    marker[0] = 3
+    cleared = source.read(changed.source_position)[0]
+    cleared_title = payloads(translator.translate(cleared), SessionTitleChanged)[0]
+    assert cleared_title.payload == SessionTitleChanged("Generated title", "automatic")
+    assert len({initial.raw_event_id, changed.raw_event_id, cleared.raw_event_id}) == 3
+    assert source.read(cleared.source_position) == ()
 
-@pytest.mark.parametrize(
-    "source_type", [ClaudeTranscriptRawEventSource, CodexRolloutRawEventSource]
-)
+
+def test_codex_title_repository_uses_the_home_that_owns_the_rollout(
+    monkeypatch,
+    tmp_path,
+):
+    from harness.impl.codex.canonical import title
+
+    session_id = "00000000-0000-0000-0000-000000000001"
+    source_path = tmp_path / "sessions" / "2026" / "08" / "24" / f"rollout-2026-08-24T00-00-00-{session_id}.jsonl"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text("")
+    database_path = tmp_path / "state_9.sqlite"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("CREATE TABLE threads(id TEXT PRIMARY KEY, title TEXT)")
+        connection.execute(
+            "INSERT INTO threads(id, title) VALUES(?, ?)",
+            (session_id, "Initial title"),
+        )
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "another-codex-home"))
+    repository = title.CodexThreadTitleRepository()
+
+    assert repository.read_title(str(source_path)) == title.CodexNativeTitle(
+        "Initial title",
+        TitleOrigin.AUTOMATIC,
+    )
+    assert repository.set_title(str(source_path), "Parked title") == "renamed"
+    assert repository.read_title(str(source_path)) == title.CodexNativeTitle(
+        "Parked title",
+        TitleOrigin.AUTOMATIC,
+    )
+
+
+def test_codex_title_repository_prefers_and_writes_the_native_name(tmp_path):
+    from harness.impl.codex.canonical import title
+
+    session_id = "00000000-0000-0000-0000-000000000002"
+    source_path = tmp_path / "sessions" / "2026" / "08" / "25" / (
+        f"rollout-2026-08-25T00-00-00-{session_id}.jsonl"
+    )
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text("")
+    database_path = tmp_path / "state_10.sqlite"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "CREATE TABLE threads(id TEXT PRIMARY KEY, title TEXT, name TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO threads(id, title, name) VALUES(?, ?, ?)",
+            (session_id, "Generated title", "Native name"),
+        )
+    repository = title.CodexThreadTitleRepository()
+
+    assert repository.read_title(str(source_path)) == title.CodexNativeTitle(
+        "Native name",
+        TitleOrigin.CUSTOM,
+    )
+    assert repository.set_title(str(source_path), "Dashboard name") == "renamed"
+    assert repository.read_title(str(source_path)) == title.CodexNativeTitle(
+        "Dashboard name",
+        TitleOrigin.CUSTOM,
+    )
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute(
+            "SELECT title, name FROM threads WHERE id=?",
+            (session_id,),
+        ).fetchone() == ("Generated title", "Dashboard name")
+        connection.execute(
+            "UPDATE threads SET name=NULL WHERE id=?",
+            (session_id,),
+        )
+        connection.commit()
+    assert repository.read_title(str(source_path)) == title.CodexNativeTitle(
+        "Generated title",
+        TitleOrigin.AUTOMATIC,
+    )
+
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "UPDATE threads SET name='   ' WHERE id=?",
+            (session_id,),
+        )
+        connection.commit()
+    assert repository.read_title(str(source_path)) == title.CodexNativeTitle(
+        "Generated title",
+        TitleOrigin.AUTOMATIC,
+    )
+
+
+@pytest.mark.parametrize("source_type", [ClaudeTranscriptRawEventSource, CodexRolloutRawEventSource])
 def test_file_sources_read_bounded_batches_and_resume_by_position(tmp_path, source_type):
     source_path = tmp_path / "source.jsonl"
     line = b'{"type":"example"}\n'
@@ -454,9 +622,10 @@ def test_file_sources_read_bounded_batches_and_resume_by_position(tmp_path, sour
         "expected_actor_id",
         "expected_parent_actor_id",
         "starts_actor",
+        "expected_role",
     ),
     [
-        ("session-one:lead", None, "worker-one", "worker-one", ActorId("session-one:lead"), True),
+        ("session-one:lead", None, "worker-one", "worker-one", ActorId("session-one:lead"), True, "peer"),
         (
             "worker-one",
             ActorId("session-one:lead"),
@@ -464,19 +633,18 @@ def test_file_sources_read_bounded_batches_and_resume_by_position(tmp_path, sour
             "session-one:lead",
             None,
             False,
+            "peer",
         ),
-        # The lead under its teammate-vocabulary ALIAS — the first record of every
-        # teammate's transcript, its brief. Read literally it named an actor that
-        # does not exist, so each session grew a phantom "team-lead" teammate that
-        # never started work and never finished it (measured live: two agents
-        # launched at once, one phantom, permanently running).
+        # The lead alias in a teammate transcript carries the teammate's brief.
+        # The brief belongs to the child turn. It is not a second lead actor.
         (
             "worker-one",
             ActorId("session-one:lead"),
             "team-lead",
-            "session-one:lead",
-            None,
-            False,
+            "worker-one",
+            ActorId("session-one:lead"),
+            True,
+            "parent",
         ),
     ],
 )
@@ -488,20 +656,25 @@ def test_claude_team_messages_preserve_the_native_sender_as_evidence_actor(
     expected_actor_id,
     expected_parent_actor_id,
     starts_actor,
+    expected_role,
 ):
     source_path = tmp_path / "transcript.jsonl"
-    session_record = json.dumps({
-        "type": "user",
-        "uuid": "session-prompt",
-        "message": {"content": "begin"},
-    })
-    team_record = json.dumps({
-        "type": "user",
-        "uuid": "team-message-one",
-        "message": {
-            "content": f'<teammate-message teammate_id="{sender}">hello</teammate-message>',
-        },
-    })
+    session_record = json.dumps(
+        {
+            "type": "user",
+            "uuid": "session-prompt",
+            "message": {"content": "begin"},
+        }
+    )
+    team_record = json.dumps(
+        {
+            "type": "user",
+            "uuid": "team-message-one",
+            "message": {
+                "content": f'<teammate-message teammate_id="{sender}">hello</teammate-message>',
+            },
+        }
+    )
     source_path.write_text(session_record + "\n" + team_record + "\n")
     session = Session(
         SessionId("session-one"),
@@ -524,23 +697,66 @@ def test_claude_team_messages_preserve_the_native_sender_as_evidence_actor(
     assert audit.raw_event.actor_id == ActorId(expected_actor_id)
     assert audit.raw_event.parent_actor_id == expected_parent_actor_id
     assert audit.interpretation is not None
-    assert all(
-        item.event.actor_id == ActorId(expected_actor_id)
-        for item in audit.interpretation.events
-    )
-    assert (
-        any(
-            isinstance(item.event.payload, ActorStarted)
-            for item in audit.interpretation.events
-        )
-        is starts_actor
-    )
+    assert all(item.event.actor_id == ActorId(expected_actor_id) for item in audit.interpretation.events)
+    assert any(isinstance(item.event.payload, ActorStarted) for item in audit.interpretation.events) is starts_actor
     message = next(
-        item.event.payload
-        for item in audit.interpretation.events
-        if isinstance(item.event.payload, MessageCreated)
+        item.event.payload for item in audit.interpretation.events if isinstance(item.event.payload, MessageCreated)
     )
-    assert message.role == "peer"
+    assert message.role == expected_role
+
+
+def test_claude_teammate_idle_source_splits_and_attributes_each_notification(tmp_path):
+    source_path = tmp_path / "session-one.jsonl"
+    child_directory = tmp_path / "session-one" / "subagents"
+    child_directory.mkdir(parents=True)
+    (child_directory / "agent-actor-one.meta.json").write_text(
+        json.dumps({"name": "worker-one"})
+    )
+    (child_directory / "agent-actor-two.meta.json").write_text(
+        json.dumps({"name": "worker-two"})
+    )
+    source_path.write_text(json.dumps({
+        "type": "user",
+        "message": {
+            "content": (
+                "Another Claude session sent a message:\n"
+                '<teammate-message teammate_id="worker-one">'
+                '{"type":"idle_notification","from":"worker-one",'
+                '"timestamp":"2026-08-25T00:00:00Z","idleReason":"available"}'
+                "</teammate-message>\n"
+                '<teammate-message teammate_id="worker-two">'
+                '{"type":"idle_notification","from":"worker-two",'
+                '"timestamp":"2026-08-25T00:00:01Z","idleReason":"failed",'
+                '"failureReason":"limit"}'
+                "</teammate-message>\n"
+                '<teammate-message teammate_id="worker-one">'
+                '{"type":"idle_notification","from":"worker-one",'
+                '"timestamp":"2026-08-25T00:00:02Z","idleReason":"available"}'
+                "</teammate-message>\n"
+                "This came from another Claude session."
+            )
+        },
+    }) + "\n")
+    session = Session(
+        SessionId("session-one"),
+        ActorId("session-one:lead"),
+        str(source_path),
+        "/work",
+    )
+
+    source = ClaudeTeammateIdleRawEventSource(session.source_context)
+    raw_events = source.read(None)
+
+    assert [event.actor_id for event in raw_events] == [
+        ActorId("actor-one"),
+        ActorId("actor-two"),
+    ]
+    assert all(
+        event.parent_actor_id == ActorId("session-one:lead")
+        for event in raw_events
+    )
+    assert len({event.raw_event_id for event in raw_events}) == 2
+    assert source.read(None) == ()
 
 
 def test_claude_source_factory_includes_child_transcripts(tmp_path):
@@ -549,6 +765,7 @@ def test_claude_source_factory_includes_child_transcripts(tmp_path):
     child_path.parent.mkdir(parents=True)
     parent_path.write_text('{"type":"user","uuid":"parent"}\n')
     child_path.write_text('{"type":"user","uuid":"child"}\n')
+    child_path.with_name("agent-child-one.meta.json").write_text("{}")
     session = Session(
         session_id=SessionId("session-one"),
         lead_actor_id=ActorId("session-one:lead"),
@@ -556,12 +773,22 @@ def test_claude_source_factory_includes_child_transcripts(tmp_path):
         working_directory=str(tmp_path),
     )
 
-    sources = ClaudeRawEventSources().for_session(session)
+    factory = ClaudeRawEventSources()
+    sources = factory.for_session(session)
 
-    assert len(sources) == 3
-    assert isinstance(sources[1], ClaudeTaskRawEventSource)
-    assert sources[2].context.actor_id == ActorId("child-one")
-    assert sources[2].context.parent_actor_id == ActorId("session-one:lead")
+    assert len(sources) == 4
+    assert isinstance(sources[2], ClaudeTaskRawEventSource)
+    assert sources[3].context.actor_id == ActorId("child-one")
+    assert sources[3].context.parent_actor_id == ActorId("session-one:lead")
+    assert factory.for_session(session) is sources
+
+    second_child = child_path.with_name("agent-child-two.jsonl")
+    second_child.write_text('{"type":"user","uuid":"child-two"}\n')
+    second_child.with_name("agent-child-two.meta.json").write_text("{}")
+
+    refreshed = factory.for_session(session)
+    assert refreshed is not sources
+    assert len(refreshed) == 5
 
 
 def test_claude_task_source_captures_full_updates_and_deletion(tmp_path, monkeypatch):
@@ -615,87 +842,93 @@ def test_claude_task_source_captures_full_updates_and_deletion(tmp_path, monkeyp
 
 
 def test_claude_goal_status_is_canonical_goal_state():
-    active = ClaudeCanonicalTranslator().translate(raw_event(
-        {
-            "type": "attachment",
-            "uuid": "goal-active",
-            "attachment": {
-                "type": "goal_status",
-                "met": False,
-                "condition": "All tests pass",
-                "reason": "One test remains",
+    active = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "attachment",
+                "uuid": "goal-active",
+                "attachment": {
+                    "type": "goal_status",
+                    "met": False,
+                    "condition": "All tests pass",
+                    "reason": "One test remains",
+                },
             },
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="transcript",
-        raw_event_id="goal-active",
-    ))
-    completed = ClaudeCanonicalTranslator().translate(raw_event(
-        {
-            "type": "attachment",
-            "uuid": "goal-completed",
-            "attachment": {
-                "type": "goal_status",
-                "met": True,
-                "condition": "All tests pass",
-                "reason": "The suite is green",
-            },
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="transcript",
-        raw_event_id="goal-completed",
-    ))
-
-    assert payloads(active, GoalChanged)[0].payload == GoalChanged(
-        "All tests pass", "active", "One test remains"
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="goal-active",
+        )
     )
+    completed = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "attachment",
+                "uuid": "goal-completed",
+                "attachment": {
+                    "type": "goal_status",
+                    "met": True,
+                    "condition": "All tests pass",
+                    "reason": "The suite is green",
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="goal-completed",
+        )
+    )
+
+    assert payloads(active, GoalChanged)[0].payload == GoalChanged("All tests pass", "active", "One test remains")
     assert payloads(completed, GoalChanged)[0].payload == GoalChanged(
         "All tests pass", "completed", "The suite is green"
     )
 
-    cleared = ClaudeCanonicalTranslator().translate(raw_event(
-        {"type": "system", "uuid": "goal-cleared", "content": "Goal cleared: All tests pass"},
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="transcript",
-        raw_event_id="goal-cleared",
-    ))
-    assert payloads(cleared, GoalChanged)[0].payload == GoalChanged(
-        "All tests pass", "cleared", None
+    cleared = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {"type": "system", "uuid": "goal-cleared", "content": "Goal cleared: All tests pass"},
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="goal-cleared",
+        )
     )
+    assert payloads(cleared, GoalChanged)[0].payload == GoalChanged("All tests pass", "cleared", None)
 
 
 def test_codex_goal_and_plan_use_shared_goal_and_task_events():
     translator = CodexCanonicalTranslator()
-    goal = translator.translate(raw_event(
-        {
-            "type": "event_msg",
-            "payload": {
-                "type": "thread_goal_updated",
-                "goal": {"objective": "Ship it", "status": "active"},
+    goal = translator.translate(
+        raw_event(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "thread_goal_updated",
+                    "goal": {"objective": "Ship it", "status": "active"},
+                },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="goal-one",
-    ))
-    plan = translator.translate(raw_event(
-        {
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call",
-                "name": "exec",
-                "call_id": "plan-one",
-                "input": (
-                    'const result = await tools.update_plan({plan:['
-                    '{step:"Inspect",status:"completed"},'
-                    '{step:"Implement",status:"in_progress"}]}); text(result);'
-                ),
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="goal-one",
+        )
+    )
+    plan = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "plan-one",
+                    "input": (
+                        "const result = await tools.update_plan({plan:["
+                        '{step:"Inspect",status:"completed"},'
+                        '{step:"Implement",status:"in_progress"}]}); text(result);'
+                    ),
+                },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="plan-one",
-    ))
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="plan-one",
+        )
+    )
 
     assert payloads(goal, GoalChanged)[0].payload == GoalChanged("Ship it", "active", None)
     assert payloads(plan, TaskListChanged)[0].payload.task_ids == (
@@ -708,28 +941,32 @@ def test_codex_goal_and_plan_use_shared_goal_and_task_events():
 
 
 def test_codex_goal_tool_output_updates_the_shared_goal():
-    translation = CodexCanonicalTranslator().translate(raw_event(
-        {
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call_output",
-                "id": "goal-result-one",
-                "call_id": "goal-call-one",
-                "output": [{
-                    "type": "input_text",
-                    "text": (
-                        '{"goal":{"threadId":"session-one",'
-                        '"objective":"Ship it","status":"complete",'
-                        '"tokensUsed":20,"timeUsedSeconds":3},'
-                        '"remainingTokens":null}'
-                    ),
-                }],
+    translation = CodexCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "id": "goal-result-one",
+                    "call_id": "goal-call-one",
+                    "output": [
+                        {
+                            "type": "input_text",
+                            "text": (
+                                '{"goal":{"threadId":"session-one",'
+                                '"objective":"Ship it","status":"complete",'
+                                '"tokensUsed":20,"timeUsedSeconds":3},'
+                                '"remainingTokens":null}'
+                            ),
+                        }
+                    ],
+                },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="goal-result-one",
-    ))
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="goal-result-one",
+        )
+    )
 
     assert payloads(translation, GoalChanged)[0].payload == GoalChanged(
         "Ship it",
@@ -740,40 +977,44 @@ def test_codex_goal_tool_output_updates_the_shared_goal():
 
 def test_codex_state_tool_batch_keeps_all_goal_and_task_changes():
     translator = CodexCanonicalTranslator()
-    batch = translator.translate(raw_event(
-        {
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call",
-                "name": "exec",
-                "call_id": "state-batch-one",
-                "input": (
-                    'const a = await tools.create_goal({objective:"Ship it"});'
-                    'const b = await tools.update_plan({plan:['
-                    '{step:"Inspect",status:"completed"},'
-                    '{step:"Finish",status:"completed"}]});'
-                    'const c = await tools.update_goal({status:"complete"});'
-                    'text("");'
-                ),
+    batch = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "state-batch-one",
+                    "input": (
+                        'const a = await tools.create_goal({objective:"Ship it"});'
+                        "const b = await tools.update_plan({plan:["
+                        '{step:"Inspect",status:"completed"},'
+                        '{step:"Finish",status:"completed"}]});'
+                        'const c = await tools.update_goal({status:"complete"});'
+                        'text("");'
+                    ),
+                },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="state-batch-one",
-    ))
-    output = translator.translate(raw_event(
-        {
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call_output",
-                "call_id": "state-batch-one",
-                "output": "Script completed\nOutput:\n",
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="state-batch-one",
+        )
+    )
+    output = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "state-batch-one",
+                    "output": "Script completed\nOutput:\n",
+                },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="state-batch-result",
-    ))
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="state-batch-result",
+        )
+    )
 
     assert [item.payload.state for item in payloads(batch, GoalChanged)] == [
         "active",
@@ -788,27 +1029,31 @@ def test_codex_state_tool_batch_keeps_all_goal_and_task_changes():
 
 def test_codex_goal_state_is_strict_and_clear_removes_the_goal():
     translator = CodexCanonicalTranslator()
-    cleared = translator.translate(raw_event(
-        {"type": "event_msg", "payload": {"type": "thread_goal_cleared"}},
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="goal-cleared",
-    ))
+    cleared = translator.translate(
+        raw_event(
+            {"type": "event_msg", "payload": {"type": "thread_goal_cleared"}},
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="goal-cleared",
+        )
+    )
     assert payloads(cleared, GoalChanged)[0].payload == GoalChanged(None, "cleared", None)
 
     with pytest.raises(TranslationError, match="unknown Codex goal state"):
-        translator.translate(raw_event(
-            {
-                "type": "event_msg",
-                "payload": {
-                    "type": "thread_goal_updated",
-                    "goal": {"objective": "Ship it", "status": "mystery"},
+        translator.translate(
+            raw_event(
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "thread_goal_updated",
+                        "goal": {"objective": "Ship it", "status": "mystery"},
+                    },
                 },
-            },
-            harness=HarnessName.CODEX,
-            source_type="rollout",
-            raw_event_id="goal-invalid",
-        ))
+                harness=HarnessName.CODEX,
+                source_type="rollout",
+                raw_event_id="goal-invalid",
+            )
+        )
 
 
 def test_codex_source_factory_includes_native_subagent_rollouts(tmp_path, monkeypatch):
@@ -875,37 +1120,120 @@ def test_codex_source_factory_includes_native_subagent_rollouts(tmp_path, monkey
     assert message.payload.content.text == "child work"
 
 
+def test_codex_rollout_catalog_rescans_only_a_changed_date_directory(tmp_path, monkeypatch):
+    day_directory = tmp_path / "sessions" / "2026" / "08" / "24"
+    day_directory.mkdir(parents=True)
+    first = day_directory / "rollout-2026-08-24T10-00-00-first.jsonl"
+    first.write_text("{}\n")
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    real_scandir = os.scandir
+    scanned: list[str] = []
+
+    def recording_scandir(directory):
+        scanned.append(os.fspath(directory))
+        return real_scandir(directory)
+
+    monkeypatch.setattr(codex_sources.os, "scandir", recording_scandir)
+    catalog = codex_sources.RolloutCatalog()
+
+    assert catalog.paths() == (str(first),)
+    assert catalog.paths() == (str(first),)
+    assert scanned.count(str(day_directory)) == 1
+
+    second = day_directory / "rollout-2026-08-24T10-00-01-second.jsonl"
+    second.write_text("{}\n")
+
+    assert catalog.paths() == (str(first), str(second))
+    assert scanned.count(str(day_directory)) == 2
+
+
+def test_codex_source_factory_reuses_sources_and_limits_catalog_refresh(tmp_path, monkeypatch):
+    lead_path = (
+        tmp_path
+        / "sessions"
+        / "2026"
+        / "08"
+        / "24"
+        / "rollout-2026-08-24T10-00-00-lead-one.jsonl"
+    )
+    lead_path.parent.mkdir(parents=True)
+    lead_path.write_text(json.dumps({
+        "type": "session_meta",
+        "payload": {
+            "id": "lead-one",
+            "cwd": "/work",
+            "thread_source": "user",
+        },
+    }) + "\n")
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    session = Session(
+        SessionId("lead-one"),
+        ActorId("lead-one:lead"),
+        str(lead_path),
+        "/work",
+    )
+    now = [0.0]
+    factory = CodexRawEventSources(clock=lambda: now[0])
+    real_paths = factory._catalog.paths
+    catalog_calls = 0
+
+    def recording_paths():
+        nonlocal catalog_calls
+        catalog_calls += 1
+        return real_paths()
+
+    monkeypatch.setattr(factory._catalog, "paths", recording_paths)
+
+    first = factory.for_session(session)
+    second = factory.for_session(session)
+    assert first == second
+    assert all(left is right for left, right in zip(first, second, strict=True))
+    assert catalog_calls == 1
+
+    now[0] = 1.0
+    factory.for_session(session)
+    assert catalog_calls == 2
+
+
 def test_codex_source_factory_rotates_native_subagent_rollouts(tmp_path, monkeypatch):
     sessions_directory = tmp_path / "sessions" / "2026" / "08" / "14"
     sessions_directory.mkdir(parents=True)
     for child_name in ("child-one", "child-two"):
         child_path = sessions_directory / f"rollout-2026-08-14T10-00-00-{child_name}.jsonl"
         child_path.write_text(
-            json.dumps({
-                "type": "session_meta",
-                "timestamp": "2026-08-14T10:00:00Z",
-                "payload": {
-                    "cwd": "/work",
-                    "thread_source": "subagent",
-                    "parent_thread_id": "parent-session",
+            json.dumps(
+                {
+                    "type": "session_meta",
                     "timestamp": "2026-08-14T10:00:00Z",
-                },
-            })
+                    "payload": {
+                        "cwd": "/work",
+                        "thread_source": "subagent",
+                        "parent_thread_id": "parent-session",
+                        "timestamp": "2026-08-14T10:00:00Z",
+                    },
+                }
+            )
             + "\n"
-            + json.dumps({
-                "type": "event_msg",
-                "payload": {"type": "user_message", "message": "parent replay"},
-            })
+            + json.dumps(
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "user_message", "message": "parent replay"},
+                }
+            )
             + "\n"
-            + json.dumps({
-                "type": "event_msg",
-                "payload": {"type": "task_started", "started_at": 1786701600},
-            })
+            + json.dumps(
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_started", "started_at": 1786701600},
+                }
+            )
             + "\n"
-            + json.dumps({
-                "type": "event_msg",
-                "payload": {"type": "agent_message", "message": "child work"},
-            })
+            + json.dumps(
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "agent_message", "message": "child work"},
+                }
+            )
             + "\n"
         )
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
@@ -917,10 +1245,7 @@ def test_codex_source_factory_rotates_native_subagent_rollouts(tmp_path, monkeyp
     )
     factory = CodexRawEventSources()
 
-    actors = [
-        factory.for_session(session)[0].context.actor_id
-        for _ in range(3)
-    ]
+    actors = [factory.for_session(session)[0].context.actor_id for _ in range(3)]
 
     assert actors == [ActorId("child-one"), ActorId("child-two"), ActorId("child-one")]
 
@@ -929,32 +1254,49 @@ def test_codex_session_start_announces_only_a_lead_rollout(tmp_path, monkeypatch
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     lead_path = tmp_path / "sessions" / "2026" / "08" / "15" / "rollout-2026-08-15T10-00-00-lead-one.jsonl"
     lead_path.parent.mkdir(parents=True)
-    lead_path.write_text(json.dumps({
-        "type": "session_meta",
-        "payload": {
-            "id": "lead-one",
-            "cwd": "/work",
-            "thread_source": "user",
-            "base_instructions": {
-                "text": "You are Codex.",
-                "provenance": {"type": "model", "model": "gpt-5.6-luna"},
-            },
-        },
-    }) + "\n")
+    lead_path.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {
+                    "id": "lead-one",
+                    "cwd": "/work",
+                    "thread_source": "user",
+                    "base_instructions": {
+                        "text": "You are Codex.",
+                        "provenance": {"type": "model", "model": "gpt-5.6-luna"},
+                    },
+                },
+            }
+        )
+        + "\n"
+    )
     child_path = lead_path.with_name("rollout-2026-08-15T10-00-01-child-one.jsonl")
-    child_path.write_text(json.dumps({
-        "type": "session_meta",
-        "payload": {"thread_source": "subagent", "parent_thread_id": "lead-one"},
-    }) + "\n")
+    child_path.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {"thread_source": "subagent", "parent_thread_id": "lead-one"},
+            }
+        )
+        + "\n"
+    )
 
     def hook_raw(session_id, path):
-        return replace(raw_event(
-            {"session_id": session_id, "transcript_path": str(path), "cwd": "/work",
-             "hook_event_name": "SessionStart"},
-            harness=HarnessName.CODEX,
-            source_type="hook",
-            raw_event_id=f"hook-{session_id}",
-        ), session_id=SessionId(session_id))
+        return replace(
+            raw_event(
+                {
+                    "session_id": session_id,
+                    "transcript_path": str(path),
+                    "cwd": "/work",
+                    "hook_event_name": "SessionStart",
+                },
+                harness=HarnessName.CODEX,
+                source_type="hook",
+                raw_event_id=f"hook-{session_id}",
+            ),
+            session_id=SessionId(session_id),
+        )
 
     translator = CodexCanonicalTranslator()
     lead = translator.translate(hook_raw("lead-one", lead_path))
@@ -968,12 +1310,14 @@ def test_codex_session_start_announces_only_a_lead_rollout(tmp_path, monkeypatch
 
 
 def test_codex_0149_base_instruction_source_is_a_closed_vocabulary():
-    metadata = SessionMetaPayload.model_validate({
-        "base_instructions": {
-            "text": "You are Codex.",
-            "provenance": {"type": "model", "model": "gpt-5.6-luna"},
-        },
-    })
+    metadata = SessionMetaPayload.model_validate(
+        {
+            "base_instructions": {
+                "text": "You are Codex.",
+                "provenance": {"type": "model", "model": "gpt-5.6-luna"},
+            },
+        }
+    )
 
     assert metadata.base_instructions is not None
     assert metadata.base_instructions.source is not None
@@ -982,10 +1326,12 @@ def test_codex_0149_base_instruction_source_is_a_closed_vocabulary():
 
 
 def test_codex_turn_context_model_and_effort_are_closed_vocabularies():
-    record = codex_rollout.parse({
-        "type": "turn_context",
-        "payload": {"model": "gpt-5.6-luna", "effort": "low"},
-    })
+    record = codex_rollout.parse(
+        {
+            "type": "turn_context",
+            "payload": {"model": "gpt-5.6-luna", "effort": "low"},
+        }
+    )
 
     assert isinstance(record, TurnContextRecord)
     assert record.model is CodexModel.GPT_5_6_LUNA
@@ -1013,25 +1359,32 @@ def test_codex_unknown_base_instruction_source_value_is_contract_drift(field, va
     source[field] = value
 
     with pytest.raises(ValidationError, match=field):
-        SessionMetaPayload.model_validate({
-            "base_instructions": {
-                "text": "You are Codex.",
-                "provenance": source,
-            },
-        })
+        SessionMetaPayload.model_validate(
+            {
+                "base_instructions": {
+                    "text": "You are Codex.",
+                    "provenance": source,
+                },
+            }
+        )
 
 
 def test_codex_source_factory_waits_for_native_child_boundary(tmp_path, monkeypatch):
     child_path = tmp_path / "sessions" / "2026" / "08" / "14" / "rollout-2026-08-14T10-00-00-child-one.jsonl"
     child_path.parent.mkdir(parents=True)
-    child_path.write_text(json.dumps({
-        "type": "session_meta",
-        "timestamp": "2026-08-14T10:00:00Z",
-        "payload": {
-            "thread_source": "subagent",
-            "parent_thread_id": "parent-session",
-        },
-    }) + "\n")
+    child_path.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "timestamp": "2026-08-14T10:00:00Z",
+                "payload": {
+                    "thread_source": "subagent",
+                    "parent_thread_id": "parent-session",
+                },
+            }
+        )
+        + "\n"
+    )
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     session = Session(
         SessionId("parent-session"),
@@ -1044,20 +1397,18 @@ def test_codex_source_factory_waits_for_native_child_boundary(tmp_path, monkeypa
 
 
 def test_codex_source_factory_accepts_string_session_source(tmp_path, monkeypatch):
-    rollout_path = (
-        tmp_path
-        / "sessions"
-        / "2026"
-        / "08"
-        / "14"
-        / "rollout-2026-08-14T10-00-00-regular-session.jsonl"
-    )
+    rollout_path = tmp_path / "sessions" / "2026" / "08" / "14" / "rollout-2026-08-14T10-00-00-regular-session.jsonl"
     rollout_path.parent.mkdir(parents=True)
-    rollout_path.write_text(json.dumps({
-        "type": "session_meta",
-        "timestamp": "2026-08-14T10:00:00Z",
-        "payload": {"source": "vscode"},
-    }) + "\n")
+    rollout_path.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "timestamp": "2026-08-14T10:00:00Z",
+                "payload": {"source": "vscode"},
+            }
+        )
+        + "\n"
+    )
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     session = Session(
         SessionId("parent-session"),
@@ -1074,31 +1425,38 @@ def test_hooks_record_exact_raw_bytes_and_both_sessions_are_born_from_them(monke
     monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
     rollout_path = (
-        tmp_path / "codex-home" / "sessions" / "2026" / "08" / "15"
-        / "rollout-2026-08-15T10-00-00-codex-session.jsonl"
+        tmp_path / "codex-home" / "sessions" / "2026" / "08" / "15" / "rollout-2026-08-15T10-00-00-codex-session.jsonl"
     )
     rollout_path.parent.mkdir(parents=True)
-    rollout_path.write_text(json.dumps({
-        "type": "session_meta",
-        "payload": {"id": "codex-session", "cwd": "/work", "thread_source": "user"},
-    }) + "\n")
+    rollout_path.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {"id": "codex-session", "cwd": "/work", "thread_source": "user"},
+            }
+        )
+        + "\n"
+    )
     claude_payload = (
         b'{ "session_id": "claude-session", "transcript_path": "/work/claude.jsonl", '
-        b'"cwd": "/work", "hook_event_name": "SessionStart" }'
+        b'"cwd": "/work", "session_title": "Saved resume title", '
+        b'"hook_event_name": "SessionStart" }'
     )
-    codex_payload = json.dumps({
-        "session_id": "codex-session",
-        "transcript_path": str(rollout_path),
-        "cwd": "/work",
-        "hook_event_name": "SessionStart",
-    }).encode()
+    codex_payload = json.dumps(
+        {
+            "session_id": "codex-session",
+            "transcript_path": str(rollout_path),
+            "cwd": "/work",
+            "hook_event_name": "SessionStart",
+        }
+    ).encode()
 
     _deliver_hook(
         claude_hooks.ClaudeHookGateway(),
         claude_payload,
         terminal_window_id="window-1",
         harness_process_id=4242,
-        account_id="c2",
+        account_id="legacy-account",
         account_display_name="Account Two",
     )
     _deliver_hook(
@@ -1125,14 +1483,14 @@ def test_hooks_record_exact_raw_bytes_and_both_sessions_are_born_from_them(monke
     codex_audits = runtime.raw_event_audits.audits_for_session(SessionId("codex-session"))
     assert claude_audits[0].raw_event.payload == claude_payload
     assert claude_audits[0].interpretation is not None
-    # session.started + actor.started + session.account_changed (the header)
-    assert len(claude_audits[0].interpretation.events) == 3
+    # The old account headers are ignored. Claude has one default account.
+    assert len(claude_audits[0].interpretation.events) == 2
     account_changed = [
         item.event.payload
         for item in claude_audits[0].interpretation.events
         if isinstance(item.event.payload, SessionAccountChanged)
     ]
-    assert account_changed[0].account == AccountReference("c2", "Account Two")
+    assert account_changed == []
     assert codex_audits[0].raw_event.payload == codex_payload
     assert codex_audits[0].interpretation is not None
     assert codex_audits[0].interpretation.decision == "translated"
@@ -1145,19 +1503,23 @@ def test_claude_launch_selections_reach_the_summary_from_the_hook_environment(mo
     # the only evidence source for them (Claude Code never echoes the effort, and
     # reports the model only on its first assistant record)
     monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path))
-    start_payload = json.dumps({
-        "session_id": "claude-session",
-        "transcript_path": "/work/claude.jsonl",
-        "cwd": "/work",
-        "hook_event_name": "SessionStart",
-        "hook_event_id": "start-1",
-    }).encode()
-    stop_payload = json.dumps({
-        "session_id": "claude-session",
-        "transcript_path": "/work/claude.jsonl",
-        "hook_event_name": "Stop",
-        "hook_event_id": "stop-1",
-    }).encode()
+    start_payload = json.dumps(
+        {
+            "session_id": "claude-session",
+            "transcript_path": "/work/claude.jsonl",
+            "cwd": "/work",
+            "hook_event_name": "SessionStart",
+            "hook_event_id": "start-1",
+        }
+    ).encode()
+    stop_payload = json.dumps(
+        {
+            "session_id": "claude-session",
+            "transcript_path": "/work/claude.jsonl",
+            "hook_event_name": "Stop",
+            "hook_event_id": "stop-1",
+        }
+    ).encode()
 
     _deliver_hook(
         claude_hooks.ClaudeHookGateway(),
@@ -1217,13 +1579,15 @@ def test_hook_without_native_identity_uses_the_exact_payload_identity(monkeypatc
 
 def test_hook_recording_preserves_native_child_actor_context(monkeypatch, tmp_path):
     monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path))
-    payload = json.dumps({
-        "session_id": "claude-session",
-        "transcript_path": "/work/claude.jsonl",
-        "hook_event_name": "SubagentStart",
-        "hook_event_id": "child-start",
-        "agent_id": "child-one",
-    }).encode()
+    payload = json.dumps(
+        {
+            "session_id": "claude-session",
+            "transcript_path": "/work/claude.jsonl",
+            "hook_event_name": "SubagentStart",
+            "hook_event_id": "child-start",
+            "agent_id": "child-one",
+        }
+    ).encode()
 
     _deliver_hook(claude_hooks.ClaudeHookGateway(), payload)
 
@@ -1263,9 +1627,7 @@ def test_claude_hook_returns_native_pretool_output_and_an_output_location(monkey
         lambda value: SimpleNamespace(reply=expected, located=located),
     )
 
-    response = claude_hooks.ClaudeHookGateway().handle(
-        hook_request(json.dumps(document).encode())
-    )
+    response = claude_hooks.ClaudeHookGateway().handle(hook_request(json.dumps(document).encode()))
 
     assert response.reply == expected
     assert response.raw_events[0].payload == json.dumps(document).encode()
@@ -1277,29 +1639,33 @@ def test_claude_hook_returns_native_pretool_output_and_an_output_location(monkey
 
 
 def test_the_hook_row_carries_what_the_delivery_observed():
-    payload = json.dumps({
-        "session_id": "claude-session",
-        "transcript_path": "/work/claude.jsonl",
-        "cwd": "/work",
-        "hook_event_name": "PostToolUse",
-        "hook_event_id": "post-one",
-        "tool_name": "Read",
-    }).encode()
+    payload = json.dumps(
+        {
+            "session_id": "claude-session",
+            "transcript_path": "/work/claude.jsonl",
+            "cwd": "/work",
+            "hook_event_name": "PostToolUse",
+            "hook_event_id": "post-one",
+            "tool_name": "Read",
+        }
+    ).encode()
 
-    response = claude_hooks.ClaudeHookGateway().handle(hook_request(
-        payload,
-        terminal_window_id="1114",
-        harness_process_id=4242,
-        account_id="c2",
-        account_display_name="Account Two",
-    ))
+    response = claude_hooks.ClaudeHookGateway().handle(
+        hook_request(
+            payload,
+            terminal_window_id="1114",
+            harness_process_id=4242,
+            account_id="legacy-account",
+            account_display_name="Account Two",
+        )
+    )
     bare = claude_hooks.ClaudeHookGateway().handle(hook_request(payload))
 
     hook_row = response.raw_events[0]
     assert hook_row.terminal_window_id == "1114"
     assert hook_row.harness_process_id == 4242
-    assert hook_row.account_id == "c2"
-    assert hook_row.account_display_name == "Account Two"
+    assert hook_row.account_id is None
+    assert hook_row.account_display_name is None
     assert bare.raw_events[0].terminal_window_id is None
     # the flat fields ride the SAME row: no separate anchor observations exist
     assert [event.source_type for event in response.raw_events] == ["hook"]
@@ -1351,6 +1717,29 @@ def test_type_command_verifies_the_submit_and_retries_the_enter(monkeypatch):
     assert stuck.enters == 2  # every retry spent before giving up honestly
 
 
+def test_type_command_confirms_an_attachment_prompt_with_the_enter_retry_budget(
+    monkeypatch,
+):
+    monkeypatch.setattr(claude_tui.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(claude_tui.clipboard_image, "clear_image", lambda: False)
+    monkeypatch.setattr(
+        claude_tui,
+        "_submission_pending",
+        lambda fe, win, marker: marker in fe.box,
+    )
+    driver = SubmitProbeDriver(sticky=1)
+
+    ok, _clip = claude_tui.type_command(
+        driver,
+        "window-1",
+        "inspect it",
+        ensure_submit=True,
+    )
+
+    assert ok is True
+    assert driver.enters == 2
+
+
 def test_type_command_rejects_a_screen_without_a_composer(monkeypatch):
     monkeypatch.setattr(
         claude_tui,
@@ -1364,6 +1753,49 @@ def test_type_command_rejects_a_screen_without_a_composer(monkeypatch):
     assert ok is False
     assert cleared is False
     assert driver.box == ""
+
+
+def test_claude_clear_input_removes_each_restored_logical_line():
+    class ClearDriver:
+        terminal = None
+
+        def __init__(self):
+            self.lines = ["first line", "second line", "third line"]
+            self.keys = []
+
+        def get_text(self, _window, extent="screen", ansi=False):
+            del extent, ansi
+            rule = "─" * 20
+            content = "\n".join(self.lines)
+            return f"{rule}\n❯\u00a0{content}\n{rule}"
+
+        def send_key(self, _window, *pressed):
+            self.keys.extend(pressed)
+            if pressed == ("ctrl+k",) and self.lines:
+                self.lines.pop()
+            return True
+
+    driver = ClearDriver()
+
+    killed = claude_tui.clear_input(
+        driver,
+        "window-one",
+        "first line second line third line",
+        sleep=lambda _seconds: None,
+    )
+
+    assert killed == 3
+    assert driver.lines == []
+    assert driver.keys == [
+        "ctrl+u",
+        "ctrl+k",
+        "backspace",
+        "ctrl+u",
+        "ctrl+k",
+        "backspace",
+        "ctrl+u",
+        "ctrl+k",
+    ]
 
 
 def test_claude_foreground_post_tool_records_no_directive():
@@ -1381,18 +1813,14 @@ def test_claude_foreground_post_tool_records_no_directive():
         "tool_response": {"stdout": "hello"},
     }
 
-    response = claude_hooks.ClaudeHookGateway().handle(
-        hook_request(json.dumps(document).encode())
-    )
+    response = claude_hooks.ClaudeHookGateway().handle(hook_request(json.dumps(document).encode()))
 
     assert response.reply == b""
     assert [event.source_type for event in response.raw_events] == ["hook"]
 
 
 def _background_post_tool_document(tmp_path, session_id="claude-session", task_id="btk000001"):
-    output_path = (
-        tmp_path / "claude-503" / "-work-slug" / session_id / "tasks" / f"{task_id}.output"
-    )
+    output_path = tmp_path / "claude-503" / "-work-slug" / session_id / "tasks" / f"{task_id}.output"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_bytes(b"1\n2\n")
     return output_path, {
@@ -1412,9 +1840,7 @@ def test_claude_background_bash_locates_its_native_output_file(monkeypatch, tmp_
     monkeypatch.setattr(claude_foreground, "BACKGROUND_OUTPUT_ROOT", str(tmp_path))
     output_path, document = _background_post_tool_document(tmp_path)
 
-    response = claude_hooks.ClaudeHookGateway().handle(
-        hook_request(json.dumps(document).encode())
-    )
+    response = claude_hooks.ClaudeHookGateway().handle(hook_request(json.dumps(document).encode()))
 
     assert response.reply == b""
     directive = response.raw_events[-1]
@@ -1454,18 +1880,22 @@ def test_claude_background_output_streams_into_the_operation(monkeypatch, tmp_pa
     _deliver_hook(claude_hooks.ClaudeHookGateway(), json.dumps(document).encode())
 
     runtime, interpreter = interpreting_runtime(tmp_path / "data" / "main.db")
-    runtime.register("claude_code", Session(
-        SessionId("session-one"), ActorId("session-one:lead"),
-        str(tmp_path / "session-one.jsonl"), "/work",
-    ))
+    runtime.register(
+        "claude_code",
+        Session(
+            SessionId("session-one"),
+            ActorId("session-one:lead"),
+            str(tmp_path / "session-one.jsonl"),
+            "/work",
+            harness_process_id=1001,
+        ),
+    )
     interpreter.tick()  # translates the directive; the reaction starts the following
     output_path.write_bytes(b"1\n2\n3\n")  # the job keeps writing
     interpreter.tick()  # pulls chunks
     interpreter.tick()  # translates them
 
-    assert shell_output_text(
-        runtime, SessionId("session-one"), ShellId("background-op-one")
-    ) == "1\n2\n3\n"
+    assert shell_output_text(runtime, SessionId("session-one"), ShellId("background-op-one")) == "1\n2\n3\n"
 
     # the session's end is the background following's end: tail captured, row
     # gone, the NATIVE file untouched
@@ -1486,9 +1916,7 @@ def test_claude_background_output_streams_into_the_operation(monkeypatch, tmp_pa
     assert runtime.shell_output.find_for_session(SessionId("session-one")) == ()
     assert output_path.exists()
     interpreter.tick()
-    assert shell_output_text(
-        runtime, SessionId("session-one"), ShellId("background-op-one")
-    ) == "1\n2\n3\n4\n"
+    assert shell_output_text(runtime, SessionId("session-one"), ShellId("background-op-one")) == "1\n2\n3\n4\n"
 
 
 def test_a_command_backgrounded_mid_run_keeps_its_output_file_and_its_following(monkeypatch, tmp_path):
@@ -1516,25 +1944,37 @@ def test_a_command_backgrounded_mid_run_keeps_its_output_file_and_its_following(
     _deliver_hook(gateway, json.dumps(hook).encode())
 
     runtime, interpreter = interpreting_runtime(tmp_path / "data" / "main.db")
-    runtime.register("claude_code", Session(
-        SessionId(session_id), ActorId(f"{session_id}:lead"), transcript_path, "/work",
-    ))
-    interpreter.tick()                                   # the directive starts the following
+    runtime.register(
+        "claude_code",
+        Session(
+            SessionId(session_id),
+            ActorId(f"{session_id}:lead"),
+            transcript_path,
+            "/work",
+            harness_process_id=1002,
+        ),
+    )
+    interpreter.tick()  # the directive starts the following
     following = runtime.shell_output.find_for_session(SessionId(session_id))
     assert len(following) == 1
     tee_path = following[0].source_path
-    assert following[0].until == "shell_finished"        # …as a foreground command
+    assert following[0].until == "shell_finished"  # …as a foreground command
     Path(tee_path).write_bytes(b"working\n")
     interpreter.tick()
     interpreter.tick()
 
     # ctrl+b: the input never asked for the background, the response carries a task id
-    _deliver_hook(gateway, json.dumps({
-        **hook,
-        "hook_event_name": "PostToolUse",
-        "hook_event_id": "posttool-one",
-        "tool_response": {"backgroundTaskId": "btk9y72c9"},
-    }).encode())
+    _deliver_hook(
+        gateway,
+        json.dumps(
+            {
+                **hook,
+                "hook_event_name": "PostToolUse",
+                "hook_event_id": "posttool-one",
+                "tool_response": {"backgroundTaskId": "btk9y72c9"},
+            }
+        ).encode(),
+    )
     interpreter.tick()
 
     survived = runtime.shell_output.find_for_session(SessionId(session_id))
@@ -1542,7 +1982,7 @@ def test_a_command_backgrounded_mid_run_keeps_its_output_file_and_its_following(
     assert survived[0].until == "session_finished"
     assert Path(tee_path).exists(), "the file the command is still writing to was unlinked"
 
-    Path(tee_path).write_bytes(b"working\ndone\n")        # the command runs on
+    Path(tee_path).write_bytes(b"working\ndone\n")  # the command runs on
     interpreter.tick()
     interpreter.tick()
     assert shell_output_text(runtime, SessionId(session_id), ShellId(shell_id)).endswith("done\n")
@@ -1555,17 +1995,19 @@ def test_a_command_backgrounded_mid_run_keeps_its_output_file_and_its_following(
 
 def test_claude_foreground_output_is_canonical_append_progress():
     content = b"first line\nsecond line\n"
-    translation = ClaudeCanonicalTranslator().translate(raw_event(
-        {
-            "shell_id": "command-one",
-            "ordinal": 3,
-            "stream": "output",
-            "content_base64": base64.b64encode(content).decode("ascii"),
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="foreground_output",
-        raw_event_id="foreground-one",
-    ))
+    translation = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {
+                "shell_id": "command-one",
+                "ordinal": 3,
+                "stream": "output",
+                "content_base64": base64.b64encode(content).decode("ascii"),
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="foreground_output",
+            raw_event_id="foreground-one",
+        )
+    )
 
     progress = payloads(translation, ShellProgressed)[0].payload
     assert progress.shell_id == "command-one"
@@ -1582,18 +2024,18 @@ def test_claude_background_launch_stub_is_not_progress(tmp_path):
         "Command running in background with ID: btk9y72c9. Output is being "
         "written to: /tmp/task.output. You will be notified when it completes."
     )
-    translation = ClaudeCanonicalTranslator().translate(raw_event(
-        {
-            "type": "user",
-            "uuid": "background-result",
-            "message": {
-                "content": [{"type": "tool_result", "tool_use_id": "background-op", "content": stub}]
+    translation = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "background-result",
+                "message": {"content": [{"type": "tool_result", "tool_use_id": "background-op", "content": stub}]},
             },
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="transcript",
-        raw_event_id="background-stub",
-    ))
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="background-stub",
+        )
+    )
 
     assert not payloads(translation, ShellProgressed)
     assert translation.decision == "ignored_nonsemantic"
@@ -1644,27 +2086,27 @@ def test_claude_foreground_bytes_flow_through_raw_audit_into_operation_projectio
     assert b"updatedInput" in output
 
     runtime, interpreter = interpreting_runtime(tmp_path / "application" / "main.db")
-    runtime.register("claude_code", Session(
-        SessionId("session-one"), ActorId("session-one:lead"),
-        str(tmp_path / "session-one.jsonl"), str(tmp_path),
-    ))
+    runtime.register(
+        "claude_code",
+        Session(
+            SessionId("session-one"),
+            ActorId("session-one:lead"),
+            str(tmp_path / "session-one.jsonl"),
+            str(tmp_path),
+            harness_process_id=1003,
+        ),
+    )
     interpreter.tick()  # translates the directive; the reaction starts the following
     output_sources = runtime.shell_output.find_for_session(SessionId("session-one"))
     assert len(output_sources) == 1
     Path(output_sources[0].source_path).write_bytes(b"hello\n")
     interpreter.tick()  # pulls the chunk and translates it
 
-    assert shell_output_text(
-        runtime, SessionId("session-one"), ShellId("command-one")
-    ) == "hello\n"
+    assert shell_output_text(runtime, SessionId("session-one"), ShellId("command-one")) == "hello\n"
     evidence = runtime.raw_event_audits.audits_for_session(SessionId("session-one"))
-    foreground_evidence = [
-        row for row in evidence if row.raw_event.source_type == "foreground_output"
-    ]
+    foreground_evidence = [row for row in evidence if row.raw_event.source_type == "foreground_output"]
     assert len(foreground_evidence) == 1
-    assert base64.b64decode(
-        json.loads(foreground_evidence[0].raw_event.payload)["content_base64"]
-    ) == b"hello\n"
+    assert base64.b64decode(json.loads(foreground_evidence[0].raw_event.payload)["content_base64"]) == b"hello\n"
 
 
 def pane_terminal():
@@ -1680,9 +2122,7 @@ def pane_terminal():
 def test_terminal_adapter_opens_canonical_processes_with_generic_tags():
     terminal, adapter = pane_terminal()
 
-    result = adapter.open_session_panes(
-        SessionPaneRequest(SessionId("session-one"), "window-one", 25)
-    )
+    result = adapter.open_session_panes(SessionPaneRequest(SessionId("session-one"), "window-one", 25))
 
     assert result.succeeded
     assert terminal.tagged == [("window-one", {SESSION_WINDOW_TAG: "session-one"})]
@@ -1719,9 +2159,7 @@ def test_a_pane_process_that_exits_on_startup_is_named_not_guessed_at():
     )
     adapter = TerminalAdapter(terminal.plugin(), FakeSessions({"session-one": "window-one"}))
 
-    result = adapter.open_session_panes(
-        SessionPaneRequest(SessionId("session-one"), "window-one", 25)
-    )
+    result = adapter.open_session_panes(SessionPaneRequest(SessionId("session-one"), "window-one", 25))
 
     assert not result.succeeded
     assert result.reason == "mirror pane process exited on startup"
@@ -1732,8 +2170,7 @@ def test_terminal_adapter_settles_the_scoreboard_on_its_five_rows():
 
     adapter.open_session_panes(SessionPaneRequest(SessionId("session-one"), "window-one", 25))
 
-    scoreboard = next(found for found in terminal.windows()
-                      if found.tags.get(SCOREBOARD_PANE_TAG))
+    scoreboard = next(found for found in terminal.windows() if found.tags.get(SCOREBOARD_PANE_TAG))
     assert scoreboard.lines == 5
     assert terminal.resized == [(scoreboard.window_id, "vertical", 2)]
 
@@ -1782,34 +2219,70 @@ def test_terminal_adapter_reads_the_session_window_from_evidence_and_checks_it_l
     assert adapter.window_for_session(SessionId("session-missing")) is None
 
 
+def test_terminal_adapter_checks_liveness_against_a_given_window_snapshot():
+    terminal = FakeTerminal(
+        windows=[
+            window(
+                "window-one",
+                tags={SESSION_WINDOW_TAG: "session-one"},
+            )
+        ]
+    )
+    adapter = TerminalAdapter(
+        terminal.plugin(),
+        FakeSessions({"session-one": "window-one"}),
+    )
+    snapshot = terminal.windows()
+    terminal.windows_on_screen.clear()
+
+    assert adapter.window_is_live(
+        SessionId("session-one"),
+        WindowId("window-one"),
+        snapshot,
+    )
+    assert not adapter.window_is_live(
+        SessionId("session-two"),
+        WindowId("window-one"),
+        snapshot,
+    )
+
+
 def test_terminal_adapter_gives_a_shared_window_to_its_new_session_owner():
-    terminal = FakeTerminal(windows=[
-        window("window-one", tags={SESSION_WINDOW_TAG: "session-new"}),
-    ])
-    sessions = FakeSessions({
-        "session-old": "window-one",
-        "session-new": "window-one",
-    })
+    terminal = FakeTerminal(
+        windows=[
+            window("window-one", tags={SESSION_WINDOW_TAG: "session-new"}),
+        ]
+    )
+    sessions = FakeSessions(
+        {
+            "session-old": "window-one",
+            "session-new": "window-one",
+        }
+    )
     adapter = TerminalAdapter(terminal.plugin(), sessions)
 
     assert adapter.window_for_session(SessionId("session-old")) is None
     assert adapter.window_for_session(SessionId("session-new")) == "window-one"
-    assert adapter.live_sessions((
-        SessionId("session-old"),
-        SessionId("session-new"),
-    )) == frozenset({SessionId("session-new")})
+    assert adapter.live_sessions(
+        (
+            SessionId("session-old"),
+            SessionId("session-new"),
+        )
+    ) == frozenset({SessionId("session-new")})
 
 
 def test_terminal_adapter_measures_the_activity_pane_against_its_row():
-    terminal = FakeTerminal(windows=[
-        window("window-one", columns=75),
-        window("window-two", tags={ACTIVITY_PANE_TAG: "session-one"},
-               columns=25, is_first_in_tab=False),
-        # stacked INSIDE the activity pane's column — counting it would count
-        # that column twice
-        window("window-three", tags={SCOREBOARD_PANE_TAG: "session-one"},
-               columns=25, lines=5, is_first_in_tab=False),
-    ])
+    terminal = FakeTerminal(
+        windows=[
+            window("window-one", columns=75),
+            window("window-two", tags={ACTIVITY_PANE_TAG: "session-one"}, columns=25, is_first_in_tab=False),
+            # stacked INSIDE the activity pane's column — counting it would count
+            # that column twice
+            window(
+                "window-three", tags={SCOREBOARD_PANE_TAG: "session-one"}, columns=25, lines=5, is_first_in_tab=False
+            ),
+        ]
+    )
     adapter = TerminalAdapter(terminal.plugin(), FakeSessions())
 
     assert adapter.activity_pane_geometry(SessionId("session-one")) == (25, 100)
@@ -1830,18 +2303,18 @@ def test_hook_gateway_service_records_only_for_harnesses_that_accept_deliveries(
     for plugin in installed():
         registry.register(plugin if plugin.info.name != "codex" else replace(plugin, hooks=None))
     service = HookGatewayService(registry, SqliteRawEventRepository(main_database(str(tmp_path / "main.db"))))
-    payload = json.dumps({
-        "session_id": "session-one",
-        "transcript_path": "/work/session.jsonl",
-        "hook_event_name": "PostToolUse",
-        "hook_event_id": "post-one",
-        "tool_name": "Read",
-    }).encode()
+    payload = json.dumps(
+        {
+            "session_id": "session-one",
+            "transcript_path": "/work/session.jsonl",
+            "hook_event_name": "PostToolUse",
+            "hook_event_id": "post-one",
+            "tool_name": "Read",
+        }
+    ).encode()
 
     assert service.record("claude_code", hook_request(payload, terminal_window_id=WindowId("9"))) == b""
-    evidence = CanonicalRuntime(str(tmp_path / "main.db")).raw_event_audits.audits_for_session(
-        SessionId("session-one")
-    )
+    evidence = CanonicalRuntime(str(tmp_path / "main.db")).raw_event_audits.audits_for_session(SessionId("session-one"))
     assert [audit.raw_event.source_type for audit in evidence] == ["hook"]
 
     with pytest.raises(UnknownHookHarness, match="unregistered harness"):
@@ -1869,27 +2342,21 @@ def test_the_cli_pid_is_resolved_from_the_pid_its_client_reported(tmp_path, monk
     registry = HarnessRegistry()
     for plugin in installed():
         registry.register(plugin)
-    service = HookGatewayService(
-        registry, SqliteRawEventRepository(main_database(str(tmp_path / "main.db")))
-    )
-    payload = json.dumps({
-        "session_id": "session-one",
-        "transcript_path": "/work/session.jsonl",
-        "hook_event_name": "SessionStart",
-        "hook_event_id": "start-one",
-    }).encode()
+    service = HookGatewayService(registry, SqliteRawEventRepository(main_database(str(tmp_path / "main.db"))))
+    payload = json.dumps(
+        {
+            "session_id": "session-one",
+            "transcript_path": "/work/session.jsonl",
+            "hook_event_name": "SessionStart",
+            "hook_event_id": "start-one",
+        }
+    ).encode()
 
     service.record("claude_code", hook_request(payload, client_process_id=999))
 
     assert walked == [("claude", 999)]
-    evidence = CanonicalRuntime(str(tmp_path / "main.db")).raw_event_audits.audits_for_session(
-        SessionId("session-one")
-    )
-    assert [
-        audit.raw_event.harness_process_id
-        for audit in evidence
-        if audit.raw_event.source_type == "hook"
-    ] == [4242]
+    evidence = CanonicalRuntime(str(tmp_path / "main.db")).raw_event_audits.audits_for_session(SessionId("session-one"))
+    assert [audit.raw_event.harness_process_id for audit in evidence if audit.raw_event.source_type == "hook"] == [4242]
 
     # Nothing to walk from: a delivery with no client pid claims no CLI pid.
     walked.clear()
@@ -2103,9 +2570,7 @@ def test_claude_first_teammate_message_starts_the_actor_once():
 
     result = ClaudeCanonicalTranslator().translate(teammate_message)
 
-    actor_starts = [
-        event for event in result.canonical_events if isinstance(event.payload, ActorStarted)
-    ]
+    actor_starts = [event for event in result.canonical_events if isinstance(event.payload, ActorStarted)]
     assert len(actor_starts) == 1
     assert len({event.event_id for event in result.canonical_events}) == len(result.canonical_events)
 
@@ -2150,32 +2615,38 @@ def test_claude_later_teammate_message_reuses_the_canonical_actor_start():
 
 def test_claude_lead_start_uses_the_first_root_record_with_a_working_directory():
     translator = ClaudeCanonicalTranslator()
-    plumbing = translator.translate(raw_event(
-        {"type": "queue-operation", "operation": "enqueue"},
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="transcript",
-        raw_event_id="queue",
-        source_position="0",
-    ))
-    root_record = translator.translate(raw_event(
-        {
-            "type": "user",
-            "uuid": "prompt-one",
-            "parentUuid": None,
-            "cwd": "/work",
-            "message": {"content": "hello"},
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="transcript",
-        raw_event_id="root-record",
-        source_position="297",
-    ))
-    hook = translator.translate(raw_event(
-        {"hook_event_name": "SessionStart", "cwd": "/work"},
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="hook",
-        raw_event_id="session-hook",
-    ))
+    plumbing = translator.translate(
+        raw_event(
+            {"type": "queue-operation", "operation": "enqueue"},
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="queue",
+            source_position="0",
+        )
+    )
+    root_record = translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "prompt-one",
+                "parentUuid": None,
+                "cwd": "/work",
+                "message": {"content": "hello"},
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="root-record",
+            source_position="297",
+        )
+    )
+    hook = translator.translate(
+        raw_event(
+            {"hook_event_name": "SessionStart", "cwd": "/work"},
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="session-hook",
+        )
+    )
 
     assert plumbing.decision == "ignored_nonsemantic"
     assert [mapper.encode_canonical_event(event) for event in root_record.canonical_events[:2]] == [
@@ -2188,23 +2659,34 @@ def test_claude_teammate_hook_and_transcript_share_one_actor_identity(monkeypatc
     main_path.write_text('{"type":"user","uuid":"lead"}\n')
     child_path = tmp_path / "session-one" / "subagents" / "agent-worker-one.jsonl"
     child_path.parent.mkdir(parents=True)
-    child_path.write_text(json.dumps({
-        "type": "user",
-        "uuid": "worker-prompt",
-        "message": {"content": "inspect"},
-    }) + "\n")
-    child_path.with_name("agent-worker-one.meta.json").write_text(json.dumps({
-        "taskKind": "in_process_teammate",
-    }))
+    child_path.write_text(
+        json.dumps(
+            {
+                "type": "user",
+                "uuid": "worker-prompt",
+                "message": {"content": "inspect"},
+            }
+        )
+        + "\n"
+    )
+    child_path.with_name("agent-worker-one.meta.json").write_text(
+        json.dumps(
+            {
+                "taskKind": "in_process_teammate",
+            }
+        )
+    )
     monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path / "data"))
-    hook_payload = json.dumps({
-        "session_id": "session-one",
-        "transcript_path": str(main_path),
-        "hook_event_name": "SubagentStart",
-        "hook_event_id": "worker-start",
-        "agent_id": "worker-one",
-        "agent_type": "reviewer",
-    }).encode()
+    hook_payload = json.dumps(
+        {
+            "session_id": "session-one",
+            "transcript_path": str(main_path),
+            "hook_event_name": "SubagentStart",
+            "hook_event_id": "worker-start",
+            "agent_id": "worker-one",
+            "agent_type": "reviewer",
+        }
+    ).encode()
 
     _deliver_hook(claude_hooks.ClaudeHookGateway(), hook_payload)
     runtime, interpreter = interpreting_runtime(tmp_path / "data" / "main.db")
@@ -2233,53 +2715,73 @@ def test_claude_teammate_hook_and_transcript_share_one_actor_identity(monkeypatc
 
 def test_codex_hook_maps_unique_compaction_lifecycle():
     translator = CodexCanonicalTranslator()
-    before = translator.translate(raw_event(
-        {"hook_event_name": "PreCompact", "hook_event_id": "compact-one"},
-        harness=HarnessName.CODEX,
-        source_type="hook",
-        raw_event_id="compact-before",
-    ))
-    after = translator.translate(raw_event(
-        {"hook_event_name": "PostCompact", "hook_event_id": "compact-one"},
-        harness=HarnessName.CODEX,
-        source_type="hook",
-        raw_event_id="compact-after",
-    ))
+    before = translator.translate(
+        raw_event(
+            {"hook_event_name": "PreCompact", "hook_event_id": "compact-one"},
+            harness=HarnessName.CODEX,
+            source_type="hook",
+            raw_event_id="compact-before",
+        )
+    )
+    after = translator.translate(
+        raw_event(
+            {"hook_event_name": "PostCompact", "hook_event_id": "compact-one"},
+            harness=HarnessName.CODEX,
+            source_type="hook",
+            raw_event_id="compact-after",
+        )
+    )
 
     assert isinstance(before.canonical_events[0].payload, CompactionStarted)
     assert isinstance(after.canonical_events[0].payload, CompactionFinished)
 
 
+def test_codex_rollout_compaction_boundary_is_known_hook_plumbing():
+    translated = CodexCanonicalTranslator().translate(
+        raw_event(
+            {"type": "compacted", "payload": {"message": "", "replacement_history": []}},
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="compact-boundary",
+        )
+    )
+
+    assert translated.decision == "ignored_nonsemantic"
+    assert translated.canonical_events == ()
+
+
 def test_claude_compaction_metadata_maps_to_one_finished_event():
-    translated = ClaudeCanonicalTranslator().translate(raw_event(
-        {
-            "type": "system",
-            "subtype": "compact_boundary",
-            "uuid": "compact-one",
-            "content": "Conversation compacted",
-            "compactMetadata": {
-                "trigger": "manual",
-                "preTokens": 15182,
-                "postTokens": 1426,
-                "cumulativeDroppedTokens": 13756,
-                "durationMs": 15964,
-                "preCompactDiscoveredTools": ["Read"],
-                "preservedSegment": {
-                    "headUuid": "head-one",
-                    "anchorUuid": "anchor-one",
-                    "tailUuid": "tail-one",
-                },
-                "preservedMessages": {
-                    "anchorUuid": "anchor-one",
-                    "uuids": ["head-one", "tail-one"],
-                    "allUuids": ["head-one", "middle-one", "tail-one"],
+    translated = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "system",
+                "subtype": "compact_boundary",
+                "uuid": "compact-one",
+                "content": "Conversation compacted",
+                "compactMetadata": {
+                    "trigger": "manual",
+                    "preTokens": 15182,
+                    "postTokens": 1426,
+                    "cumulativeDroppedTokens": 13756,
+                    "durationMs": 15964,
+                    "preCompactDiscoveredTools": ["Read"],
+                    "preservedSegment": {
+                        "headUuid": "head-one",
+                        "anchorUuid": "anchor-one",
+                        "tailUuid": "tail-one",
+                    },
+                    "preservedMessages": {
+                        "anchorUuid": "anchor-one",
+                        "uuids": ["head-one", "tail-one"],
+                        "allUuids": ["head-one", "middle-one", "tail-one"],
+                    },
                 },
             },
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="transcript",
-        raw_event_id="compact-one",
-    ))
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="compact-one",
+        )
+    )
 
     assert translated.decision == "translated"
     assert [event.payload for event in translated.canonical_events] == [
@@ -2287,54 +2789,114 @@ def test_claude_compaction_metadata_maps_to_one_finished_event():
     ]
 
 
-def test_codex_session_start_hook_matches_rollout_metadata(tmp_path, monkeypatch):
-    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
-    rollout_path = (
-        tmp_path / "sessions" / "2026" / "08" / "14"
-        / "rollout-2026-08-14T12-00-00-session-one.jsonl"
-    )
-    rollout_path.parent.mkdir(parents=True)
-    rollout_path.write_text(json.dumps({
-        "type": "session_meta",
-        "payload": {
-            "id": "session-one",
-            "cwd": "/work",
-            "thread_source": "user",
-            "forked_from_id": "session-before-rewind",
-        },
-    }) + "\n")
-    translator = CodexCanonicalTranslator()
-    hook = translator.translate(raw_event(
-        {"hook_event_name": "SessionStart", "cwd": "/work",
-         "transcript_path": str(rollout_path)},
-        harness=HarnessName.CODEX,
-        source_type="hook",
-        raw_event_id="session-hook",
-    ))
-    rollout = translator.translate(replace(
+def test_claude_compaction_hook_and_boundary_map_one_complete_lifecycle():
+    translator = ClaudeCanonicalTranslator()
+    started = translator.translate(
         raw_event(
             {
-                "timestamp": "2026-08-14T12:00:00Z",
-                "type": "session_meta",
-                "payload": {
-                    "cwd": "/work",
-                    "originator": "codex-tui",
-                    "forked_from_id": "session-before-rewind",
+                "hook_event_name": "PreCompact",
+                "hook_event_id": "compact-start",
+                "prompt_id": "compact-one",
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="compact-start",
+        )
+    )
+    hook_finished = translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PostCompact",
+                "hook_event_id": "compact-hook-finish",
+                "prompt_id": "compact-one",
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="compact-hook-finish",
+        )
+    )
+    boundary_finished = translator.translate(
+        raw_event(
+            {
+                "type": "system",
+                "subtype": "compact_boundary",
+                "uuid": "compact-boundary",
+                "content": "Conversation compacted",
+                "compactMetadata": {
+                    "trigger": "manual",
+                    "preTokens": 15182,
                 },
             },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="compact-boundary",
+        )
+    )
+
+    lifecycle = (
+        *started.canonical_events,
+        *hook_finished.canonical_events,
+        *boundary_finished.canonical_events,
+    )
+    assert hook_finished.decision == "ignored_nonsemantic"
+    assert [type(event.payload) for event in lifecycle] == [
+        CompactionStarted,
+        CompactionFinished,
+    ]
+    assert lifecycle[-1].payload == CompactionFinished(15182, None)
+
+
+def test_codex_session_start_hook_matches_rollout_metadata(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    rollout_path = tmp_path / "sessions" / "2026" / "08" / "14" / "rollout-2026-08-14T12-00-00-session-one.jsonl"
+    rollout_path.parent.mkdir(parents=True)
+    rollout_path.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {
+                    "id": "session-one",
+                    "cwd": "/work",
+                    "thread_source": "user",
+                    "forked_from_id": "session-before-rewind",
+                },
+            }
+        )
+        + "\n"
+    )
+    translator = CodexCanonicalTranslator()
+    hook = translator.translate(
+        raw_event(
+            {"hook_event_name": "SessionStart", "cwd": "/work", "transcript_path": str(rollout_path)},
             harness=HarnessName.CODEX,
-            source_type="rollout",
-            raw_event_id="session-rollout",
-            source_position="0",
-        ),
-        source_name=str(rollout_path),
-    ))
+            source_type="hook",
+            raw_event_id="session-hook",
+        )
+    )
+    rollout = translator.translate(
+        replace(
+            raw_event(
+                {
+                    "timestamp": "2026-08-14T12:00:00Z",
+                    "type": "session_meta",
+                    "payload": {
+                        "cwd": "/work",
+                        "originator": "codex-tui",
+                        "forked_from_id": "session-before-rewind",
+                    },
+                },
+                harness=HarnessName.CODEX,
+                source_type="rollout",
+                raw_event_id="session-rollout",
+                source_position="0",
+            ),
+            source_name=str(rollout_path),
+        )
+    )
 
     assert hook.decision == "translated"
     # the rollout record carries its own timestamp; the identities and payloads converge
-    assert [event.event_id for event in hook.canonical_events] == [
-        event.event_id for event in rollout.canonical_events
-    ]
+    assert [event.event_id for event in hook.canonical_events] == [event.event_id for event in rollout.canonical_events]
     assert [mapper.payload_json(event) for event in hook.canonical_events] == [
         mapper.payload_json(event) for event in rollout.canonical_events
     ]
@@ -2398,8 +2960,8 @@ def test_static_menu_vocabulary_lives_on_the_harness_descriptor():
     assert all(model.value.startswith("gpt-") for model in codex_plugin.info.models)
     assert claude_plugin.info.rewind_modes
     assert [mode.value for mode in codex_plugin.info.rewind_modes] == ["conversation"]
-    # only one harness has a subscription switcher behind it
-    assert claude_plugin.info.supports_accounts
+    # Both harnesses use their one default login.
+    assert not claude_plugin.info.supports_accounts
     assert not codex_plugin.info.supports_accounts
 
 
@@ -2435,26 +2997,28 @@ class _NoSessions:
 def test_the_daemon_decides_what_a_statusline_delivery_meant(monkeypatch, tmp_path):
     """The shim ships bytes; the WINDOWS are read here.
 
-    The client half — that it forwards the stdin verbatim, stamps the two account
-    values its environment selects raw, and still runs the real status line — is
-    tested by running the process in tests/test_canonical_clients.py. What is left
-    here is the half that decides what those bytes meant, including the validation
-    the client no longer does.
+    An old status-line process can still stamp account values. The daemon ignores
+    them and records the windows for the one default Claude profile.
     """
     monkeypatch.setattr(
-        "harness.impl.claude_code.usage.rows.account.registry",
-        lambda: [account.AccountRecord("work", "Work", "work")],
+        claude_live_usage,
+        "collect",
+        lambda: claude_live_usage.LiveUsageCollection(
+            None,
+            None,
+        ),
     )
-    monkeypatch.setattr(claude_live_usage, "usage", lambda _config_directory: None)
-    body = json.dumps({
-        "session_id": "session-usage",
-        "rate_limits": {
-            "five_hour": {"used_percentage": 25, "resets_at": 2_000_000_000},
-            "seven_day": {"used_percentage": 40, "resets_at": 2_000_100_000},
-        },
-        "_account_id": "work",
-        "_account_name": "Work",
-    }).encode()
+    body = json.dumps(
+        {
+            "session_id": "session-usage",
+            "rate_limits": {
+                "five_hour": {"used_percentage": 25, "resets_at": 2_000_000_000},
+                "seven_day": {"used_percentage": 40, "resets_at": 2_000_100_000},
+            },
+            "_account_id": "work",
+            "_account_name": "Work",
+        }
+    ).encode()
 
     usage = SqliteAccountUsageRepository(main_database(str(tmp_path / "main.db")))
     response = claude_telemetry.ClaudeTelemetryGateway().handle(
@@ -2464,35 +3028,232 @@ def test_the_daemon_decides_what_a_statusline_delivery_meant(monkeypatch, tmp_pa
     usage.record(response.usage)
     rows = claude_usage_reader.read(usage)
 
-    assert rows[0].account_id == "work"
+    assert rows[0].account_id is None
+    assert rows[0].display_name == "claude"
     assert [window.label for window in rows[0].windows] == ["5h", "7d"]
-    assert rows[0].scheduling_score == Decimal("75")
+    assert rows[0].scheduling_score is None
+    assert not rows[0].scheduling_allowed
 
 
-def test_an_account_a_client_reported_is_validated_by_the_daemon():
-    """A client forwards its environment and validates nothing, so both values
-    reach us as external input: the id has to look like an id or it is no id, and
-    a row always has a name to render."""
-    assert account.normalize("work", "Work") == ("work", "Work")
-    assert account.normalize("work", "") == ("work", "work")
-    assert account.normalize("", "") == (None, "default")
-    assert account.normalize("../etc/passwd", "Sneaky") == (None, "Sneaky")
-    assert account.normalize(None, None) == (None, "default")
-    # A status line writes JSON, so the field is not even known to be a string.
-    assert account.normalize(7, 7) == ("7", "7")
+def _claude_profile_usage(
+    *,
+    fetched_at_ms: int,
+    model: str,
+    percent: int,
+) -> dict[str, object]:
+    return {
+        "oauthAccount": {"organizationType": "claude_max"},
+        "cachedUsageUtilization": {
+            "fetchedAtMs": fetched_at_ms,
+            "utilization": {
+                "five_hour": {"utilization": 12, "resets_at": None},
+                "seven_day": {
+                    "utilization": 34,
+                    "resets_at": "2026-08-26T00:00:00+00:00",
+                },
+                "limits": [
+                    {
+                        "kind": "weekly_scoped",
+                        "group": "weekly",
+                        "percent": percent,
+                        "severity": "normal",
+                        "resets_at": "2026-08-27T00:00:00+00:00",
+                        "scope": {
+                            "model": {"id": None, "display_name": model},
+                            "surface": None,
+                        },
+                        "is_active": False,
+                    }
+                ],
+            },
+        },
+    }
 
 
-def test_launchers_build_native_commands_and_share_terminal_launch_mechanics(monkeypatch, tmp_path):
-    monkeypatch.setattr(account, "registry", lambda: [
-        account.AccountRecord("c1", "Account One", "c1"),
-        account.AccountRecord("c2", "Account Two", "c2"),
-    ])
+def test_claude_usage_accepts_null_behaviors_and_current_scoped_limits():
+    response = claude_live_usage.GetUsageResponse.model_validate(
+        {
+            "session": {
+                "total_cost_usd": 0,
+                "total_api_duration_ms": 0,
+                "total_duration_ms": 0,
+                "total_lines_added": 0,
+                "total_lines_removed": 0,
+                "model_usage": {},
+            },
+            "rate_limits": _claude_profile_usage(
+                fetched_at_ms=1,
+                model="Fable",
+                percent=47,
+            )["cachedUsageUtilization"]["utilization"],
+            "rate_limits_available": True,
+            "subscription_type": "max",
+            "behaviors": None,
+        }
+    )
+
+    assert response.behaviors is None
+    samples = claude_live_usage.windows(response.rate_limits)
+    fable = next(sample for sample in samples if sample.key == "seven_day_fable")
+    assert fable.used_percent == Decimal("47")
+    assert fable.resets_at is not None
+
+
+def test_claude_native_usage_is_isolated_for_each_account(tmp_path):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    (first / ".claude.json").write_text(
+        json.dumps(
+            _claude_profile_usage(
+                fetched_at_ms=2_000_000,
+                model="Fable",
+                percent=21,
+            )
+        ),
+        encoding="utf-8",
+    )
+    (second / ".claude.json").write_text(
+        json.dumps(
+            _claude_profile_usage(
+                fetched_at_ms=3_000_000,
+                model="Opus",
+                percent=62,
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    first_usage = claude_live_usage.native_usage(str(first)).usage
+    second_usage = claude_live_usage.native_usage(str(second)).usage
+
+    assert first_usage is not None
+    assert second_usage is not None
+    assert [sample.key for sample in first_usage.windows][-1] == "seven_day_fable"
+    assert [sample.key for sample in second_usage.windows][-1] == "seven_day_opus"
+    assert first_usage.windows[-1].used_percent == Decimal("21")
+    assert second_usage.windows[-1].used_percent == Decimal("62")
+
+
+def test_claude_probe_failure_keeps_the_last_native_model_limit(
+    monkeypatch,
+    tmp_path,
+):
+    profile = tmp_path / "account"
+    profile.mkdir()
+    (profile / ".claude.json").write_text(
+        json.dumps(
+            _claude_profile_usage(
+                fetched_at_ms=1,
+                model="Fable",
+                percent=39,
+            )
+        ),
+        encoding="utf-8",
+    )
+    claude_live_usage._cache.clear()
+    monkeypatch.setattr(
+        claude_live_usage,
+        "request_usage",
+        lambda _config_directory: claude_live_usage.ProbeResult(
+            None,
+            "usage probe authentication failed",
+        ),
+    )
+
+    collection = claude_live_usage.collect(str(profile))
+
+    assert collection.error == "usage probe authentication failed"
+    assert collection.usage is not None
+    assert collection.usage.windows[-1].key == "seven_day_fable"
+    assert collection.usage.windows[-1].used_percent == Decimal("39")
+
+
+def test_claude_usage_row_maps_fable_and_collection_diagnostics_to_the_api(
+    monkeypatch,
+    tmp_path,
+):
+    from api.common.mapper import values as api_values
+
+    live_usage = claude_live_usage.LiveUsage(
+        captured_at=1,
+        plan="max",
+        windows=(
+            claude_live_usage.UsageWindowSample(
+                "seven_day_fable",
+                Decimal("41"),
+                2_000_000_000,
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        claude_live_usage,
+        "collect",
+        lambda: claude_live_usage.LiveUsageCollection(
+            live_usage,
+            "profile refresh unavailable",
+        ),
+    )
+    repository = SqliteAccountUsageRepository(main_database(str(tmp_path / "main.db")))
+
+    row = claude_usage_reader.read(repository)[0]
+    response = api_values.usage_row(row)
+
+    assert response.windows[0].key == "seven_day_fable"
+    assert response.windows[0].scope == "model"
+    assert response.windows[0].model_id == "fable"
+    assert response.windows[0].resets_at == 2_000_000_000
+    assert response.collection_error == "profile refresh unavailable"
+
+
+def test_codex_resume_locator_finds_direct_and_login_shell_commands():
+    direct = replace(
+        window("window-one"),
+        processes=(
+            WindowProcess(
+                41,
+                ("/opt/codex", "resume", "session-direct", "continue"),
+            ),
+        ),
+    )
+    login_shell = replace(
+        window("window-two"),
+        processes=(
+            WindowProcess(
+                42,
+                (
+                    "/bin/zsh",
+                    "-lic",
+                    'codex "$@"',
+                    "codex",
+                    "resume",
+                    "session-shell",
+                    "continue",
+                ),
+            ),
+        ),
+    )
+    unrelated = replace(
+        window("window-three"),
+        processes=(WindowProcess(43, ("/opt/codex", "start", "work")),),
+    )
+
+    assert CodexResumeLocator().locate((direct, login_shell, unrelated)) == (
+        (SessionId("session-direct"), WindowId("window-one")),
+        (SessionId("session-shell"), WindowId("window-two")),
+    )
+
+
+def test_launchers_build_native_commands_and_share_terminal_launch_mechanics(tmp_path):
     application = ProviderGraph()
     terminal = FakeTerminal()
     launcher = HarnessLauncherService(
         application.registry,
         TerminalAdapter(terminal.plugin(), FakeSessions()),
         terminal,
+        SimpleNamespace(resumed=lambda *_arguments: None),
+        launch_environment=(("BAQYLAU_DASHBOARD_PORT", "49123"),),
     )
     attachment = AttachmentReference("/work/context.md", "context.md", "text/markdown")
 
@@ -2527,12 +3288,12 @@ def test_launchers_build_native_commands_and_share_terminal_launch_mechanics(mon
     # shared launch convention; everything after them is the harness's plan.
     assert terminal.opened_tabs[0].command[1] == "-lic"
     assert terminal.opened_tabs[0].command[3:] == (
-        "c2",
+        "claude",
         "--model",
         "fable",
         "--effort",
         "high",
-        "@/work/context.md\nhello",
+        "hello @/work/context.md",
     )
     assert terminal.opened_tabs[1].command[3:] == (
         "codex",
@@ -2542,31 +3303,56 @@ def test_launchers_build_native_commands_and_share_terminal_launch_mechanics(mon
         "gpt-5.6-terra",
         "-c",
         "model_reasoning_effort=high",
+        "-c",
+        'model_reasoning_summary="concise"',
         "/work/context.md\nhello",
     )
     # the selections also ride the CLI's environment, so the hook process can
     # observe them — Claude Code's launch evidence (codex reports its own).
     # They precede the command word inside the shell's own -c string, which is
     # what keeps an aliased CLI resolving.
-    assert terminal.opened_tabs[0].command[2].startswith(
-        'BAQYLAU_LAUNCH_MODEL=fable BAQYLAU_LAUNCH_EFFORT=high c2 "$@"'
+    assert (
+        terminal.opened_tabs[0]
+        .command[2]
+        .startswith('BAQYLAU_DASHBOARD_PORT=49123 BAQYLAU_LAUNCH_MODEL=fable BAQYLAU_LAUNCH_EFFORT=high claude "$@"')
     )
-    assert "BAQYLAU_LAUNCH_MODEL" not in terminal.opened_tabs[1].command[2]
+    assert terminal.opened_tabs[1].command[2] == ('BAQYLAU_DASHBOARD_PORT=49123 codex "$@"')
 
 
-def test_claude_account_selection_prefers_c2_only_as_the_missing_selection_fallback(monkeypatch):
-    monkeypatch.setattr(account, "registry", lambda: [
-        account.AccountRecord("c1", "Account One", "c1"),
-        account.AccountRecord("c2", "Account Two", "c2"),
-    ])
+def test_terminal_launches_receive_the_configured_codex_home(monkeypatch):
+    monkeypatch.setenv("BAQYLAU_DASHBOARD_PORT", "49123")
+    monkeypatch.setenv("CODEX_HOME", "/work/codex-home")
 
-    assert account.alias_for(None) == "c2"
-    assert account.alias_for(AccountId("c1")) == "c1"
-    assert account.alias_for(AccountId("claude")) == "claude"
-    assert account.alias_for(AccountId("missing")) is None
+    assert app_providers.harness_launch_environment() == (
+        ("BAQYLAU_DASHBOARD_PORT", "49123"),
+    )
+    plan = CodexLauncher().prepare(
+        LaunchRequest(
+            working_directory="/work",
+            initial_text="hello",
+            model=None,
+            effort=None,
+            account_id=None,
+            resume_session_id=None,
+        )
+    )
+    assert plan.environment == (("CODEX_HOME", "/work/codex-home"),)
 
-    monkeypatch.setattr(account, "registry", lambda: [])
-    assert account.alias_for(None) == "claude"
+
+def test_claude_rejects_legacy_account_selection():
+    launcher = ProviderGraph().registry.plugin("claude_code").launcher
+
+    with pytest.raises(LaunchRejected, match="does not support account selection"):
+        launcher.prepare(
+            LaunchRequest(
+                working_directory="/work",
+                initial_text="hello",
+                model=None,
+                effort=None,
+                account_id=AccountId("legacy-account"),
+                resume_session_id=None,
+            )
+        )
 
 
 def test_a_harness_that_announces_at_its_first_turn_refuses_an_empty_launch(tmp_path):
@@ -2581,6 +3367,7 @@ def test_a_harness_that_announces_at_its_first_turn_refuses_an_empty_launch(tmp_
         application.registry,
         TerminalAdapter(terminal.plugin(), FakeSessions()),
         terminal,
+        SimpleNamespace(resumed=lambda *_arguments: None),
     )
     empty = LaunchRequest(
         working_directory="/work",
@@ -2598,11 +3385,14 @@ def test_a_harness_that_announces_at_its_first_turn_refuses_an_empty_launch(tmp_
 
     # attachments ARE a first message: they ride the argv as the prompt, which is
     # a turn as far as the CLI is concerned — and so an announcement.
-    attached = launcher.launch("codex", replace(
-        empty,
-        initial_text=None,
-        attachments=(AttachmentReference("/work/context.md", "context.md"),),
-    ))
+    attached = launcher.launch(
+        "codex",
+        replace(
+            empty,
+            initial_text=None,
+            attachments=(AttachmentReference("/work/context.md", "context.md"),),
+        ),
+    )
     assert attached.status == "started"
 
     assert launcher.launch("claude_code", empty).status == "started"
@@ -2613,15 +3403,15 @@ def test_login_shell_command_carries_environment_before_the_command_word(monkeyp
 
     monkeypatch.setenv("SHELL", "/bin/zsh")
     shell, flag, script, *argv = login_shell_command(
-        ("c1", "--model", "fable"),
+        ("harness-cli", "--model", "fable"),
         (("BAQYLAU_LAUNCH_MODEL", "fable"), ("BAQYLAU_LAUNCH_EFFORT", "high")),
     )
     assert (shell, flag) == ("/bin/zsh", "-lic")
     # assignments precede the command word so the alias still resolves
-    assert script == 'BAQYLAU_LAUNCH_MODEL=fable BAQYLAU_LAUNCH_EFFORT=high c1 "$@"'
-    assert argv == ["c1", "--model", "fable"]
+    assert script == 'BAQYLAU_LAUNCH_MODEL=fable BAQYLAU_LAUNCH_EFFORT=high harness-cli "$@"'
+    assert argv == ["harness-cli", "--model", "fable"]
     with pytest.raises(ValueError):
-        login_shell_command(("c1",), (("bad name", "x"),))
+        login_shell_command(("harness-cli",), (("bad name", "x"),))
 
 
 def test_claude_terminal_probe_owns_input_box_grammar(tmp_path):
@@ -2645,17 +3435,24 @@ def test_claude_interrupt_control_waits_for_the_native_abort_marker(tmp_path):
         def send_key(self, request):
             response = super().send_key(request)
             with transcript_path.open("a") as target:
-                target.write(json.dumps({
-                    "type": "user",
-                    "interruptedMessageId": "message-one",
-                    "message": {
-                        "role": "user",
-                        "content": [{
-                            "type": "text",
-                            "text": "[Request interrupted by user for tool use]",
-                        }],
-                    },
-                }) + "\n")
+                target.write(
+                    json.dumps(
+                        {
+                            "type": "user",
+                            "interruptedMessageId": "message-one",
+                            "message": {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": "[Request interrupted by user for tool use]",
+                                    }
+                                ],
+                            },
+                        }
+                    )
+                    + "\n"
+                )
             return response
 
     application = ProviderGraph()
@@ -2675,10 +3472,229 @@ def test_claude_interrupt_control_waits_for_the_native_abort_marker(tmp_path):
     assert outcome.corroborated is True
 
 
-def control_context(session, terminal, pending_attention=None, window_id="window-one"):
-    return ControlContext(
-        session, terminal, window_id, None, pending_attention
+def test_claude_a_signal_killed_shell_is_cancelled():
+    translator = ClaudeCanonicalTranslator()
+    translator.translate(
+        raw_event(
+            {
+                "type": "assistant",
+                "uuid": "shell-start",
+                "message": {
+                    "id": "message-one",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "shell-one",
+                            "name": "Bash",
+                            "input": {"command": "sleep 30"},
+                        }
+                    ],
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="shell-start",
+        )
     )
+
+    finished = translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "shell-result",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "shell-one",
+                            "is_error": True,
+                            "content": "Exit code 137",
+                        }
+                    ],
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="shell-result",
+        )
+    )
+
+    shell = payloads(finished, ShellFinished)[0].payload
+    assert shell.exit_code == 137
+    assert shell.outcome == Outcome.CANCELLED
+
+
+def control_context(
+    session,
+    terminal,
+    pending_attention=None,
+    window_id="window-one",
+    lead_active=False,
+):
+    return ControlContext(session, terminal, window_id, None, lead_active, pending_attention)
+
+
+@pytest.mark.parametrize(
+    ("harness", "interrupt_handler"),
+    (
+        ("codex", "harness.impl.codex.controls.controller.InterruptHandler.__call__"),
+        (
+            "claude_code",
+            "harness.impl.claude_code.controls.controller.InterruptHandler.__call__",
+        ),
+    ),
+)
+def test_closing_an_active_session_confirms_the_interrupt_before_it_closes_the_tab(
+    monkeypatch,
+    harness,
+    interrupt_handler,
+):
+    calls = []
+
+    def interrupt(_handler, request, _context):
+        calls.append(request)
+        return DeliveryResult(
+            request.request_id,
+            "acknowledged",
+            corroborated=True,
+        )
+
+    monkeypatch.setattr(interrupt_handler, interrupt)
+    application = ProviderGraph()
+    session = Session(
+        SessionId("session-one"),
+        ActorId("session-one:lead"),
+        "/work/session.jsonl",
+        "/work",
+    )
+    terminal = FakeTerminal()
+    request = CloseSession(session.session_id, "close-one")
+
+    outcome = application.registry.plugin(harness).controller.execute(
+        request,
+        control_context(session, terminal.plugin(), lead_active=True),
+    )
+
+    assert outcome.status == "acknowledged"
+    assert calls == [Interrupt(session.session_id, request.request_id)]
+    assert terminal.closed_tabs == ["window-one"]
+
+
+def test_claude_active_send_retries_until_the_native_queue_accepts_it(
+    monkeypatch,
+    tmp_path,
+):
+    source = tmp_path / "session.jsonl"
+    source.write_text("", encoding="utf-8")
+    delivered = []
+
+    def submit(_driver, _window, text, *, ensure_submit=False):
+        delivered.append((text, ensure_submit))
+        if len(delivered) == 2:
+            with source.open("a", encoding="utf-8") as transcript_file:
+                transcript_file.write(json.dumps({
+                    "type": "queue-operation",
+                    "operation": "enqueue",
+                    "timestamp": "2026-08-25T00:00:00.000Z",
+                    "sessionId": "session-one",
+                    "content": text,
+                }) + "\n")
+        return True, False
+
+    monkeypatch.setattr(claude_controller.tui, "type_command", submit)
+    monkeypatch.setattr(claude_controller, "NATIVE_TEXT_CONFIRM_TIMEOUT_SECONDS", 0)
+    session = Session(
+        SessionId("session-one"),
+        ActorId("session-one:lead"),
+        str(source),
+        str(tmp_path),
+    )
+    request = SendText(
+        session_id=session.session_id,
+        request_id="request-one",
+        text="queued native prompt",
+    )
+
+    outcome = ProviderGraph().registry.plugin("claude_code").controller.execute(
+        request,
+        control_context(
+            session,
+            FakeTerminal().plugin(),
+            lead_active=True,
+        ),
+    )
+
+    assert outcome.status == "acknowledged"
+    assert outcome.queued is True
+    assert delivered == [
+        ("queued native prompt", False),
+        ("queued native prompt", False),
+    ]
+
+
+def test_claude_active_send_is_not_called_queued_without_native_confirmation(
+    monkeypatch,
+    tmp_path,
+):
+    source = tmp_path / "session.jsonl"
+    source.write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        claude_controller.tui,
+        "type_command",
+        lambda _driver, _window, _text, *, ensure_submit=False: (True, False),
+    )
+    monkeypatch.setattr(claude_controller, "NATIVE_TEXT_CONFIRM_TIMEOUT_SECONDS", 0)
+    session = Session(
+        SessionId("session-one"),
+        ActorId("session-one:lead"),
+        str(source),
+        str(tmp_path),
+    )
+    request = SendText(
+        session_id=session.session_id,
+        request_id="request-one",
+        text="unconfirmed prompt",
+    )
+
+    outcome = ProviderGraph().registry.plugin("claude_code").controller.execute(
+        request,
+        control_context(
+            session,
+            FakeTerminal().plugin(),
+            lead_active=True,
+        ),
+    )
+
+    assert outcome.status == "indeterminate"
+    assert outcome.queued is False
+    assert outcome.reason == "Claude Code did not confirm the queued message"
+
+
+def test_claude_native_queue_state_changes_to_sent_when_the_queue_drains(tmp_path):
+    source = tmp_path / "session.jsonl"
+    source.write_text("prefix\n", encoding="utf-8")
+    position = source.stat().st_size
+    enqueue = {
+        "type": "queue-operation",
+        "operation": "enqueue",
+        "timestamp": "2026-08-25T00:00:00.000Z",
+        "sessionId": "session-one",
+        "content": "native prompt",
+    }
+    with source.open("a", encoding="utf-8") as transcript_file:
+        transcript_file.write(json.dumps(enqueue) + "\n")
+
+    assert claude_controller._native_text_state(
+        str(source), position, "native prompt"
+    ) == claude_controller.NATIVE_TEXT_QUEUED
+
+    with source.open("a", encoding="utf-8") as transcript_file:
+        transcript_file.write(json.dumps({**enqueue, "operation": "remove"}) + "\n")
+
+    assert claude_controller._native_text_state(
+        str(source), position, "native prompt"
+    ) == claude_controller.NATIVE_TEXT_SENT
 
 
 def test_claude_question_discussion_is_delivered_after_declining(monkeypatch, tmp_path):
@@ -2689,7 +3705,7 @@ def test_claude_question_discussion_is_delivered_after_declining(monkeypatch, tm
     )
     monkeypatch.setattr(
         "harness.impl.claude_code.controls.controller.tui.type_command",
-        lambda _terminal, _window, text: (calls.append(("discussion", text)) or (True, False)),
+        lambda _terminal, _window, text: calls.append(("discussion", text)) or (True, False),
     )
     application = ProviderGraph()
     session = Session(
@@ -2719,7 +3735,53 @@ def test_claude_question_discussion_is_delivered_after_declining(monkeypatch, tm
     assert calls == [("dialog", True), ("discussion", "change the approach")]
 
 
-def test_codex_question_discussion_stays_in_the_native_dialog(monkeypatch, tmp_path):
+def test_claude_attachment_delivery_keeps_the_prompt_visible_for_verification(
+    monkeypatch,
+):
+    delivered = []
+    monkeypatch.setattr(
+        "harness.impl.claude_code.controls.controller.tui.type_command",
+        lambda _terminal, _window, text, *, ensure_submit=False: (
+            delivered.append((text, ensure_submit)) or True,
+            False,
+        ),
+    )
+    application = ProviderGraph()
+    session = Session(
+        SessionId("session-one"),
+        ActorId("session-one:lead"),
+        "/work/session.jsonl",
+        "/work",
+    )
+    request = SendText(
+        session_id=session.session_id,
+        request_id="request-one",
+        text="Inspect the attached image.",
+        attachments=(
+            AttachmentReference(
+                "/work/marker.png",
+                "marker.png",
+                "image/png",
+            ),
+        ),
+    )
+
+    terminal = FakeTerminal()
+    outcome = application.registry.plugin("claude_code").controller.execute(
+        request,
+        control_context(session, terminal.plugin()),
+    )
+
+    assert outcome.status == "acknowledged"
+    assert delivered == [
+        (
+            'Image attachment "marker.png": /work/marker.png\nInspect the attached image.',
+            True,
+        )
+    ]
+
+
+def test_codex_question_discussion_declines_then_sends_a_new_prompt(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(
         "harness.impl.codex.controls.controller.dialog.decline",
@@ -2743,14 +3805,17 @@ def test_codex_question_discussion_stays_in_the_native_dialog(monkeypatch, tmp_p
         "attention-one",
         (AttentionPrompt("question-one", None, "Continue?", False, ()),),
     )
+    terminal = FakeTerminal()
 
     outcome = application.registry.plugin("codex").controller.execute(
         request,
-        control_context(session, FakeTerminal().plugin(), attention),
+        control_context(session, terminal.plugin(), attention),
     )
 
     assert outcome.status == "acknowledged"
-    assert calls == ["change the approach"]
+    assert calls == ["Continue in chat."]
+    assert len(terminal.submitted) == 1
+    assert terminal.submitted[0][1] == "change the approach"
 
 
 def test_claude_model_control_resolves_the_native_confirmation(monkeypatch, tmp_path):
@@ -2843,10 +3908,7 @@ def test_claude_rewind_confirmation_uses_cursor_navigation(screen, keys):
         def send_key(self, _window, *pressed):
             self.keys.extend(pressed)
             if pressed == ("up",):
-                self.screen = (
-                    "  Rewind\nConfirm you want to restore\n"
-                    "❯ 1. Restore conversation\n  2. Cancel"
-                )
+                self.screen = "  Rewind\nConfirm you want to restore\n❯ 1. Restore conversation\n  2. Cancel"
             elif pressed == ("enter",):
                 self.screen = ""
             return True
@@ -2863,17 +3925,123 @@ def test_claude_rewind_confirmation_uses_cursor_navigation(screen, keys):
     assert driver.keys == keys
 
 
+def test_claude_rewind_list_is_open_when_the_terminal_clips_its_footer():
+    screen = """Previous output
+
+  Rewind
+
+  Restore the code and/or conversation to the point before…
+
+   ↑ 1 more above
+
+    Use the Edit tool to replace the old value with…
+    marker.txt +1 -1
+
+  ❯ (current)"""
+
+    assert rewindmenu.menu_open(screen)
+
+
+def test_claude_rewind_confirmation_waits_for_the_requested_option():
+    partial = """  Rewind
+
+  Confirm you want to restore to the point before you sent this message:
+
+  The conversation will be forked."""
+    complete = partial + """
+
+  ❯ 1. Restore code and conversation
+    2. Restore conversation
+    3. Restore code"""
+
+    assert not rewindmenu.confirm_ready(partial, "restore code", "code")
+    assert rewindmenu.confirm_ready(complete, "restore code", "code")
+
+
+def test_claude_rewind_confirmation_reveals_options_below_the_viewport():
+    class RewindDriver:
+        terminal = None
+
+        def __init__(self):
+            self.screen = """  Rewind
+
+  Confirm you want to restore to the point before you sent this message:
+
+  The conversation will be forked."""
+            self.keys = []
+
+        def get_text(self, _window, extent="screen", ansi=False):
+            del extent, ansi
+            return self.screen
+
+        def send_key(self, _window, *pressed):
+            self.keys.extend(pressed)
+            if pressed == ("down",):
+                self.screen += """
+
+  ❯ 1. Restore code and conversation
+    2. Restore conversation
+    3. Restore code"""
+            return True
+
+    driver = RewindDriver()
+
+    screen, found = rewindmenu._scan_confirm(
+        driver,
+        "window-one",
+        "restore code",
+        "code",
+        "down",
+        sleep=lambda _seconds: None,
+    )
+
+    assert found
+    assert "Restore code" in screen
+    assert driver.keys == ["down"]
+
+
+def test_claude_rewind_restores_a_temporary_viewport_growth(monkeypatch):
+    class RewindDriver:
+        terminal = None
+
+        def __init__(self):
+            self.resizes = []
+
+        def lines(self, _window):
+            return 24
+
+        def resize_lines(self, _window, cells):
+            self.resizes.append(cells)
+            return True
+
+    driver = RewindDriver()
+    monkeypatch.setattr(
+        rewindmenu,
+        "_drive_menu",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(rewindmenu.MenuError("confirm")),
+    )
+
+    with pytest.raises(rewindmenu.MenuError):
+        rewindmenu.drive(
+            driver,
+            "window-one",
+            "target prompt",
+            "code",
+            sleep=lambda _seconds: None,
+        )
+
+    assert driver.resizes == [16, -16]
+
+
 @pytest.mark.parametrize(
     ("screen", "keys"),
     [
         (
-            "Would you like to proceed?\n"
-            "❯ 1. Yes, and bypass permissions\n  2. Tell Claude what to change",
+            "Would you like to proceed?\n❯ 1. Yes, and bypass permissions\n  2. Tell Claude what to change",
             ["enter"],
         ),
         (
-            "Would you like to proceed?\n"
-            "  1. Yes, and bypass permissions\n❯ 2. Tell Claude what to change",
+            "Would you like to proceed?\n  1. Yes, and bypass permissions\n❯ 2. Tell Claude what to change",
             ["up", "enter"],
         ),
     ],
@@ -2894,9 +4062,7 @@ def test_claude_plan_decision_uses_cursor_navigation(screen, keys):
             self.keys.extend(pressed)
             if pressed == ("up",):
                 self.screen = (
-                    "Would you like to proceed?\n"
-                    "❯ 1. Yes, and bypass permissions\n"
-                    "  2. Tell Claude what to change"
+                    "Would you like to proceed?\n❯ 1. Yes, and bypass permissions\n  2. Tell Claude what to change"
                 )
             elif pressed == ("enter",):
                 self.screen = ""
@@ -2916,6 +4082,50 @@ def test_claude_plan_decision_uses_cursor_navigation(screen, keys):
     assert driver.keys == keys
 
 
+def test_claude_plan_feedback_uses_cursor_navigation_before_text():
+    class PlanDriver:
+        terminal = None
+
+        def __init__(self):
+            self.screen = (
+                "Would you like to proceed?\n❯ 1. Yes, and bypass permissions\n  2. Tell Claude what to change"
+            )
+            self.keys = []
+            self.text = []
+
+        def get_text(self, _window, extent="screen", ansi=False):
+            del extent, ansi
+            return self.screen
+
+        def send_key(self, _window, *pressed):
+            self.keys.extend(pressed)
+            if pressed == ("down",):
+                self.screen = (
+                    "Would you like to proceed?\n  1. Yes, and bypass permissions\n❯ 2. Tell Claude what to change"
+                )
+            elif pressed == ("enter",):
+                self.screen = "Would you like to proceed?\nTell Claude what to change:"
+            return True
+
+        def send_text(self, _window, text):
+            self.text.append(text)
+            self.screen = ""
+            return True
+
+    driver = PlanDriver()
+
+    outcome = plandialog.feedback(
+        driver,
+        "window-one",
+        "start with the tests",
+        sleep=lambda _seconds: None,
+    )
+
+    assert outcome == plandialog.Fedback(True)
+    assert driver.keys == ["down", "enter"]
+    assert driver.text == ["start with the tests"]
+
+
 def test_codex_backtrack_selects_a_named_prompt_before_it_confirms():
     prompts = ("Reply only with the word first.", "Reply only with the word second.")
 
@@ -2932,11 +4142,7 @@ def test_codex_backtrack_selects_a_named_prompt_before_it_confirms():
             if self.state == "transcript":
                 selected = prompts[self.selected]
                 style = f"\x1b[7m{selected}\x1b[27m" if ansi else selected
-                return (
-                    f"{backtrack.TRANSCRIPT_HEADER}\n"
-                    f"{style}\n"
-                    f"{backtrack.TRANSCRIPT_FOOTER}"
-                )
+                return f"{backtrack.TRANSCRIPT_HEADER}\n{style}\n{backtrack.TRANSCRIPT_FOOTER}"
             if self.state == "restored":
                 return f"› {prompts[self.selected]}\n  gpt-5.6-luna low"
             return "› Ask Codex to do anything"
@@ -2967,11 +4173,7 @@ def test_codex_backtrack_selects_a_named_prompt_before_it_confirms():
 
 
 def test_codex_backtrack_can_verify_a_plain_pty_transcript():
-    screen = (
-        f"{backtrack.TRANSCRIPT_HEADER}\n"
-        "› Reply only with the word first.\n"
-        f"{backtrack.TRANSCRIPT_FOOTER}"
-    )
+    screen = f"{backtrack.TRANSCRIPT_HEADER}\n› Reply only with the word first.\n{backtrack.TRANSCRIPT_FOOTER}"
 
     assert backtrack.selected_prompt(screen, "Reply only with the word first.")
 
@@ -3045,6 +4247,7 @@ def test_parked_rename_uses_only_the_owning_harness_title_store(
         control_context(session, FakeTerminal().plugin(), window_id=None),
     )
 
+    assert isinstance(outcome, DurableTitleResult)
     assert outcome.status == "acknowledged"
     assert calls == [(session.source_reference, "New title")]
 
@@ -3119,39 +4322,73 @@ def test_claude_child_prompt_is_authored_by_the_parent_agent():
     assert messages[0].payload.role == "parent"
 
 
+def test_claude_child_message_maps_team_lead_alias_to_its_parent_actor():
+    child_message = replace(
+        raw_event(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_use_id": "message-one",
+                "tool_name": "SendMessage",
+                "tool_input": {
+                    "to": "team-lead",
+                    "message": "CHILD_TO_LEAD_529",
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="child-message",
+        ),
+        actor_id=ActorId("child-one"),
+        parent_actor_id=ActorId("session-one:lead"),
+    )
+
+    message = payloads(
+        ClaudeCanonicalTranslator().translate(child_message),
+        MessageCreated,
+    )[0]
+
+    assert message.actor_id == ActorId("child-one")
+    assert message.payload.recipient_actor_id == ActorId("session-one:lead")
+    assert message.payload.content.text == "CHILD_TO_LEAD_529"
+
+
 def test_claude_async_agent_launch_stays_running_until_task_notification():
     translator = ClaudeCanonicalTranslator()
-    started = translator.translate(raw_event(
-        {
-            "hook_event_name": "PreToolUse",
-            "tool_use_id": "agent-tool-one",
-            "tool_name": "Agent",
-            "tool_input": {
-                "description": "Get current weather in Bali",
-                "prompt": "Look up current weather and a short forecast.",
-                "subagent_type": "general-purpose",
+    started = translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_use_id": "agent-tool-one",
+                "tool_name": "Agent",
+                "tool_input": {
+                    "description": "Get current weather in Bali",
+                    "prompt": "Look up current weather and a short forecast.",
+                    "subagent_type": "general-purpose",
+                },
             },
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="hook",
-        raw_event_id="agent-start",
-    ))
-    launch_ack = translator.translate(raw_event(
-        {
-            "hook_event_name": "PostToolUse",
-            "tool_use_id": "agent-tool-one",
-            "tool_name": "Agent",
-            "tool_input": {"description": "Get current weather in Bali"},
-            "tool_response": {
-                "isAsync": True,
-                "status": "async_launched",
-                "agentId": "child-one",
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="agent-start",
+        )
+    )
+    launch_ack = translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PostToolUse",
+                "tool_use_id": "agent-tool-one",
+                "tool_name": "Agent",
+                "tool_input": {"description": "Get current weather in Bali"},
+                "tool_response": {
+                    "isAsync": True,
+                    "status": "async_launched",
+                    "agentId": "child-one",
+                },
             },
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="hook",
-        raw_event_id="agent-launch-ack",
-    ))
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="agent-launch-ack",
+        )
+    )
 
     child_started = payloads(started, ActorAssignmentStarted)[0].payload
     assert child_started.brief.text == "Get current weather in Bali"
@@ -3164,27 +4401,98 @@ def test_claude_async_agent_launch_stays_running_until_task_notification():
     assert launch_ack.decision == "ignored_nonsemantic"
 
 
-def test_claude_task_notification_finishes_actor_assignment_instead_of_creating_user_message():
-    notification = ClaudeCanonicalTranslator().translate(raw_event(
+def test_claude_team_idle_deduplicates_one_worker_in_one_delivery():
+    translator = ClaudeCanonicalTranslator()
+    translator.translate(raw_event(
         {
-            "type": "user",
-            "uuid": "task-notification-one",
-            "origin": {"kind": "task-notification"},
-            "promptSource": "system",
-            "message": {
-                "content": (
-                    "<task-notification><task-id>child-one</task-id>"
-                    "<tool-use-id>agent-tool-one</tool-use-id>"
-                    "<status>completed</status>"
-                    '<summary>Agent "Get current weather in Bali" finished</summary>'
-                    "<result>Sunny, 29°C.</result></task-notification>"
-                )
+            "hook_event_name": "PreToolUse",
+            "tool_use_id": "agent-tool-one",
+            "tool_name": "Agent",
+            "tool_input": {
+                "description": "Check the state",
+                "prompt": "Reply with DONE.",
+                "name": "worker-one",
             },
         },
         harness=HarnessName.CLAUDE_CODE,
-        source_type="transcript",
-        raw_event_id="task-notification",
+        source_type="hook",
+        raw_event_id="team-agent-start",
     ))
+    translator.translate(raw_event(
+        {
+            "hook_event_name": "PostToolUse",
+            "tool_use_id": "agent-tool-one",
+            "tool_name": "Agent",
+            "tool_input": {"description": "Check the state"},
+            "tool_response": {
+                "status": "teammate_spawned",
+                "name": "worker-one",
+            },
+        },
+        harness=HarnessName.CLAUDE_CODE,
+        source_type="hook",
+        raw_event_id="team-agent-launched",
+    ))
+    delivery = replace(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "team-idle-delivery",
+                "message": {
+                    "content": (
+                        "Another Claude session sent a message:\n"
+                        '<teammate-message teammate_id="worker-one">'
+                        '{"type":"idle_notification","from":"worker-one",'
+                        '"timestamp":"2026-08-25T00:00:00Z",'
+                        '"idleReason":"available"}'
+                        "</teammate-message>\n"
+                        '<teammate-message teammate_id="worker-one">'
+                        '{"type":"idle_notification","from":"worker-one",'
+                        '"timestamp":"2026-08-25T00:00:01Z",'
+                        '"idleReason":"available"}'
+                        "</teammate-message>\n"
+                        "This came from another Claude session."
+                    )
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="team-idle-delivery",
+        ),
+        actor_id=ActorId("worker-one"),
+        parent_actor_id=ActorId("session-one:lead"),
+    )
+
+    finished = payloads(translator.translate(delivery), ActorAssignmentFinished)
+
+    assert len(finished) == 1
+    assert finished[0].payload.assignment_id == "agent-tool-one"
+    assert finished[0].payload.outcome == "succeeded"
+
+
+def test_claude_task_notification_finishes_actor_assignment_instead_of_creating_user_message():
+    notification = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "task-notification-one",
+                "origin": {"kind": "task-notification"},
+                "promptSource": "system",
+                "message": {
+                    "content": (
+                        "<task-notification><task-id>child-one</task-id>"
+                        "<tool-use-id>agent-tool-one</tool-use-id>"
+                        "<status>completed</status>"
+                        '<summary>Agent "Get current weather in Bali" finished</summary>'
+                        "<result>Sunny, 29°C.</result></task-notification>"
+                    )
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="task-notification",
+        )
+    )
 
     finished = payloads(notification, ActorAssignmentFinished)
     assert not payloads(notification, MessageCreated)
@@ -3193,36 +4501,183 @@ def test_claude_task_notification_finishes_actor_assignment_instead_of_creating_
     assert finished[0].payload.result.text == "Sunny, 29°C."
 
 
+def test_claude_resumed_async_child_finishes_its_agent_assignment():
+    translator = ClaudeCanonicalTranslator()
+    translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_use_id": "agent-tool-one",
+                "tool_name": "Agent",
+                "tool_input": {"description": "Wait for follow-up"},
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="agent-start",
+        )
+    )
+    translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PostToolUse",
+                "tool_use_id": "agent-tool-one",
+                "tool_name": "Agent",
+                "tool_input": {"description": "Wait for follow-up"},
+                "tool_response": {
+                    "isAsync": True,
+                    "status": "async_launched",
+                    "agentId": "child-one",
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="agent-launch-ack",
+        )
+    )
+    notification = translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "resumed-task-notification",
+                "origin": {"kind": "task-notification"},
+                "message": {
+                    "content": (
+                        "<task-notification><task-id>child-one</task-id>"
+                        "<tool-use-id>send-message-one</tool-use-id>"
+                        "<status>completed</status>"
+                        '<summary>Agent "Wait for follow-up" finished</summary>'
+                        "<result>FOLLOWUP_MARKER_417</result></task-notification>"
+                    )
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="resumed-task-notification",
+        )
+    )
+
+    finished = payloads(notification, ActorAssignmentFinished)[0]
+    assert finished.payload.assignment_id == "agent-tool-one"
+    assert finished.payload.result.text == "FOLLOWUP_MARKER_417"
+
+
+def test_claude_resumed_child_assignment_correlation_survives_restart(tmp_path):
+    launch_result = (
+        json.dumps(
+            {
+                "type": "user",
+                "uuid": "agent-result",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "agent-tool-one",
+                            "content": "Async agent launched successfully.",
+                        }
+                    ]
+                },
+                "toolUseResult": {
+                    "isAsync": True,
+                    "status": "async_launched",
+                    "agentId": "child-one",
+                },
+            }
+        )
+        + "\n"
+    )
+    notification_document = {
+        "type": "user",
+        "uuid": "resumed-task-notification",
+        "origin": {"kind": "task-notification"},
+        "message": {
+            "content": (
+                "<task-notification><task-id>child-one</task-id>"
+                "<tool-use-id>send-message-one</tool-use-id>"
+                "<status>completed</status>"
+                '<summary>Agent "Wait for follow-up" finished</summary>'
+                "<result>FOLLOWUP_MARKER_417</result></task-notification>"
+            )
+        },
+    }
+    transcript_path = tmp_path / "parent.jsonl"
+    transcript_path.write_text(launch_result + json.dumps(notification_document) + "\n")
+    notification_raw = replace(
+        raw_event(
+            notification_document,
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="resumed-task-notification",
+            source_position=str(len(launch_result.encode())),
+        ),
+        source_name=str(transcript_path),
+    )
+
+    finished = payloads(
+        ClaudeCanonicalTranslator().translate(notification_raw),
+        ActorAssignmentFinished,
+    )[0]
+    assert finished.payload.assignment_id == "agent-tool-one"
+    assert finished.payload.result.text == "FOLLOWUP_MARKER_417"
+
+
 def test_claude_background_completion_is_an_output_finish_not_an_agent_finish():
     """Background Bash completions ride the SAME <task-notification> channel as
     agent completions; treating them as assignment finishes painted phantom
     "Agent finished" blocks for plain background commands (session 67dfd402,
     2026-08-16). The summary prefix is the discriminator."""
-    notification = ClaudeCanonicalTranslator().translate(raw_event(
-        {
-            "type": "user",
-            "uuid": "background-completion-one",
-            "origin": {"kind": "task-notification"},
-            "promptSource": "system",
-            "message": {
-                "content": (
-                    "<task-notification><task-id>bkdr7jbeo</task-id>"
-                    "<tool-use-id>background-op-one</tool-use-id>"
-                    "<output-file>/tmp/tasks/bkdr7jbeo.output</output-file>"
-                    "<status>completed</status>"
-                    '<summary>Background command "Count 1 to 10" completed (exit code 0)</summary>'
-                    "</task-notification>"
-                )
+    notification = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "background-completion-one",
+                "origin": {"kind": "task-notification"},
+                "promptSource": "system",
+                "message": {
+                    "content": (
+                        "<task-notification><task-id>bkdr7jbeo</task-id>"
+                        "<tool-use-id>background-op-one</tool-use-id>"
+                        "<output-file>/tmp/tasks/bkdr7jbeo.output</output-file>"
+                        "<status>completed</status>"
+                        '<summary>Background command "Count 1 to 10" completed (exit code 0)</summary>'
+                        "</task-notification>"
+                    )
+                },
             },
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="transcript",
-        raw_event_id="background-completion",
-    ))
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="background-completion",
+        )
+    )
 
     assert not payloads(notification, ActorAssignmentFinished)
     assert not payloads(notification, MessageCreated)
     finished = payloads(notification, ShellOutputFinished)
+    assert len(finished) == 1
+    assert finished[0].payload.shell_id == ShellId("background-op-one")
+    assert finished[0].payload.outcome == "succeeded"
+
+
+def test_claude_background_completion_can_arrive_only_as_a_queue_record():
+    completion = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "queue-operation",
+                "operation": "enqueue",
+                "content": (
+                    "<task-notification><task-id>bkdr7jbeo</task-id>"
+                    "<tool-use-id>background-op-one</tool-use-id>"
+                    "<status>completed</status>"
+                    '<summary>Background command "Count" completed (exit code 0)</summary>'
+                    "</task-notification>"
+                ),
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="background-completion-queue",
+        )
+    )
+
+    finished = payloads(completion, ShellOutputFinished)
     assert len(finished) == 1
     assert finished[0].payload.shell_id == ShellId("background-op-one")
     assert finished[0].payload.outcome == "succeeded"
@@ -3234,26 +4689,28 @@ def test_claude_background_completion_carries_the_jobs_own_outcome():
     retained transcript (2026-08-18): completed, failed, killed, stopped."""
 
     def outcome_for(status):
-        translation = ClaudeCanonicalTranslator().translate(raw_event(
-            {
-                "type": "user",
-                "uuid": f"background-completion-{status}",
-                "origin": {"kind": "task-notification"},
-                "promptSource": "system",
-                "message": {
-                    "content": (
-                        "<task-notification><task-id>bkdr7jbeo</task-id>"
-                        "<tool-use-id>background-op-one</tool-use-id>"
-                        f"<status>{status}</status>"
-                        '<summary>Background command "Count" completed (exit code 0)</summary>'
-                        "</task-notification>"
-                    )
+        translation = ClaudeCanonicalTranslator().translate(
+            raw_event(
+                {
+                    "type": "user",
+                    "uuid": f"background-completion-{status}",
+                    "origin": {"kind": "task-notification"},
+                    "promptSource": "system",
+                    "message": {
+                        "content": (
+                            "<task-notification><task-id>bkdr7jbeo</task-id>"
+                            "<tool-use-id>background-op-one</tool-use-id>"
+                            f"<status>{status}</status>"
+                            '<summary>Background command "Count" completed (exit code 0)</summary>'
+                            "</task-notification>"
+                        )
+                    },
                 },
-            },
-            harness=HarnessName.CLAUDE_CODE,
-            source_type="transcript",
-            raw_event_id=f"background-completion-{status}",
-        ))
+                harness=HarnessName.CLAUDE_CODE,
+                source_type="transcript",
+                raw_event_id=f"background-completion-{status}",
+            )
+        )
         return payloads(translation, ShellOutputFinished)[0].payload.outcome
 
     assert outcome_for("completed") == "succeeded"
@@ -3282,51 +4739,57 @@ def _monitor_notification(uuid, body):
 
 def _armed_monitor(translator, shell_id="monitor-op-one", task_id="bmfwjr03l"):
     """A Monitor tool call returning, which is where its task id is announced."""
-    translator.translate(raw_event(
-        {
-            "hook_event_name": "PostToolUse",
-            "tool_use_id": shell_id,
-            "tool_name": "Monitor",
-            "tool_input": {"command": "tail -f log", "description": "ticks"},
-            "tool_response": {"taskId": task_id, "timeoutMs": 300000, "persistent": False},
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="hook",
-        raw_event_id=f"arm-{shell_id}",
-    ))
+    translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PostToolUse",
+                "tool_use_id": shell_id,
+                "tool_name": "Monitor",
+                "tool_input": {"command": "tail -f log", "description": "ticks"},
+                "tool_response": {"taskId": task_id, "timeoutMs": 300000, "persistent": False},
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id=f"arm-{shell_id}",
+        )
+    )
 
 
 def test_claude_monitor_hook_accepts_a_structured_reference_response():
     translator = ClaudeCanonicalTranslator()
-    translated = translator.translate(raw_event(
-        {
-            "hook_event_name": "PostToolUse",
-            "tool_use_id": "monitor-op-one",
-            "tool_name": "Monitor",
-            "tool_input": {"command": "tail -f log", "description": "ticks"},
-            "tool_response": [{"type": "tool_reference", "tool_name": "Monitor"}],
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="hook",
-        raw_event_id="structured-monitor-response",
-    ))
+    translated = translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PostToolUse",
+                "tool_use_id": "monitor-op-one",
+                "tool_name": "Monitor",
+                "tool_input": {"command": "tail -f log", "description": "ticks"},
+                "tool_response": [{"type": "tool_reference", "tool_name": "Monitor"}],
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="structured-monitor-response",
+        )
+    )
 
     assert payloads(translated, ShellFinished)[0].payload.shell_id == ShellId("monitor-op-one")
 
 
 def test_claude_rejected_monitor_has_no_running_task_to_wait_for():
-    translated = ClaudeCanonicalTranslator().translate(raw_event(
-        {
-            "hook_event_name": "PostToolUseFailure",
-            "tool_use_id": "monitor-rejected",
-            "tool_name": "Monitor",
-            "tool_input": {"task_id": "wrong-shape"},
-            "error": "InputValidationError",
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="hook",
-        raw_event_id="monitor-rejected-result",
-    ))
+    translated = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {
+                "hook_event_name": "PostToolUseFailure",
+                "tool_use_id": "monitor-rejected",
+                "tool_name": "Monitor",
+                "tool_input": {"task_id": "wrong-shape"},
+                "error": "InputValidationError",
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="monitor-rejected-result",
+        )
+    )
 
     assert payloads(translated, ShellFinished)[0].payload.outcome == Outcome.FAILED
     output_finished = payloads(translated, ShellOutputFinished)[0].payload
@@ -3336,36 +4799,40 @@ def test_claude_rejected_monitor_has_no_running_task_to_wait_for():
 
 def test_claude_agent_hook_does_not_hide_the_notification_result():
     translator = ClaudeCanonicalTranslator()
-    returned = translator.translate(raw_event(
-        {
-            "hook_event_name": "PostToolUse",
-            "tool_use_id": "agent-tool-one",
-            "tool_name": "Agent",
-            "tool_input": {"description": "ticker"},
-            "tool_response": [{"type": "tool_reference", "tool_name": "Agent"}],
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="hook",
-        raw_event_id="agent-returned",
-    ))
-    completed = translator.translate(raw_event(
-        {
-            "type": "user",
-            "uuid": "agent-notification",
-            "origin": {"kind": "task-notification"},
-            "message": {
-                "content": (
-                    "<task-notification><task-id>child-one</task-id>"
-                    "<tool-use-id>agent-tool-one</tool-use-id>"
-                    "<status>completed</status><summary>Agent ticker finished</summary>"
-                    "<result>gathered</result></task-notification>"
-                )
+    returned = translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PostToolUse",
+                "tool_use_id": "agent-tool-one",
+                "tool_name": "Agent",
+                "tool_input": {"description": "ticker"},
+                "tool_response": [{"type": "tool_reference", "tool_name": "Agent"}],
             },
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="transcript",
-        raw_event_id="agent-notification",
-    ))
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="agent-returned",
+        )
+    )
+    completed = translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "agent-notification",
+                "origin": {"kind": "task-notification"},
+                "message": {
+                    "content": (
+                        "<task-notification><task-id>child-one</task-id>"
+                        "<tool-use-id>agent-tool-one</tool-use-id>"
+                        "<status>completed</status><summary>Agent ticker finished</summary>"
+                        "<result>gathered</result></task-notification>"
+                    )
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="agent-notification",
+        )
+    )
 
     assert returned.canonical_events == ()
     assignment = payloads(completed, ActorAssignmentFinished)[0].payload
@@ -3384,12 +4851,12 @@ def test_claude_monitor_events_are_progress_on_the_monitor_not_agent_finishes():
     _armed_monitor(translator)
 
     ticks = [
-        translator.translate(_monitor_notification(
-            f"tick-{number}",
-            "<task-id>bmfwjr03l</task-id>"
-            '<summary>Monitor event: "ticks"</summary>'
-            f"<event>tick-{number}</event>",
-        ))
+        translator.translate(
+            _monitor_notification(
+                f"tick-{number}",
+                f'<task-id>bmfwjr03l</task-id><summary>Monitor event: "ticks"</summary><event>tick-{number}</event>',
+            )
+        )
         for number in (1, 2, 3)
     ]
 
@@ -3413,12 +4880,12 @@ def test_claude_monitor_event_for_an_unknown_task_is_dropped_not_invented():
     this translator never saw — a daemon restarted mid-watch — cannot be placed.
     Dropping it loses one line; inventing an operation would put a monitor on the
     tab that nothing ever armed."""
-    translation = ClaudeCanonicalTranslator().translate(_monitor_notification(
-        "orphan-tick",
-        "<task-id>never-seen</task-id>"
-        '<summary>Monitor event: "ticks"</summary>'
-        "<event>tick-1</event>",
-    ))
+    translation = ClaudeCanonicalTranslator().translate(
+        _monitor_notification(
+            "orphan-tick",
+            '<task-id>never-seen</task-id><summary>Monitor event: "ticks"</summary><event>tick-1</event>',
+        )
+    )
 
     assert translation.canonical_events == ()
     assert translation.decision == "ignored_nonsemantic"
@@ -3432,14 +4899,16 @@ def test_claude_monitor_ends_on_its_own_notification_not_on_its_arm():
     translator = ClaudeCanonicalTranslator()
     _armed_monitor(translator)
 
-    ended = translator.translate(_monitor_notification(
-        "monitor-ended",
-        "<task-id>bmfwjr03l</task-id>"
-        "<tool-use-id>monitor-op-one</tool-use-id>"
-        "<output-file>/tmp/tasks/bmfwjr03l.output</output-file>"
-        "<status>completed</status>"
-        '<summary>Monitor "ticks" stream ended</summary>',
-    ))
+    ended = translator.translate(
+        _monitor_notification(
+            "monitor-ended",
+            "<task-id>bmfwjr03l</task-id>"
+            "<tool-use-id>monitor-op-one</tool-use-id>"
+            "<output-file>/tmp/tasks/bmfwjr03l.output</output-file>"
+            "<status>completed</status>"
+            '<summary>Monitor "ticks" stream ended</summary>',
+        )
+    )
 
     assert not payloads(ended, ActorAssignmentFinished)
     finished = payloads(ended, ShellOutputFinished)
@@ -3455,20 +4924,22 @@ def test_claude_task_notifications_are_counted_once_though_they_arrive_twice():
     translator = ClaudeCanonicalTranslator()
     _armed_monitor(translator)
 
-    enqueued = translator.translate(raw_event(
-        {
-            "type": "queue-operation",
-            "operation": "enqueue",
-            "content": (
-                "<task-notification><task-id>bmfwjr03l</task-id>"
-                '<summary>Monitor event: "ticks"</summary>'
-                "<event>tick-1</event></task-notification>"
-            ),
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="transcript",
-        raw_event_id="enqueue-tick-1",
-    ))
+    enqueued = translator.translate(
+        raw_event(
+            {
+                "type": "queue-operation",
+                "operation": "enqueue",
+                "content": (
+                    "<task-notification><task-id>bmfwjr03l</task-id>"
+                    '<summary>Monitor event: "ticks"</summary>'
+                    "<event>tick-1</event></task-notification>"
+                ),
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="enqueue-tick-1",
+        )
+    )
 
     assert enqueued.canonical_events == ()
     assert enqueued.decision == "ignored_nonsemantic"
@@ -3479,20 +4950,22 @@ def test_claude_command_backgrounded_mid_run_says_so_before_it_says_finished():
     the response carries a task id anyway — and the ORDER matters: the
     `operation.finished` from this same delivery ends the follow of the file the
     command is still writing to unless the backgrounded fact lands first."""
-    translation = ClaudeCanonicalTranslator().translate(raw_event(
-        {
-            "hook_event_name": "PostToolUse",
-            "session_id": "session-one",
-            "transcript_path": "/tmp/session-one.jsonl",
-            "tool_name": "Bash",
-            "tool_use_id": "op-backgrounded",
-            "tool_input": {"command": "sleep 30; echo done"},
-            "tool_response": {"backgroundTaskId": "btk9y72c9"},
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="hook",
-        raw_event_id="post-tool-use-backgrounded",
-    ))
+    translation = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {
+                "hook_event_name": "PostToolUse",
+                "session_id": "session-one",
+                "transcript_path": "/tmp/session-one.jsonl",
+                "tool_name": "Bash",
+                "tool_use_id": "op-backgrounded",
+                "tool_input": {"command": "sleep 30; echo done"},
+                "tool_response": {"backgroundTaskId": "btk9y72c9"},
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="post-tool-use-backgrounded",
+        )
+    )
 
     kinds = [type(canonical.payload).__name__ for canonical in translation.canonical_events]
     assert kinds.index("ShellBackgrounded") < kinds.index("ShellFinished")
@@ -3505,20 +4978,22 @@ def test_claude_background_launch_is_not_a_mid_run_backgrounding():
     """A command that ASKED for the background is already background at
     `operation.started`; announcing the transition too would be a second, later
     answer to a question the launch already settled."""
-    translation = ClaudeCanonicalTranslator().translate(raw_event(
-        {
-            "hook_event_name": "PostToolUse",
-            "session_id": "session-one",
-            "transcript_path": "/tmp/session-one.jsonl",
-            "tool_name": "Bash",
-            "tool_use_id": "op-native-background",
-            "tool_input": {"command": "sleep 30", "run_in_background": True},
-            "tool_response": {"backgroundTaskId": "btk9y72c9"},
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="hook",
-        raw_event_id="post-tool-use-native-background",
-    ))
+    translation = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {
+                "hook_event_name": "PostToolUse",
+                "session_id": "session-one",
+                "transcript_path": "/tmp/session-one.jsonl",
+                "tool_name": "Bash",
+                "tool_use_id": "op-native-background",
+                "tool_input": {"command": "sleep 30", "run_in_background": True},
+                "tool_response": {"backgroundTaskId": "btk9y72c9"},
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="post-tool-use-native-background",
+        )
+    )
 
     assert not payloads(translation, ShellBackgrounded)
 
@@ -3538,27 +5013,46 @@ def test_codex_exec_that_outlives_its_yield_is_announced_as_background_once():
             source_position=str(position),
         )
 
-    translator.translate(rollout_event({
-        "type": "response_item",
-        "payload": {
-            "type": "custom_tool_call", "name": "exec", "call_id": "call-one",
-            "input": 'const r = await tools.exec_command({"cmd":"sleep 30","yield_time_ms":250});',
-        },
-    }, 10))
-    first = translator.translate(rollout_event({
-        "type": "response_item",
-        "payload": {
-            "type": "custom_tool_call_output", "call_id": "call-one",
-            "output": '{"output":"","session_id":4242}',
-        },
-    }, 20))
-    second = translator.translate(rollout_event({
-        "type": "response_item",
-        "payload": {
-            "type": "custom_tool_call_output", "call_id": "call-one",
-            "output": '{"output":"still going","session_id":4242}',
-        },
-    }, 30))
+    translator.translate(
+        rollout_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "call-one",
+                    "input": 'const r = await tools.exec_command({"cmd":"sleep 30","yield_time_ms":250});',
+                },
+            },
+            10,
+        )
+    )
+    first = translator.translate(
+        rollout_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "call-one",
+                    "output": '{"output":"","session_id":4242}',
+                },
+            },
+            20,
+        )
+    )
+    second = translator.translate(
+        rollout_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "call-one",
+                    "output": '{"output":"still going","session_id":4242}',
+                },
+            },
+            30,
+        )
+    )
 
     backgrounded = payloads(first, ShellBackgrounded)
     assert len(backgrounded) == 1
@@ -3566,13 +5060,19 @@ def test_codex_exec_that_outlives_its_yield_is_announced_as_background_once():
     assert not payloads(first, ShellFinished)
     assert not payloads(second, ShellBackgrounded)
 
-    finished = translator.translate(rollout_event({
-        "type": "response_item",
-        "payload": {
-            "type": "custom_tool_call_output", "call_id": "call-one",
-            "output": '{"output":"done","exit_code":0}',
-        },
-    }, 40))
+    finished = translator.translate(
+        rollout_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "call-one",
+                    "output": '{"output":"done","exit_code":0}',
+                },
+            },
+            40,
+        )
+    )
     assert len(payloads(finished, ShellFinished)) == 1
     output_finished = payloads(finished, ShellOutputFinished)
     assert len(output_finished) == 1
@@ -3581,32 +5081,61 @@ def test_codex_exec_that_outlives_its_yield_is_announced_as_background_once():
 
 def test_codex_fast_exec_uses_the_authoritative_item_exit_code():
     translator = CodexCanonicalTranslator()
-    call = translator.translate(raw_event({
-        "type": "response_item",
-        "payload": {
-            "type": "custom_tool_call", "name": "exec", "call_id": "call-fast",
-            "input": 'const r = await tools.exec_command({cmd:"exit 7"}); text(r.output);',
-        },
-    }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="fast-call"))
-    completed = translator.translate(raw_event({
-        "type": "event_msg",
-        "payload": {
-            "type": "item_completed",
-            "item": {
-                "type": "CommandExecution", "id": "exec-fast", "process_id": "818",
-                "command": ["/bin/zsh", "-lc", "exit 7"], "status": "failed",
-                "stdout": "", "stderr": "failed\n", "aggregated_output": "failed\n",
-                "exit_code": 7,
+    call = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "call-fast",
+                    "input": 'const r = await tools.exec_command({cmd:"exit 7"}); text(r.output);',
+                },
             },
-        },
-    }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="fast-item"))
-    wrapper = translator.translate(raw_event({
-        "type": "response_item",
-        "payload": {
-            "type": "custom_tool_call_output", "call_id": "call-fast",
-            "output": "Script completed\nOutput:\nfailed\n",
-        },
-    }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="fast-output"))
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="fast-call",
+        )
+    )
+    completed = translator.translate(
+        raw_event(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "item": {
+                        "type": "CommandExecution",
+                        "id": "exec-fast",
+                        "process_id": "818",
+                        "command": ["/bin/zsh", "-lc", "exit 7"],
+                        "status": "failed",
+                        "stdout": "",
+                        "stderr": "failed\n",
+                        "aggregated_output": "failed\n",
+                        "exit_code": 7,
+                    },
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="fast-item",
+        )
+    )
+    wrapper = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "call-fast",
+                    "output": "Script completed\nOutput:\nfailed\n",
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="fast-output",
+        )
+    )
 
     assert len(payloads(call, ShellStarted)) == 1
     finish = payloads(completed, ShellFinished)[0].payload
@@ -3617,6 +5146,187 @@ def test_codex_fast_exec_uses_the_authoritative_item_exit_code():
     assert wrapper.canonical_events == ()
 
 
+def test_codex_native_command_text_closes_the_right_exec_when_several_are_pending():
+    """A completed command has no wrapper call id. Its native command text is
+    the stable correlation when a prior parallel cell left several wrappers
+    pending. A blank yielded wrapper must not reopen the completed command as
+    background work."""
+    translator = CodexCanonicalTranslator()
+
+    def translate(document, identity, position):
+        return translator.translate(
+            raw_event(
+                document,
+                harness=HarnessName.CODEX,
+                source_type="rollout",
+                raw_event_id=identity,
+                source_position=str(position),
+            )
+        )
+
+    parallel = translate(
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call",
+                "name": "exec",
+                "call_id": "parallel-cell",
+                "input": (
+                    "const [a,b] = await Promise.all(["
+                    'tools.exec_command({cmd:"printf alpha"}),'
+                    'tools.exec_command({cmd:"printf beta"})]);'
+                    'text("done");'
+                ),
+            },
+        },
+        "parallel-call",
+        10,
+    )
+    assert [
+        item.payload.shell_id for item in payloads(parallel, ShellStarted)
+    ] == ["parallel-cell:1", "parallel-cell:2"]
+
+    beta_finished = translate(
+        {
+            "type": "event_msg",
+            "payload": {
+                "type": "item_completed",
+                "item": {
+                    "type": "CommandExecution",
+                    "id": "native-beta",
+                    "process_id": "902",
+                    "command": ["/bin/zsh", "-lc", "printf beta"],
+                    "status": "completed",
+                    "aggregated_output": "beta",
+                    "exit_code": 0,
+                },
+            },
+        },
+        "beta-finished",
+        11,
+    )
+    assert payloads(beta_finished, ShellFinished)[0].payload.shell_id == "parallel-cell:2"
+
+    blank_call = translate(
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call",
+                "name": "exec",
+                "call_id": "blank-call",
+                "input": (
+                    'const r = await tools.exec_command({cmd:"true",yield_time_ms:30000});'
+                    "text(r.output);"
+                ),
+            },
+        },
+        "blank-call",
+        12,
+    )
+    assert payloads(blank_call, ShellStarted)[0].payload.shell_id == "blank-call"
+
+    blank_finished = translate(
+        {
+            "type": "event_msg",
+            "payload": {
+                "type": "item_completed",
+                "item": {
+                    "type": "CommandExecution",
+                    "id": "native-blank",
+                    "process_id": "903",
+                    "command": ["/bin/zsh", "-lc", "true"],
+                    "status": "completed",
+                    "aggregated_output": "",
+                    "exit_code": 0,
+                },
+            },
+        },
+        "blank-finished",
+        13,
+    )
+    assert payloads(blank_finished, ShellFinished)[0].payload.shell_id == "blank-call"
+
+    wrapper = translate(
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call_output",
+                "call_id": "blank-call",
+                "output": [
+                    {
+                        "type": "input_text",
+                        "text": "Script completed\nWall time 0.1 seconds\nOutput:\n",
+                    },
+                    {"type": "input_text", "text": ""},
+                ],
+            },
+        },
+        "blank-wrapper",
+        14,
+    )
+    assert payloads(wrapper, ShellBackgrounded) == []
+    settled = payloads(wrapper, ShellOutputFinished)
+    assert len(settled) == 1
+    assert settled[0].payload.shell_id == "blank-call"
+
+
+def test_codex_dynamic_exec_uses_authoritative_command_items():
+    """A code-mode loop has no literal command in its wrapper. Each native
+    command item still supplies a complete and distinct command lifecycle."""
+    translator = CodexCanonicalTranslator()
+
+    wrapper = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "dynamic-cell",
+                    "input": (
+                        "for (const item of values) { "
+                        "await tools.exec_command({cmd: `printf ${item}`}); }"
+                    ),
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="dynamic-wrapper",
+        )
+    )
+    assert wrapper.decision == "ignored_nonsemantic"
+
+    completed = translator.translate(
+        raw_event(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "item": {
+                        "type": "CommandExecution",
+                        "id": "dynamic-command-01",
+                        "process_id": "991",
+                        "command": ["/bin/zsh", "-lc", "printf history-01"],
+                        "status": "completed",
+                        "aggregated_output": "history-01",
+                        "exit_code": 0,
+                    },
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="dynamic-completed",
+        )
+    )
+
+    started = payloads(completed, ShellStarted)
+    finished = payloads(completed, ShellFinished)
+    assert len(started) == len(finished) == 1
+    assert started[0].payload.shell_id == finished[0].payload.shell_id
+    assert started[0].payload.command.text == "printf history-01"
+    assert finished[0].payload.result is not None
+    assert finished[0].payload.result.text == "history-01"
+
 def test_claude_skill_and_web_and_worktree_tools_have_their_own_facts():
     """Four tool families that used to be one generic operation, each now saying
     what it actually is. A skill has a life (it runs, it answers); a fetch and a
@@ -3624,37 +5334,56 @@ def test_claude_skill_and_web_and_worktree_tools_have_their_own_facts():
     translator = ClaudeCanonicalTranslator()
 
     def hook(document, raw_event_id):
-        return translator.translate(raw_event(
-            document, harness=HarnessName.CLAUDE_CODE, source_type="hook", raw_event_id=raw_event_id
-        ))
+        return translator.translate(
+            raw_event(document, harness=HarnessName.CLAUDE_CODE, source_type="hook", raw_event_id=raw_event_id)
+        )
 
-    skill_start = hook({
-        "hook_event_name": "PreToolUse",
-        "tool_use_id": "skill-one",
-        "tool_name": "Skill",
-        "tool_input": {"skill": "audit-debug"},
-    }, "skill-start")
-    skill_finish = hook({
-        "hook_event_name": "PostToolUse",
-        "tool_use_id": "skill-one",
-        "tool_name": "Skill",
-        "tool_input": {"skill": "audit-debug"},
-        "tool_response": "the skill's report",
-    }, "skill-finish")
-    fetched = hook({
-        "hook_event_name": "PostToolUse",
-        "tool_use_id": "fetch-one",
-        "tool_name": "WebFetch",
-        "tool_input": {"url": "https://example.dev/docs"},
-        "tool_response": "the page",
-    }, "fetch")
-    entered = hook({
-        "hook_event_name": "PostToolUse",
-        "tool_use_id": "worktree-one",
-        "tool_name": "EnterWorktree",
-        "tool_input": {"branch": "wip"},
-        "tool_response": "entered",
-    }, "worktree")
+    skill_start = hook(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_use_id": "skill-one",
+            "tool_name": "Skill",
+            "tool_input": {"skill": "audit-debug"},
+        },
+        "skill-start",
+    )
+    skill_finish = hook(
+        {
+            "hook_event_name": "PostToolUse",
+            "tool_use_id": "skill-one",
+            "tool_name": "Skill",
+            "tool_input": {"skill": "audit-debug"},
+            "tool_response": "the skill's report",
+        },
+        "skill-finish",
+    )
+    fetched = hook(
+        {
+            "hook_event_name": "PostToolUse",
+            "tool_use_id": "fetch-one",
+            "tool_name": "WebFetch",
+            "tool_input": {"url": "https://example.dev/docs"},
+            "tool_response": {
+                "bytes": 8,
+                "code": 200,
+                "codeText": "OK",
+                "result": "the page",
+                "durationMs": 10,
+                "url": "https://example.dev/docs",
+            },
+        },
+        "fetch",
+    )
+    entered = hook(
+        {
+            "hook_event_name": "PostToolUse",
+            "tool_use_id": "worktree-one",
+            "tool_name": "EnterWorktree",
+            "tool_input": {"branch": "wip"},
+            "tool_response": "entered",
+        },
+        "worktree",
+    )
 
     started = payloads(skill_start, SkillStarted)[0].payload
     assert (started.skill_id, started.name) == ("skill-one", "audit-debug")
@@ -3673,32 +5402,36 @@ def test_claude_skill_and_web_and_worktree_tools_have_their_own_facts():
 
 
 def test_codex_loaded_skill_has_the_shared_skill_lifecycle():
-    translation = CodexCanonicalTranslator().translate(raw_event(
-        {
-            "type": "response_item",
-            "payload": {
-                "type": "message",
-                "id": "skill-message-one",
-                "role": "user",
-                "content": [{
-                    "type": "input_text",
-                    "text": (
-                        "<skill>\n"
-                        "<name>baqylau-e2e-communication</name>\n"
-                        "<path>/work/.agents/skills/baqylau-e2e-communication/SKILL.md</path>\n"
-                        "instructions\n"
-                        "</skill>"
-                    ),
-                }],
-                "internal_chat_message_metadata_passthrough": {
-                    "turn_id": "turn-one",
+    translation = CodexCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "id": "skill-message-one",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": (
+                                "<skill>\n"
+                                "<name>baqylau-e2e-communication</name>\n"
+                                "<path>/work/.agents/skills/baqylau-e2e-communication/SKILL.md</path>\n"
+                                "instructions\n"
+                                "</skill>"
+                            ),
+                        }
+                    ],
+                    "internal_chat_message_metadata_passthrough": {
+                        "turn_id": "turn-one",
+                    },
                 },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="codex-skill",
-    ))
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="codex-skill",
+        )
+    )
 
     started = payloads(translation, SkillStarted)[0]
     finished = payloads(translation, SkillFinished)[0]
@@ -3715,39 +5448,40 @@ def test_codex_loaded_skill_has_the_shared_skill_lifecycle():
 def test_codex_subagent_skill_read_has_the_shared_skill_lifecycle():
     translator = CodexCanonicalTranslator()
     skill_path = "/work/.agents/skills/baqylau-e2e-communication/SKILL.md"
-    started = translator.translate(raw_event(
-        {
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call",
-                "name": "exec",
-                "call_id": "skill-call-one",
-                "input": (
-                    "const r = await tools.exec_command("
-                    f'{{"cmd":"cat {skill_path}"}}); text(r.output);'
-                ),
-                "internal_chat_message_metadata_passthrough": {
-                    "turn_id": "turn-one",
+    started = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "skill-call-one",
+                    "input": (f'const r = await tools.exec_command({{"cmd":"cat {skill_path}"}}); text(r.output);'),
+                    "internal_chat_message_metadata_passthrough": {
+                        "turn_id": "turn-one",
+                    },
                 },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="child_rollout",
-        raw_event_id="codex-child-skill-start",
-    ))
-    finished = translator.translate(raw_event(
-        {
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call_output",
-                "call_id": "skill-call-one",
-                "output": '{"output":"skill instructions","exit_code":0}',
+            harness=HarnessName.CODEX,
+            source_type="child_rollout",
+            raw_event_id="codex-child-skill-start",
+        )
+    )
+    finished = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "skill-call-one",
+                    "output": '{"output":"skill instructions","exit_code":0}',
+                },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="child_rollout",
-        raw_event_id="codex-child-skill-finish",
-    ))
+            harness=HarnessName.CODEX,
+            source_type="child_rollout",
+            raw_event_id="codex-child-skill-finish",
+        )
+    )
 
     skill_started = payloads(started, SkillStarted)[0]
     skill_finished = payloads(finished, SkillFinished)[0]
@@ -3760,23 +5494,22 @@ def test_codex_subagent_skill_read_has_the_shared_skill_lifecycle():
 
 
 def test_codex_read_of_a_non_skill_file_remains_a_shell_command():
-    translation = CodexCanonicalTranslator().translate(raw_event(
-        {
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call",
-                "name": "exec",
-                "call_id": "read-call-one",
-                "input": (
-                    "const r = await tools.exec_command("
-                    '{"cmd":"cat /work/docs/SKILL.md"}); text(r.output);'
-                ),
+    translation = CodexCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "read-call-one",
+                    "input": ('const r = await tools.exec_command({"cmd":"cat /work/docs/SKILL.md"}); text(r.output);'),
+                },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="codex-ordinary-read",
-    ))
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="codex-ordinary-read",
+        )
+    )
 
     assert len(payloads(translation, ShellStarted)) == 1
     assert not payloads(translation, SkillStarted)
@@ -3784,32 +5517,35 @@ def test_codex_read_of_a_non_skill_file_remains_a_shell_command():
 
 def test_claude_plan_is_proposed_and_then_resolved_with_what_the_person_decided():
     translator = ClaudeCanonicalTranslator()
-    proposed = translator.translate(raw_event(
-        {
-            "hook_event_name": "PreToolUse",
-            "tool_use_id": "plan-one",
-            "tool_name": "ExitPlanMode",
-            "tool_input": {"plan": "1. Read it\n2. Change it"},
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="hook",
-        raw_event_id="plan-proposed",
-    ))
-    changes_requested = translator.translate(raw_event(
-        {
-            "hook_event_name": "PostToolUseFailure",
-            "tool_use_id": "plan-one",
-            "tool_name": "ExitPlanMode",
-            "tool_input": {},
-            "tool_response": (
-                "The user doesn't want to proceed. To tell you how to proceed, "
-                "the user said:\nstart with the tests"
-            ),
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="hook",
-        raw_event_id="plan-resolved",
-    ))
+    proposed = translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_use_id": "plan-one",
+                "tool_name": "ExitPlanMode",
+                "tool_input": {"plan": "1. Read it\n2. Change it"},
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="plan-proposed",
+        )
+    )
+    changes_requested = translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PostToolUseFailure",
+                "tool_use_id": "plan-one",
+                "tool_name": "ExitPlanMode",
+                "tool_input": {},
+                "tool_response": (
+                    "The user doesn't want to proceed. To tell you how to proceed, the user said:\nstart with the tests"
+                ),
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="plan-resolved",
+        )
+    )
 
     assert payloads(proposed, PlanProposed)[0].payload.plan.text == "1. Read it\n2. Change it"
     resolved = payloads(changes_requested, PlanResolved)[0].payload
@@ -3827,32 +5563,36 @@ def test_claude_enter_plan_mode_is_a_deliberate_ignore_not_drift():
     session-specific, so it must land as a named, deliberate ignore — not
     `ignored_unknown`, which means a shape nobody has decided about."""
     translator = ClaudeCanonicalTranslator()
-    started = translator.translate(raw_event(
-        {
-            "hook_event_name": "PreToolUse",
-            "tool_use_id": "enter-plan-one",
-            "tool_name": "EnterPlanMode",
-            "tool_input": {},
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="hook",
-        raw_event_id="enter-plan-started",
-    ))
-    finished = translator.translate(raw_event(
-        {
-            "hook_event_name": "PostToolUse",
-            "tool_use_id": "enter-plan-one",
-            "tool_name": "EnterPlanMode",
-            "tool_input": {},
-            "tool_response": (
-                "Entered plan mode. You should now focus on exploring the "
-                "codebase and designing an implementation approach."
-            ),
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="hook",
-        raw_event_id="enter-plan-finished",
-    ))
+    started = translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_use_id": "enter-plan-one",
+                "tool_name": "EnterPlanMode",
+                "tool_input": {},
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="enter-plan-started",
+        )
+    )
+    finished = translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PostToolUse",
+                "tool_use_id": "enter-plan-one",
+                "tool_name": "EnterPlanMode",
+                "tool_input": {},
+                "tool_response": (
+                    "Entered plan mode. You should now focus on exploring the "
+                    "codebase and designing an implementation approach."
+                ),
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="enter-plan-finished",
+        )
+    )
 
     assert started.decision == "ignored_nonsemantic"
     assert finished.decision == "ignored_nonsemantic"
@@ -3863,46 +5603,56 @@ def test_claude_turn_opens_on_the_prompt_and_closes_on_the_stop_hook():
     ended and nothing says one began — so the prompt opens the turn and every
     fact until the Stop rides it. Without this the feed has nothing to group by."""
     translator = ClaudeCanonicalTranslator()
-    prompt = translator.translate(raw_event(
-        {"type": "user", "uuid": "prompt-one", "message": {"content": "fix it"}},
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="transcript",
-        raw_event_id="prompt",
-    ))
-    during = translator.translate(raw_event(
-        {
-            "hook_event_name": "PreToolUse",
-            "tool_use_id": "tool-one",
-            "tool_name": "Bash",
-            "tool_input": {"command": "pwd"},
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="hook",
-        raw_event_id="tool",
-    ))
-    injected = translator.translate(raw_event(
-        {"type": "user", "uuid": "prompt-two", "message": {"content": "and also this"}},
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="transcript",
-        raw_event_id="injection",
-    ))
-    stop = translator.translate(raw_event(
-        {"hook_event_name": "Stop", "hook_event_id": "stop-one"},
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="hook",
-        raw_event_id="stop",
-    ))
-    after = translator.translate(raw_event(
-        {
-            "hook_event_name": "PreToolUse",
-            "tool_use_id": "tool-two",
-            "tool_name": "Bash",
-            "tool_input": {"command": "ls"},
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="hook",
-        raw_event_id="after",
-    ))
+    prompt = translator.translate(
+        raw_event(
+            {"type": "user", "uuid": "prompt-one", "message": {"content": "fix it"}},
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="prompt",
+        )
+    )
+    during = translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_use_id": "tool-one",
+                "tool_name": "Bash",
+                "tool_input": {"command": "pwd"},
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="tool",
+        )
+    )
+    injected = translator.translate(
+        raw_event(
+            {"type": "user", "uuid": "prompt-two", "message": {"content": "and also this"}},
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="injection",
+        )
+    )
+    stop = translator.translate(
+        raw_event(
+            {"hook_event_name": "Stop", "hook_event_id": "stop-one"},
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="stop",
+        )
+    )
+    after = translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_use_id": "tool-two",
+                "tool_name": "Bash",
+                "tool_input": {"command": "ls"},
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="after",
+        )
+    )
 
     assert payloads(prompt, TurnStarted)[0].payload.prompt_message_id == "prompt-one"
     assert during.canonical_events[0].turn_id == TurnId("prompt-one")
@@ -3920,38 +5670,46 @@ def test_claude_search_is_one_fact_holding_both_its_query_and_its_result():
     both halves. The result text is rendered readably from its native blocks
     (here a `tool_reference`, which is how ToolSearch answers)."""
     translator = ClaudeCanonicalTranslator()
-    call = translator.translate(raw_event(
-        {
-            "type": "assistant",
-            "message": {
-                "content": [{
-                    "type": "tool_use",
-                    "id": "tool-search-one",
-                    "name": "ToolSearch",
-                    "input": {"query": "select:WebSearch", "max_results": 1},
-                }]
+    call = translator.translate(
+        raw_event(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "tool-search-one",
+                            "name": "ToolSearch",
+                            "input": {"query": "select:WebSearch", "max_results": 1},
+                        }
+                    ]
+                },
             },
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="transcript",
-        raw_event_id="tool-search",
-    ))
-    result = translator.translate(raw_event(
-        {
-            "type": "user",
-            "uuid": "tool-result-one",
-            "message": {
-                "content": [{
-                    "type": "tool_result",
-                    "tool_use_id": "tool-search-one",
-                    "content": [{"type": "tool_reference", "tool_name": "WebSearch"}],
-                }]
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="tool-search",
+        )
+    )
+    result = translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "tool-result-one",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "tool-search-one",
+                            "content": [{"type": "tool_reference", "tool_name": "WebSearch"}],
+                        }
+                    ]
+                },
             },
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="transcript",
-        raw_event_id="tool-result",
-    ))
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="tool-result",
+        )
+    )
 
     assert call.decision == "ignored_nonsemantic"
     performed = payloads(result, SearchPerformed)[0].payload
@@ -4005,12 +5763,18 @@ def test_codex_deliberate_ignores_are_nonsemantic_and_only_drift_stays_unknown()
     """
 
     def verdict(document):
-        return CodexCanonicalTranslator().translate(raw_event(
-            document,
-            harness=HarnessName.CODEX,
-            source_type="rollout",
-            raw_event_id=f"codex-{document.get('type')}-{id(document)}",
-        )).decision
+        return (
+            CodexCanonicalTranslator()
+            .translate(
+                raw_event(
+                    document,
+                    harness=HarnessName.CODEX,
+                    source_type="rollout",
+                    raw_event_id=f"codex-{document.get('type')}-{id(document)}",
+                )
+            )
+            .decision
+        )
 
     def item_completed(item):
         return {
@@ -4018,34 +5782,70 @@ def test_codex_deliberate_ignores_are_nonsemantic_and_only_drift_stays_unknown()
             "payload": {"type": "item_completed", "turn_id": "turn-one", "item": item},
         }
 
-    assert verdict({"type": "world_state", "payload": {"full": True, "state": {}}}) \
+    assert verdict({"type": "world_state", "payload": {"full": True, "state": {}}}) == "ignored_nonsemantic"
+    assert (
+        verdict(
+            item_completed(
+                {
+                    "type": "AgentMessage",
+                    "id": "msg-one",
+                    "content": [{"type": "Text", "text": "Hi"}],
+                    "phase": "final_answer",
+                }
+            )
+        )
         == "ignored_nonsemantic"
-    assert verdict(item_completed({
-        "type": "AgentMessage", "id": "msg-one",
-        "content": [{"type": "Text", "text": "Hi"}], "phase": "final_answer",
-    })) == "ignored_nonsemantic"
+    )
     assert verdict(item_completed({"type": "UserMessage", "id": "item-one"})) == "ignored_nonsemantic"
-    assert verdict(item_completed({
-        "type": "Reasoning", "id": "rs-one", "summary_text": [], "raw_content": [],
-    })) == "ignored_nonsemantic"
-    assert verdict(item_completed({"type": "SomethingCodexShipsNextMonth", "id": "item-two"})) \
-        == "ignored_unknown"
+    assert (
+        verdict(
+            item_completed(
+                {
+                    "type": "Reasoning",
+                    "id": "rs-one",
+                    "summary_text": [],
+                    "raw_content": [],
+                }
+            )
+        )
+        == "ignored_nonsemantic"
+    )
+    assert (
+        verdict(
+            item_completed(
+                {
+                    "type": "ImageView",
+                    "id": "image-one",
+                    "path": "file:///tmp/marker.png",
+                }
+            )
+        )
+        == "ignored_nonsemantic"
+    )
+    assert verdict(item_completed({"type": "SomethingCodexShipsNextMonth", "id": "item-two"})) == "ignored_unknown"
 
     # A type we parse whose TEXT is absent: an assistant `message` placeholder
     # (measured: `phase: "commentary"` with `output_text: ""`) and a `reasoning`
     # whose summary was stored encrypted. Recognised, empty, not drift.
-    assert verdict({
-        "type": "response_item",
-        "payload": {"type": "message", "role": "assistant", "phase": "commentary",
-                    "content": [{"type": "output_text", "text": ""}]},
-    }) == "ignored_nonsemantic"
-    assert verdict({"type": "response_item", "payload": {"type": "reasoning", "summary": []}}) \
+    assert (
+        verdict(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "phase": "commentary",
+                    "content": [{"type": "output_text", "text": ""}],
+                },
+            }
+        )
         == "ignored_nonsemantic"
+    )
+    assert verdict({"type": "response_item", "payload": {"type": "reasoning", "summary": []}}) == "ignored_nonsemantic"
 
     # …but a record missing a REQUIRED field stays drift: that is a field that
     # moved, which is the one thing the unknown verdict is for.
-    assert verdict(item_completed({"type": "CommandExecution", "id": "item-three"})) \
-        == "ignored_unknown"
+    assert verdict(item_completed({"type": "CommandExecution", "id": "item-three"})) == "ignored_unknown"
 
 
 def test_codex_unknown_field_on_a_known_record_fails_translation_naming_it():
@@ -4057,19 +5857,21 @@ def test_codex_unknown_field_on_a_known_record_fails_translation_naming_it():
     `translation_failed` verdict, with pydantic's own `extra_forbidden`
     message naming the field."""
     with pytest.raises(ValidationError, match="a_field_records_py_has_never_declared"):
-        CodexCanonicalTranslator().translate(raw_event(
-            {
-                "type": "event_msg",
-                "payload": {
-                    "type": "task_started",
-                    "turn_id": "turn-one",
-                    "a_field_records_py_has_never_declared": "surprise",
+        CodexCanonicalTranslator().translate(
+            raw_event(
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "task_started",
+                        "turn_id": "turn-one",
+                        "a_field_records_py_has_never_declared": "surprise",
+                    },
                 },
-            },
-            harness=HarnessName.CODEX,
-            source_type="rollout",
-            raw_event_id="codex-unknown-field",
-        ))
+                harness=HarnessName.CODEX,
+                source_type="rollout",
+                raw_event_id="codex-unknown-field",
+            )
+        )
 
 
 def test_codex_wrong_typed_field_on_a_known_record_fails_translation():
@@ -4078,15 +5880,17 @@ def test_codex_wrong_typed_field_on_a_known_record_fails_translation():
     an extra one — `turn_id` is a string in every measured rollout, never a
     list."""
     with pytest.raises(ValidationError, match="turn_id"):
-        CodexCanonicalTranslator().translate(raw_event(
-            {
-                "type": "event_msg",
-                "payload": {"type": "task_started", "turn_id": ["not", "a", "string"]},
-            },
-            harness=HarnessName.CODEX,
-            source_type="rollout",
-            raw_event_id="codex-wrong-type",
-        ))
+        CodexCanonicalTranslator().translate(
+            raw_event(
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_started", "turn_id": ["not", "a", "string"]},
+                },
+                harness=HarnessName.CODEX,
+                source_type="rollout",
+                raw_event_id="codex-wrong-type",
+            )
+        )
 
 
 def test_codex_unknown_record_kind_stays_ignored_not_failed():
@@ -4095,18 +5899,20 @@ def test_codex_unknown_record_kind_stays_ignored_not_failed():
     across codex 0.95 -> 0.144), not a shape mismatch within a type this
     codebase claims to know — `ignored_unknown`, never `translation_failed`,
     however unfamiliar its payload looks."""
-    translated = CodexCanonicalTranslator().translate(raw_event(
-        {
-            "type": "event_msg",
-            "payload": {
-                "type": "a_record_kind_codex_has_not_shipped_yet",
-                "whatever_fields_it_someday_carries": True,
+    translated = CodexCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "a_record_kind_codex_has_not_shipped_yet",
+                    "whatever_fields_it_someday_carries": True,
+                },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="codex-unknown-kind",
-    ))
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="codex-unknown-kind",
+        )
+    )
     assert translated.decision == "ignored_unknown"
     assert translated.canonical_events == ()
 
@@ -4118,16 +5924,18 @@ def test_claude_unknown_hook_field_fails_translation_naming_it():
     drift, not tolerance — the same outcome the codex wave's equivalent test
     checks for its own foreign register."""
     with pytest.raises(ValidationError, match="a_field_records_py_has_never_declared"):
-        ClaudeCanonicalTranslator().translate(raw_event(
-            {
-                "hook_event_name": "Stop",
-                "session_id": "session-one",
-                "a_field_records_py_has_never_declared": "surprise",
-            },
-            harness=HarnessName.CLAUDE_CODE,
-            source_type="hook",
-            raw_event_id="claude-unknown-field",
-        ))
+        ClaudeCanonicalTranslator().translate(
+            raw_event(
+                {
+                    "hook_event_name": "Stop",
+                    "session_id": "session-one",
+                    "a_field_records_py_has_never_declared": "surprise",
+                },
+                harness=HarnessName.CLAUDE_CODE,
+                source_type="hook",
+                raw_event_id="claude-unknown-field",
+            )
+        )
 
 
 def test_claude_wrong_typed_hook_field_fails_translation():
@@ -4136,73 +5944,82 @@ def test_claude_wrong_typed_hook_field_fails_translation():
     extra one — `duration_ms` is a number in every measured hook delivery,
     never a list."""
     with pytest.raises(ValidationError, match="duration_ms"):
-        ClaudeCanonicalTranslator().translate(raw_event(
-            {
-                "hook_event_name": "PostToolUse",
-                "session_id": "session-one",
-                "tool_use_id": "call-one",
-                "tool_name": "Bash",
-                "duration_ms": ["not", "a", "number"],
-            },
-            harness=HarnessName.CLAUDE_CODE,
-            source_type="hook",
-            raw_event_id="claude-wrong-type",
-        ))
+        ClaudeCanonicalTranslator().translate(
+            raw_event(
+                {
+                    "hook_event_name": "PostToolUse",
+                    "session_id": "session-one",
+                    "tool_use_id": "call-one",
+                    "tool_name": "Bash",
+                    "duration_ms": ["not", "a", "number"],
+                },
+                harness=HarnessName.CLAUDE_CODE,
+                source_type="hook",
+                raw_event_id="claude-wrong-type",
+            )
+        )
 
 
 @pytest.mark.parametrize("hook_name", ["TaskCreated", "TaskCompleted"])
 def test_claude_task_hooks_accept_the_complete_current_vendor_shape(hook_name):
     """Task hooks keep lifecycle changes that a final task-file scan can miss."""
-    translated = ClaudeCanonicalTranslator().translate(raw_event(
-        {
-            "hook_event_name": hook_name,
-            "session_id": "session-one",
-            "task_id": "task-one",
-            "task_subject": "Check the dashboard",
-            "task_description": "Read each dashboard section.",
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="hook",
-        raw_event_id=f"claude-{hook_name}",
-    ))
+    translated = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {
+                "hook_event_name": hook_name,
+                "session_id": "session-one",
+                "task_id": "task-one",
+                "task_subject": "Check the dashboard",
+                "task_description": "Read each dashboard section.",
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id=f"claude-{hook_name}",
+        )
+    )
 
     assert translated.decision == "translated"
     task = payloads(translated, TaskChanged)[0].payload
     assert task.task_id == TaskId("task-one")
     assert task.subject == "Check the dashboard"
     assert task.state == ("pending" if hook_name == "TaskCreated" else "completed")
+    assert task.owner_actor_id == ActorId("session-one:lead")
 
 
 def test_claude_message_usage_models_the_complete_current_vendor_shape():
     """The 2.1.239 transcript contract is typed all the way through its nested
     usage records; these are records, not dynamic dictionaries."""
-    usage = MessageUsage.model_validate({
-        "output_tokens_details": {"thinking_tokens": 7},
-        "input_tokens": 2,
-        "output_tokens": 3,
-        "cache_creation_input_tokens": 4,
-        "cache_read_input_tokens": 5,
-        "server_tool_use": {"web_search_requests": 0, "web_fetch_requests": 0},
-        "service_tier": "standard",
-        "cache_creation": {
-            "ephemeral_1h_input_tokens": 0,
-            "ephemeral_5m_input_tokens": 4,
-        },
-        "inference_geo": "not_available",
-        "iterations": [{
+    usage = MessageUsage.model_validate(
+        {
+            "output_tokens_details": {"thinking_tokens": 7},
             "input_tokens": 2,
             "output_tokens": 3,
-            "cache_read_input_tokens": 5,
             "cache_creation_input_tokens": 4,
+            "cache_read_input_tokens": 5,
+            "server_tool_use": {"web_search_requests": 0, "web_fetch_requests": 0},
+            "service_tier": "standard",
             "cache_creation": {
                 "ephemeral_1h_input_tokens": 0,
                 "ephemeral_5m_input_tokens": 4,
             },
-            "type": "message",
-            "model": "claude-fable-5",
-        }],
-        "speed": "standard",
-    })
+            "inference_geo": "not_available",
+            "iterations": [
+                {
+                    "input_tokens": 2,
+                    "output_tokens": 3,
+                    "cache_read_input_tokens": 5,
+                    "cache_creation_input_tokens": 4,
+                    "cache_creation": {
+                        "ephemeral_1h_input_tokens": 0,
+                        "ephemeral_5m_input_tokens": 4,
+                    },
+                    "type": "message",
+                    "model": "claude-fable-5",
+                }
+            ],
+            "speed": "standard",
+        }
+    )
 
     assert usage.server_tool_use is not None
     assert usage.server_tool_use.web_fetch_requests == 0
@@ -4211,47 +6028,34 @@ def test_claude_message_usage_models_the_complete_current_vendor_shape():
 
 
 def test_claude_stop_hook_summary_uses_typed_hook_records():
-    summary = SystemRecord.model_validate({
-        "type": "system",
-        "subtype": "stop_hook_summary",
-        "hookCount": 2,
-        "hookInfos": [
-            {"command": ".venv/bin/python client/claude_hook.py", "durationMs": 74},
-            {"command": "node stop-review-gate-hook.mjs", "durationMs": 105},
-        ],
-        "hookErrors": [],
-        "hookAdditionalContext": [],
-        "preventedContinuation": False,
-        "stopReason": "",
-        "hasOutput": False,
-        "level": "suggestion",
-    })
+    summary = SystemRecord.model_validate(
+        {
+            "type": "system",
+            "subtype": "stop_hook_summary",
+            "hookCount": 2,
+            "hookInfos": [
+                {"command": ".venv/bin/python client/claude_hook.py", "durationMs": 74},
+                {"command": "node stop-review-gate-hook.mjs", "durationMs": 105},
+            ],
+            "hookErrors": [],
+            "hookAdditionalContext": [],
+            "preventedContinuation": False,
+            "stopReason": "",
+            "hasOutput": False,
+            "level": "suggestion",
+        }
+    )
 
     assert summary.hookInfos is not None
     assert summary.hookInfos[0].durationMs == 74
 
 
 def test_codex_current_app_server_rate_limits_are_strictly_typed_and_normalized():
-    response = codex_usage.RateLimitsRpcResponse.model_validate({
-        "id": 2,
-        "result": {
-            "rateLimits": {
-                "limitId": "codex",
-                "limitName": None,
-                "primary": {
-                    "usedPercent": 12,
-                    "windowDurationMins": 10080,
-                    "resetsAt": 1787879978,
-                },
-                "secondary": None,
-                "credits": {"hasCredits": False, "unlimited": False, "balance": "0"},
-                "individualLimit": None,
-                "spendControlReached": False,
-                "planType": "prolite",
-                "rateLimitReachedType": None,
-            },
-            "rateLimitsByLimitId": {
-                "codex": {
+    response = codex_usage.RateLimitsRpcResponse.model_validate(
+        {
+            "id": 2,
+            "result": {
+                "rateLimits": {
                     "limitId": "codex",
                     "limitName": None,
                     "primary": {
@@ -4266,21 +6070,40 @@ def test_codex_current_app_server_rate_limits_are_strictly_typed_and_normalized(
                     "planType": "prolite",
                     "rateLimitReachedType": None,
                 },
+                "rateLimitsByLimitId": {
+                    "codex": {
+                        "limitId": "codex",
+                        "limitName": None,
+                        "primary": {
+                            "usedPercent": 12,
+                            "windowDurationMins": 10080,
+                            "resetsAt": 1787879978,
+                        },
+                        "secondary": None,
+                        "credits": {"hasCredits": False, "unlimited": False, "balance": "0"},
+                        "individualLimit": None,
+                        "spendControlReached": False,
+                        "planType": "prolite",
+                        "rateLimitReachedType": None,
+                    },
+                },
+                "rateLimitResetCredits": {
+                    "availableCount": 1,
+                    "credits": [
+                        {
+                            "id": "credit-one",
+                            "resetType": "codexRateLimits",
+                            "status": "available",
+                            "grantedAt": 1787358029,
+                            "expiresAt": 1789950029,
+                            "title": "Full reset",
+                            "description": "One free rate limit reset.",
+                        }
+                    ],
+                },
             },
-            "rateLimitResetCredits": {
-                "availableCount": 1,
-                "credits": [{
-                    "id": "credit-one",
-                    "resetType": "codexRateLimits",
-                    "status": "available",
-                    "grantedAt": 1787358029,
-                    "expiresAt": 1789950029,
-                    "title": "Full reset",
-                    "description": "One free rate limit reset.",
-                }],
-            },
-        },
-    })
+        }
+    )
 
     normalized = codex_usage.normalize_rate_limits(response.result)
     assert normalized is not None
@@ -4296,18 +6119,20 @@ def test_claude_unmapped_tool_stays_ignored_not_failed():
     build shipping a tool this codebase has not mapped yet — not a shape
     mismatch within a tool it claims to know, so it stays `ignored_unknown`,
     never `translation_failed`, however ordinary its arguments look."""
-    translated = ClaudeCanonicalTranslator().translate(raw_event(
-        {
-            "hook_event_name": "PreToolUse",
-            "session_id": "session-one",
-            "tool_use_id": "call-one",
-            "tool_name": "ATool2026HasNotShippedYet",
-            "tool_input": {"whatever": "fields"},
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="hook",
-        raw_event_id="claude-unknown-kind",
-    ))
+    translated = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {
+                "hook_event_name": "PreToolUse",
+                "session_id": "session-one",
+                "tool_use_id": "call-one",
+                "tool_name": "ATool2026HasNotShippedYet",
+                "tool_input": {"whatever": "fields"},
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="claude-unknown-kind",
+        )
+    )
     assert translated.decision == "ignored_unknown"
     assert translated.canonical_events == ()
 
@@ -4348,50 +6173,56 @@ def test_native_instruction_wrappers_are_canonical_system_messages():
 
 def test_claude_title_records_preserve_native_title_origin():
     translator = ClaudeCanonicalTranslator()
-    custom = translator.translate(raw_event(
-        {"type": "agent-name", "agentName": "Chosen name"},
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="transcript",
-        raw_event_id="custom-title",
-    ))
-    automatic = translator.translate(raw_event(
-        {"type": "ai-title", "aiTitle": "Generated name"},
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="transcript",
-        raw_event_id="automatic-title",
-    ))
+    custom = translator.translate(
+        raw_event(
+            {"type": "agent-name", "agentName": "Chosen name"},
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="custom-title",
+        )
+    )
+    automatic = translator.translate(
+        raw_event(
+            {"type": "ai-title", "aiTitle": "Generated name"},
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="automatic-title",
+        )
+    )
 
     assert custom.canonical_events[0].payload == SessionTitleChanged("Chosen name", "custom")
     assert automatic.canonical_events[0].payload == SessionTitleChanged("Generated name", "automatic")
 
 
 def test_claude_assistant_preserves_reasoning_model_and_session_usage():
-    translation = ClaudeCanonicalTranslator().translate(raw_event(
-        {
-            "type": "assistant",
-            "uuid": "assistant-one",
-            "message": {
-                "model": "claude-opus-4-8",
-                "content": [
-                    {"type": "thinking", "thinking": "Inspect the failure"},
-                    {"type": "text", "text": "I found it"},
-                ],
-                "usage": {
-                    "input_tokens": 10,
-                    "output_tokens": 3,
-                    "cache_read_input_tokens": 7,
-                    "cache_creation_input_tokens": 6,
-                    "cache_creation": {
-                        "ephemeral_5m_input_tokens": 4,
-                        "ephemeral_1h_input_tokens": 2,
+    translation = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "assistant",
+                "uuid": "assistant-one",
+                "message": {
+                    "model": "claude-opus-4-8",
+                    "content": [
+                        {"type": "thinking", "thinking": "Inspect the failure"},
+                        {"type": "text", "text": "I found it"},
+                    ],
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 3,
+                        "cache_read_input_tokens": 7,
+                        "cache_creation_input_tokens": 6,
+                        "cache_creation": {
+                            "ephemeral_5m_input_tokens": 4,
+                            "ephemeral_1h_input_tokens": 2,
+                        },
                     },
                 },
             },
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="transcript",
-        raw_event_id="assistant",
-    ))
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="assistant",
+        )
+    )
 
     reasoning = payloads(translation, ReasoningCreated)[0].payload
     model = payloads(translation, ModelChanged)[0].payload
@@ -4422,16 +6253,18 @@ def test_claude_marks_where_the_model_stopped_from_the_response_stop_reason():
     """
 
     def phases(stop_reason, blocks):
-        translation = ClaudeCanonicalTranslator().translate(raw_event(
-            {
-                "type": "assistant",
-                "uuid": "assistant-one",
-                "message": {"content": blocks, "stop_reason": stop_reason},
-            },
-            harness=HarnessName.CLAUDE_CODE,
-            source_type="transcript",
-            raw_event_id=f"assistant-{stop_reason}-{len(blocks)}",
-        ))
+        translation = ClaudeCanonicalTranslator().translate(
+            raw_event(
+                {
+                    "type": "assistant",
+                    "uuid": "assistant-one",
+                    "message": {"content": blocks, "stop_reason": stop_reason},
+                },
+                harness=HarnessName.CLAUDE_CODE,
+                source_type="transcript",
+                raw_event_id=f"assistant-{stop_reason}-{len(blocks)}",
+            )
+        )
         return [payload.payload.phase for payload in payloads(translation, MessageCreated)]
 
     one_block = [{"type": "text", "text": "Hi"}]
@@ -4447,53 +6280,71 @@ def test_claude_otel_translates_raw_usage_once_by_model_and_query_source():
     def point(attributes, value):
         return {
             "attributes": [
-                {"key": key, "value": {"stringValue": attribute_value}}
-                for key, attribute_value in attributes.items()
+                {"key": key, "value": {"stringValue": attribute_value}} for key, attribute_value in attributes.items()
             ],
             "asInt" if isinstance(value, int) else "asDouble": value,
         }
 
     document = {
-        "resourceMetrics": [{
-            "scopeMetrics": [{
-                "metrics": [
+        "resourceMetrics": [
+            {
+                "scopeMetrics": [
                     {
-                        "name": "claude_code.token.usage",
-                        "sum": {"dataPoints": [
-                            point({
-                                "session.id": "session-one",
-                                "query_source": "main",
-                                "model": "claude-opus-4-8",
-                                "type": "input",
-                            }, 10),
-                            point({
-                                "session.id": "session-one",
-                                "query_source": "main",
-                                "model": "claude-opus-4-8",
-                                "type": "cacheRead",
-                            }, 7),
-                        ]},
-                    },
-                    {
-                        "name": "claude_code.cost.usage",
-                        "sum": {"dataPoints": [
-                            point({
-                                "session.id": "session-one",
-                                "query_source": "main",
-                                "model": "claude-opus-4-8",
-                            }, 0.25),
-                        ]},
-                    },
+                        "metrics": [
+                            {
+                                "name": "claude_code.token.usage",
+                                "sum": {
+                                    "dataPoints": [
+                                        point(
+                                            {
+                                                "session.id": "session-one",
+                                                "query_source": "main",
+                                                "model": "claude-opus-4-8",
+                                                "type": "input",
+                                            },
+                                            10,
+                                        ),
+                                        point(
+                                            {
+                                                "session.id": "session-one",
+                                                "query_source": "main",
+                                                "model": "claude-opus-4-8",
+                                                "type": "cacheRead",
+                                            },
+                                            7,
+                                        ),
+                                    ]
+                                },
+                            },
+                            {
+                                "name": "claude_code.cost.usage",
+                                "sum": {
+                                    "dataPoints": [
+                                        point(
+                                            {
+                                                "session.id": "session-one",
+                                                "query_source": "main",
+                                                "model": "claude-opus-4-8",
+                                            },
+                                            0.25,
+                                        ),
+                                    ]
+                                },
+                            },
+                        ],
+                    }
                 ],
-            }],
-        }],
+            }
+        ],
     }
-    translation = ClaudeCanonicalTranslator().translate(raw_event(
-        document,
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="otel",
-        raw_event_id="otel-one",
-    ))
+    translation = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            document,
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="otel",
+            raw_event_id="otel-one",
+        )
+    )
     reports = payloads(translation, UsageReported)
     assert len(reports) == 1
     usage = reports[0].payload
@@ -4514,20 +6365,30 @@ def test_claude_otel_delivery_records_raw_and_canonical_audit(tmp_path):
     )
     runtime.register("claude_code", session)
     document = {
-        "resourceMetrics": [{
-            "scopeMetrics": [{
-                "metrics": [{
-                    "name": "claude_code.cost.usage",
-                    "sum": {"dataPoints": [{
-                        "attributes": [
-                            {"key": "session.id", "value": {"stringValue": "session-one"}},
-                            {"key": "query_source", "value": {"stringValue": "main"}},
+        "resourceMetrics": [
+            {
+                "scopeMetrics": [
+                    {
+                        "metrics": [
+                            {
+                                "name": "claude_code.cost.usage",
+                                "sum": {
+                                    "dataPoints": [
+                                        {
+                                            "attributes": [
+                                                {"key": "session.id", "value": {"stringValue": "session-one"}},
+                                                {"key": "query_source", "value": {"stringValue": "main"}},
+                                            ],
+                                            "asDouble": 0.09,
+                                        }
+                                    ]
+                                },
+                            }
                         ],
-                        "asDouble": 0.09,
-                    }]},
-                }],
-            }],
-        }],
+                    }
+                ],
+            }
+        ],
     }
     raw_body = json.dumps(document, separators=(",", ":")).encode()
 
@@ -4557,32 +6418,36 @@ def test_claude_otel_delivery_records_raw_and_canonical_audit(tmp_path):
 
 
 def test_claude_operation_execution_comes_from_native_tool_semantics():
-    background = ClaudeCanonicalTranslator().translate(raw_event(
-        {
-            "hook_event_name": "PreToolUse",
-            "tool_use_id": "background-one",
-            "tool_name": "Bash",
-            "tool_input": {
-                "command": "make test",
-                "run_in_background": True,
-                "description": "Run tests",
+    background = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_use_id": "background-one",
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": "make test",
+                    "run_in_background": True,
+                    "description": "Run tests",
+                },
             },
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="hook",
-        raw_event_id="background",
-    ))
-    monitor = ClaudeCanonicalTranslator().translate(raw_event(
-        {
-            "hook_event_name": "PreToolUse",
-            "tool_use_id": "monitor-one",
-            "tool_name": "Monitor",
-            "tool_input": {"task_id": "task-one"},
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="hook",
-        raw_event_id="monitor",
-    ))
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="background",
+        )
+    )
+    monitor = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_use_id": "monitor-one",
+                "tool_name": "Monitor",
+                "tool_input": {"task_id": "task-one"},
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="monitor",
+        )
+    )
 
     assert payloads(background, ShellStarted)[0].payload.execution == "background"
     assert payloads(background, ShellStarted)[0].payload.description == "Run tests"
@@ -4593,54 +6458,94 @@ def test_claude_operation_execution_comes_from_native_tool_semantics():
 def test_codex_write_stdin_continues_the_original_operation():
     translator = CodexCanonicalTranslator()
 
-    started = translator.translate(raw_event({
-        "type": "response_item",
-        "payload": {
-            "type": "custom_tool_call",
-            "name": "exec",
-            "call_id": "command-one",
-            "input": 'tools.exec_command({"cmd":"read value"})',
-        },
-    }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="command", source_position="40"))
-    initial_output = translator.translate(raw_event({
-        "type": "response_item",
-        "payload": {
-            "type": "custom_tool_call_output",
-            "call_id": "command-one",
-            "output": json.dumps({"session_id": 77, "output": "waiting\n"}),
-        },
-    }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="command-output", source_position="41"))
-    provided = translator.translate(raw_event({
-        "type": "response_item",
-        "payload": {
-            "type": "custom_tool_call",
-            "name": "exec",
-            "call_id": "input-one",
-            "input": 'tools.write_stdin({session_id:77,chars:"yes\\n",yield_time_ms:1000})',
-        },
-    }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="stdin", source_position="42"))
-    continued_output = translator.translate(raw_event({
-        "type": "response_item",
-        "payload": {
-            "type": "custom_tool_call_output",
-            "call_id": "input-one",
-            "output": "accepted\n",
-        },
-    }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="stdin-output", source_position="43"))
-    finished = translator.translate(raw_event({
-        "type": "event_msg",
-        "payload": {
-            "type": "item_completed",
-            "item": {
-                "type": "CommandExecution",
-                "id": "execution-one",
-                "process_id": 77,
-                "status": "completed",
-                "aggregated_output": "waiting\naccepted\n",
-                "exit_code": 0,
+    started = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "command-one",
+                    "input": 'tools.exec_command({"cmd":"read value"})',
+                },
             },
-        },
-    }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="command-finished", source_position="44"))
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="command",
+            source_position="40",
+        )
+    )
+    initial_output = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "command-one",
+                    "output": json.dumps({"session_id": 77, "output": "waiting\n"}),
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="command-output",
+            source_position="41",
+        )
+    )
+    provided = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "input-one",
+                    "input": 'tools.write_stdin({session_id:77,chars:"yes\\n",yield_time_ms:1000})',
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="stdin",
+            source_position="42",
+        )
+    )
+    continued_output = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "input-one",
+                    "output": "accepted\n",
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="stdin-output",
+            source_position="43",
+        )
+    )
+    finished = translator.translate(
+        raw_event(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "item": {
+                        "type": "CommandExecution",
+                        "id": "execution-one",
+                        "process_id": 77,
+                        "status": "completed",
+                        "aggregated_output": "waiting\naccepted\n",
+                        "exit_code": 0,
+                    },
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="command-finished",
+            source_position="44",
+        )
+    )
 
     shell_id = payloads(started, ShellStarted)[0].payload.shell_id
     assert shell_id == "command-one"
@@ -4662,40 +6567,61 @@ def test_codex_write_stdin_continues_the_original_operation():
 def test_codex_command_completion_outcome_follows_the_integer_exit_code():
     translator = CodexCanonicalTranslator()
     for exit_code, expected_outcome, suffix in ((0, "succeeded", "ok"), (2, "failed", "bad")):
-        translator.translate(raw_event({
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call",
-                "name": "exec",
-                "call_id": f"command-{suffix}",
-                "input": 'tools.exec_command({"cmd":"run"})',
-            },
-        }, harness=HarnessName.CODEX, source_type="rollout",
-            raw_event_id=f"command-{suffix}", source_position="40"))
-        translator.translate(raw_event({
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call_output",
-                "call_id": f"command-{suffix}",
-                "output": json.dumps({"session_id": suffix, "output": "running\n"}),
-            },
-        }, harness=HarnessName.CODEX, source_type="rollout",
-            raw_event_id=f"command-output-{suffix}", source_position="41"))
-        finished = translator.translate(raw_event({
-            "type": "event_msg",
-            "payload": {
-                "type": "item_completed",
-                "item": {
-                    "type": "CommandExecution",
-                    "id": f"execution-{suffix}",
-                    "process_id": suffix,
-                    "status": "completed",
-                    "aggregated_output": "done\n",
-                    "exit_code": exit_code,
+        translator.translate(
+            raw_event(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "custom_tool_call",
+                        "name": "exec",
+                        "call_id": f"command-{suffix}",
+                        "input": 'tools.exec_command({"cmd":"run"})',
+                    },
                 },
-            },
-        }, harness=HarnessName.CODEX, source_type="rollout",
-            raw_event_id=f"command-finished-{suffix}", source_position="42"))
+                harness=HarnessName.CODEX,
+                source_type="rollout",
+                raw_event_id=f"command-{suffix}",
+                source_position="40",
+            )
+        )
+        translator.translate(
+            raw_event(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "custom_tool_call_output",
+                        "call_id": f"command-{suffix}",
+                        "output": json.dumps({"session_id": suffix, "output": "running\n"}),
+                    },
+                },
+                harness=HarnessName.CODEX,
+                source_type="rollout",
+                raw_event_id=f"command-output-{suffix}",
+                source_position="41",
+            )
+        )
+        finished = translator.translate(
+            raw_event(
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "item_completed",
+                        "item": {
+                            "type": "CommandExecution",
+                            "id": f"execution-{suffix}",
+                            "process_id": suffix,
+                            "status": "completed",
+                            "aggregated_output": "done\n",
+                            "exit_code": exit_code,
+                        },
+                    },
+                },
+                harness=HarnessName.CODEX,
+                source_type="rollout",
+                raw_event_id=f"command-finished-{suffix}",
+                source_position="42",
+            )
+        )
 
         finished_payload = payloads(finished, ShellFinished)[0].payload
         assert finished_payload.exit_code == exit_code
@@ -4704,41 +6630,72 @@ def test_codex_command_completion_outcome_follows_the_integer_exit_code():
 
 def test_codex_empty_write_stdin_poll_is_raw_only_and_ctrl_c_is_input():
     translator = CodexCanonicalTranslator()
-    translator.translate(raw_event({
-        "type": "response_item",
-        "payload": {
-            "type": "custom_tool_call",
-            "name": "exec",
-            "call_id": "command-one",
-            "input": 'tools.exec_command({"cmd":"sleep 30"})',
-        },
-    }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="command"))
-    translator.translate(raw_event({
-        "type": "response_item",
-        "payload": {
-            "type": "custom_tool_call_output",
-            "call_id": "command-one",
-            "output": json.dumps({"session_id": 88, "output": ""}),
-        },
-    }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="command-output", source_position="11"))
-    poll = translator.translate(raw_event({
-        "type": "response_item",
-        "payload": {
-            "type": "custom_tool_call",
-            "name": "exec",
-            "call_id": "poll-one",
-            "input": 'tools.write_stdin({session_id:88,yield_time_ms:1000})',
-        },
-    }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="poll", source_position="12"))
-    interrupt = translator.translate(raw_event({
-        "type": "response_item",
-        "payload": {
-            "type": "custom_tool_call",
-            "name": "exec",
-            "call_id": "interrupt-one",
-            "input": 'tools.write_stdin({session_id:88,chars:"\\u0003",yield_time_ms:1000})',
-        },
-    }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="interrupt", source_position="13"))
+    translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "command-one",
+                    "input": 'tools.exec_command({"cmd":"sleep 30"})',
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="command",
+        )
+    )
+    translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "command-one",
+                    "output": json.dumps({"session_id": 88, "output": ""}),
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="command-output",
+            source_position="11",
+        )
+    )
+    poll = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "poll-one",
+                    "input": "tools.write_stdin({session_id:88,yield_time_ms:1000})",
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="poll",
+            source_position="12",
+        )
+    )
+    interrupt = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "interrupt-one",
+                    "input": 'tools.write_stdin({session_id:88,chars:"\\u0003",yield_time_ms:1000})',
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="interrupt",
+            source_position="13",
+        )
+    )
 
     assert poll.decision == "ignored_nonsemantic"
     assert poll.canonical_events == ()
@@ -4747,61 +6704,95 @@ def test_codex_empty_write_stdin_poll_is_raw_only_and_ctrl_c_is_input():
 
 def test_codex_write_stdin_requires_a_known_process_session():
     with pytest.raises(TranslationError, match="unknown process session"):
-        CodexCanonicalTranslator().translate(raw_event({
-            "type": "response_item",
-            "payload": {
-                "type": "function_call",
-                "name": "write_stdin",
-                "call_id": "input-one",
-                "arguments": json.dumps({"session_id": 99, "chars": "hello"}),
-            },
-        }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="stdin"))
+        CodexCanonicalTranslator().translate(
+            raw_event(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "write_stdin",
+                        "call_id": "input-one",
+                        "arguments": json.dumps({"session_id": 99, "chars": "hello"}),
+                    },
+                },
+                harness=HarnessName.CODEX,
+                source_type="rollout",
+                raw_event_id="stdin",
+            )
+        )
 
 
 def test_codex_write_stdin_records_raw_and_canonical_audit(tmp_path):
     runtime, interpreter = interpreting_runtime(tmp_path / "main.db")
-    runtime.register("codex", Session(
-        SessionId("session-one"),
-        ActorId("session-one:lead"),
-        "fixture.jsonl",
-        "/work",
-    ))
+    runtime.register(
+        "codex",
+        Session(
+            SessionId("session-one"),
+            ActorId("session-one:lead"),
+            "fixture.jsonl",
+            "/work",
+        ),
+    )
     observations = (
-        raw_event({
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call",
-                "name": "exec",
-                "call_id": "command-one",
-                "input": 'tools.exec_command({"cmd":"read value"})',
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "command-one",
+                    "input": 'tools.exec_command({"cmd":"read value"})',
+                },
             },
-        }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="command", source_position="40"),
-        raw_event({
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call_output",
-                "call_id": "command-one",
-                "output": json.dumps({"session_id": 77, "output": ""}),
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="command",
+            source_position="40",
+        ),
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "command-one",
+                    "output": json.dumps({"session_id": 77, "output": ""}),
+                },
             },
-        }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="command-output", source_position="41"),
-        raw_event({
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call",
-                "name": "exec",
-                "call_id": "poll-one",
-                "input": 'tools.write_stdin({session_id:77,chars:""})',
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="command-output",
+            source_position="41",
+        ),
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "poll-one",
+                    "input": 'tools.write_stdin({session_id:77,chars:""})',
+                },
             },
-        }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="poll", source_position="42"),
-        raw_event({
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call",
-                "name": "exec",
-                "call_id": "input-one",
-                "input": 'tools.write_stdin({session_id:77,chars:"yes\\n"})',
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="poll",
+            source_position="42",
+        ),
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "input-one",
+                    "input": 'tools.write_stdin({session_id:77,chars:"yes\\n"})',
+                },
             },
-        }, harness=HarnessName.CODEX, source_type="rollout", raw_event_id="stdin", source_position="43"),
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="stdin",
+            source_position="43",
+        ),
     )
     runtime.recorder.record(observations)
     interpreter.tick()
@@ -4811,9 +6802,7 @@ def test_codex_write_stdin_records_raw_and_canonical_audit(tmp_path):
     assert stdin_evidence.raw_event.payload == observations[-1].payload
     assert stdin_evidence.interpretation is not None
     assert stdin_evidence.interpretation.decision == "translated"
-    assert isinstance(
-        stdin_evidence.interpretation.events[0].event.payload, ShellInputProvided
-    )
+    assert isinstance(stdin_evidence.interpretation.events[0].event.payload, ShellInputProvided)
     poll_evidence = runtime.raw_event_audits.audit(RawEventId("poll"))
     assert poll_evidence is not None
     assert poll_evidence.raw_event.payload == observations[-2].payload
@@ -4823,72 +6812,99 @@ def test_codex_write_stdin_records_raw_and_canonical_audit(tmp_path):
 
 
 def test_codex_plan_has_a_canonical_fact():
-    plan = CodexCanonicalTranslator().translate(raw_event(
-        {
-            "type": "event_msg",
-            "payload": {
-                "type": "item_completed",
-                "item": {"type": "Plan", "id": "plan-one", "text": "1. Change it"},
+    plan = CodexCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "item": {"type": "Plan", "id": "plan-one", "text": "1. Change it"},
+                },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="plan",
-    ))
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="plan",
+        )
+    )
 
     proposed = payloads(plan, PlanProposed)[0].payload
     assert proposed.attention_id == "plan-one"
     assert proposed.plan.text == "1. Change it"
 
 
-def test_codex_preliminary_patch_marker_is_nonsemantic():
-    translation = CodexCanonicalTranslator().translate(raw_event(
-        {
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call",
-                "name": "apply_patch",
-                "call_id": "patch-one",
-                "input": "*** Begin Patch",
+def test_codex_plan_response_wrapper_is_covered_by_the_structured_plan_item():
+    wrapper = CodexCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": "<proposed_plan>1. Change it</proposed_plan>",
+                },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="patch-call",
-    ))
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="plan-wrapper",
+        )
+    )
+
+    assert wrapper.decision == "ignored_nonsemantic"
+    assert wrapper.canonical_events == ()
+
+
+def test_codex_preliminary_patch_marker_is_nonsemantic():
+    translation = CodexCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "apply_patch",
+                    "call_id": "patch-one",
+                    "input": "*** Begin Patch",
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="patch-call",
+        )
+    )
 
     assert translation.decision == "ignored_nonsemantic"
     assert translation.canonical_events == ()
 
 
 def test_codex_current_file_change_emits_the_shared_file_facts():
-    translated = CodexCanonicalTranslator().translate(raw_event(
-        {
-            "type": "event_msg",
-            "payload": {
-                "type": "item_completed",
-                "item": {
-                    "type": "FileChange",
-                    "id": "edit-one",
-                    "status": "completed",
-                    "changes": {
-                        "/work/a.py": {
-                            "type": "update",
-                            "unified_diff": "@@ -1 +1 @@\n-old\n+new\n",
-                            "move_path": None,
-                        },
-                        "/work/b.py": {
-                            "type": "add",
-                            "content": "print('captured')\n",
+    translated = CodexCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "item": {
+                        "type": "FileChange",
+                        "id": "edit-one",
+                        "status": "completed",
+                        "changes": {
+                            "/work/a.py": {
+                                "type": "update",
+                                "unified_diff": "@@ -1 +1 @@\n-old\n+new\n",
+                                "move_path": None,
+                            },
+                            "/work/b.py": {
+                                "type": "add",
+                                "content": "print('captured')\n",
+                            },
                         },
                     },
                 },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="file-change",
-    ))
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="file-change",
+        )
+    )
 
     files = [event.payload for event in payloads(translated, FileAccessed)]
     assert [(file.path, file.action) for file in files] == [
@@ -4904,67 +6920,73 @@ def test_codex_current_file_change_emits_the_shared_file_facts():
 
 
 def test_codex_exec_wrapped_apply_patch_does_not_render_an_empty_tool_block():
-    translated = CodexCanonicalTranslator().translate(raw_event(
-        {
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call",
-                "name": "exec",
-                "call_id": "patch-one",
-                "input": 'text(await tools.apply_patch(patch));',
+    translated = CodexCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "patch-one",
+                    "input": "text(await tools.apply_patch(patch));",
+                },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="wrapped-patch-call",
-    ))
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="wrapped-patch-call",
+        )
+    )
 
     assert translated.decision == "ignored_nonsemantic"
     assert translated.canonical_events == ()
 
 
 def test_codex_batched_apply_patch_calls_are_known_request_plumbing():
-    translated = CodexCanonicalTranslator().translate(raw_event(
-        {
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call",
-                "name": "exec",
-                "call_id": "patch-batch",
-                "input": (
-                    "const p1 = '*** Begin Patch';"
-                    "await tools.apply_patch(p1);"
-                    "const p2 = '*** Begin Patch';"
-                    "await tools.apply_patch(p2);"
-                ),
+    translated = CodexCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "patch-batch",
+                    "input": (
+                        "const p1 = '*** Begin Patch';"
+                        "await tools.apply_patch(p1);"
+                        "const p2 = '*** Begin Patch';"
+                        "await tools.apply_patch(p2);"
+                    ),
+                },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="patch-batch-call",
-    ))
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="patch-batch-call",
+        )
+    )
 
     assert translated.canonical_events == ()
     assert translated.decision == "ignored_nonsemantic"
 
 
 def test_codex_apply_patch_wrapper_output_is_nonsemantic():
-    translation = CodexCanonicalTranslator().translate(raw_event(
-        {
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call_output",
-                "call_id": "patch-one",
-                "output": [
-                    {"type": "input_text", "text": "Script completed\nOutput:\n"},
-                    {"type": "input_text", "text": "{}"},
-                ],
+    translation = CodexCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "patch-one",
+                    "output": [
+                        {"type": "input_text", "text": "Script completed\nOutput:\n"},
+                        {"type": "input_text", "text": "{}"},
+                    ],
+                },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="wrapped-patch-output",
-    ))
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="wrapped-patch-output",
+        )
+    )
 
     assert translation.decision == "ignored_nonsemantic"
     assert translation.canonical_events == ()
@@ -4972,35 +6994,39 @@ def test_codex_apply_patch_wrapper_output_is_nonsemantic():
 
 def test_codex_opaque_exec_output_does_not_create_a_finish_without_a_start():
     translator = CodexCanonicalTranslator()
-    started = translator.translate(raw_event(
-        {
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call",
-                "name": "exec",
-                "call_id": "opaque-one",
-                "input": "const hits = ALL_TOOLS.filter(x => x.name); text(hits);",
+    started = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "opaque-one",
+                    "input": "const hits = ALL_TOOLS.filter(x => x.name); text(hits);",
+                },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="opaque-call",
-        source_position="40",
-    ))
-    finished = translator.translate(raw_event(
-        {
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call_output",
-                "call_id": "opaque-one",
-                "output": "Script completed\nOutput:\n[]",
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="opaque-call",
+            source_position="40",
+        )
+    )
+    finished = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "opaque-one",
+                    "output": "Script completed\nOutput:\n[]",
+                },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="opaque-output",
-        source_position="41",
-    ))
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="opaque-output",
+            source_position="41",
+        )
+    )
 
     assert started.canonical_events == ()
     assert finished.canonical_events == ()
@@ -5017,9 +7043,7 @@ def test_codex_opaque_exec_output_does_not_create_a_finish_without_a_start():
         ('text(await tools.view_image({path:"/tmp/image.png"}));', 1),
     ),
 )
-def test_codex_output_recovers_its_call_pairing_across_a_restart(
-    tmp_path, call_input, expected_facts
-):
+def test_codex_output_recovers_its_call_pairing_across_a_restart(tmp_path, call_input, expected_facts):
     call = {
         "type": "response_item",
         "payload": {
@@ -5032,20 +7056,23 @@ def test_codex_output_recovers_its_call_pairing_across_a_restart(
     call_line = json.dumps(call) + "\n"
     rollout_path = tmp_path / "rollout.jsonl"
     rollout_path.write_text(call_line)
-    output = replace(raw_event(
-        {
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call_output",
-                "call_id": "restart-one",
-                "output": "Script completed\nOutput:\nresult",
+    output = replace(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "restart-one",
+                    "output": "Script completed\nOutput:\nresult",
+                },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="restart-output",
-        source_position=str(len(call_line.encode())),
-    ), source_name=str(rollout_path))
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="restart-output",
+            source_position=str(len(call_line.encode())),
+        ),
+        source_name=str(rollout_path),
+    )
 
     translated = CodexCanonicalTranslator().translate(output)
 
@@ -5054,35 +7081,92 @@ def test_codex_output_recovers_its_call_pairing_across_a_restart(
         assert payloads(translated, FileAccessed)[0].payload.path == "/tmp/image.png"
 
 
+def test_codex_image_tool_output_accepts_text_and_image_content_parts(tmp_path):
+    call = {
+        "type": "response_item",
+        "payload": {
+            "type": "custom_tool_call",
+            "name": "exec",
+            "call_id": "image-one",
+            "input": 'text(await tools.view_image({path:"/tmp/marker.png"}));',
+        },
+    }
+    call_line = json.dumps(call) + "\n"
+    rollout_path = tmp_path / "image-rollout.jsonl"
+    rollout_path.write_text(call_line)
+    output = replace(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "image-one",
+                    "output": [
+                        {
+                            "type": "input_text",
+                            "text": "Script completed\nOutput:\n",
+                        },
+                        {
+                            "type": "input_image",
+                            "image_url": "data:image/png;base64,AA==",
+                            "detail": "high",
+                        },
+                    ],
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="image-output",
+            source_position=str(len(call_line.encode())),
+        ),
+        source_name=str(rollout_path),
+    )
+
+    translated = CodexCanonicalTranslator().translate(output)
+
+    assert translated.decision == "translated"
+    assert payloads(translated, FileAccessed)[0].payload.path == "/tmp/marker.png"
+
+
 def test_codex_collaboration_lifecycle_uses_child_turn_as_assignment_identity(tmp_path):
     rollout_path = tmp_path / "child.jsonl"
-    rollout_path.write_text(json.dumps({
-        "type": "session_meta",
-        "payload": {
-            "source": {
-                "subagent": {
-                    "thread_spawn": {
-                        "parent_thread_id": "lead-one",
-                        "agent_path": "/root/bali_weather",
+    rollout_path.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {
+                    "source": {
+                        "subagent": {
+                            "thread_spawn": {
+                                "parent_thread_id": "lead-one",
+                                "agent_path": "/root/bali_weather",
+                            }
+                        }
                     }
-                }
+                },
             }
-        },
-    }) + "\n")
+        )
+        + "\n"
+    )
     translator = CodexCanonicalTranslator()
-    started_raw = replace(raw_event(
-        {
-            "type": "event_msg",
-            "payload": {
-                "type": "task_started",
-                "turn_id": "child-turn",
-                "started_at": 1,
+    started_raw = replace(
+        raw_event(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_started",
+                    "turn_id": "child-turn",
+                    "started_at": 1,
+                },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="child_rollout",
-        raw_event_id="child-start",
-    ), source_name=str(rollout_path), actor_id=ActorId("child-one"), parent_actor_id=ActorId("lead-one"))
+            harness=HarnessName.CODEX,
+            source_type="child_rollout",
+            raw_event_id="child-start",
+        ),
+        source_name=str(rollout_path),
+        actor_id=ActorId("child-one"),
+        parent_actor_id=ActorId("lead-one"),
+    )
     started = translator.translate(started_raw)
     child_raw = replace(
         raw_event(
@@ -5138,53 +7222,70 @@ def test_codex_collaboration_controls_map_only_semantic_actor_facts(tmp_path):
         ("list", "list_agents", {}),
     ]
     rollout_path = tmp_path / "lead.jsonl"
-    rollout_path.write_text("".join(json.dumps({
-        "type": "response_item",
-        "payload": {
-            "type": "function_call",
-            "name": name,
-            "arguments": json.dumps(arguments),
-            "call_id": call_id,
-        },
-    }) + "\n" for call_id, name, arguments in calls))
+    rollout_path.write_text(
+        "".join(
+            json.dumps(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": name,
+                        "arguments": json.dumps(arguments),
+                        "call_id": call_id,
+                    },
+                }
+            )
+            + "\n"
+            for call_id, name, arguments in calls
+        )
+    )
     translator = CodexCanonicalTranslator()
 
     def translate(document, raw_id):
-        event = replace(raw_event(
-            document,
-            harness=HarnessName.CODEX,
-            source_type="rollout",
-            raw_event_id=raw_id,
-        ), source_name=str(rollout_path))
+        event = replace(
+            raw_event(
+                document,
+                harness=HarnessName.CODEX,
+                source_type="rollout",
+                raw_event_id=raw_id,
+            ),
+            source_name=str(rollout_path),
+        )
         return translator.translate(event)
 
     for call_id, name, arguments in calls:
-        result = translate({
-            "type": "response_item",
-            "payload": {
-                "type": "function_call",
-                "name": name,
-                "arguments": json.dumps(arguments),
-                "call_id": call_id,
+        result = translate(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call",
+                    "name": name,
+                    "arguments": json.dumps(arguments),
+                    "call_id": call_id,
+                },
             },
-        }, f"{call_id}-call")
+            f"{call_id}-call",
+        )
         assert result.canonical_events == ()
         assert result.decision == "ignored_nonsemantic"
 
-    sent = translate({
-        "type": "event_msg",
-        "payload": {
-            "type": "item_completed",
-            "turn_id": "lead-turn",
-            "item": {
-                "type": "SubAgentActivity",
-                "id": "send",
-                "kind": "interacted",
-                "agent_thread_id": "child-one",
-                "agent_path": "/root/weather",
+    sent = translate(
+        {
+            "type": "event_msg",
+            "payload": {
+                "type": "item_completed",
+                "turn_id": "lead-turn",
+                "item": {
+                    "type": "SubAgentActivity",
+                    "id": "send",
+                    "kind": "interacted",
+                    "agent_thread_id": "child-one",
+                    "agent_path": "/root/weather",
+                },
             },
         },
-    }, "send-activity")
+        "send-activity",
+    )
     # An actor-to-actor message IS a message: the actor speaking, to a named
     # recipient, carrying what the send_message call was given.
     message = payloads(sent, MessageCreated)[0].payload
@@ -5197,73 +7298,88 @@ def test_codex_collaboration_controls_map_only_semantic_actor_facts(tmp_path):
         ("follow", "interacted"),
         ("interrupt", "interrupted"),
     ):
-        result = translate({
-            "type": "event_msg",
-            "payload": {
-                "type": "item_completed",
-                "turn_id": "lead-turn",
-                "item": {
-                    "type": "SubAgentActivity",
-                    "id": call_id,
-                    "kind": activity,
-                    "agent_thread_id": "child-one",
-                    "agent_path": "/root/weather",
+        result = translate(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "turn_id": "lead-turn",
+                    "item": {
+                        "type": "SubAgentActivity",
+                        "id": call_id,
+                        "kind": activity,
+                        "agent_thread_id": "child-one",
+                        "agent_path": "/root/weather",
+                    },
                 },
             },
-        }, f"{call_id}-activity")
+            f"{call_id}-activity",
+        )
         assert result.canonical_events == ()
         assert result.decision == "ignored_nonsemantic"
 
     for call_id, output in (
         ("spawn", '{"task_name":"/root/weather"}'),
+        ("follow", ""),
         ("wait", '{"message":"Wait timed out.","timed_out":true}'),
         ("interrupt", '{"previous_status":"running"}'),
         ("list", '{"agents":[]}'),
     ):
-        result = translate({
-            "type": "response_item",
-            "payload": {
-                "type": "function_call_output",
-                "call_id": call_id,
-                "output": output,
+        result = translate(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": output,
+                },
             },
-        }, f"{call_id}-output")
+            f"{call_id}-output",
+        )
         assert result.canonical_events == ()
         assert result.decision == "ignored_nonsemantic"
 
 
 def test_codex_actor_message_correlation_survives_translator_restart(tmp_path):
-    call = json.dumps({
-        "type": "response_item",
-        "payload": {
-            "type": "function_call",
-            "name": "send_message",
-            "arguments": json.dumps({"target": "/root/weather", "message": "encrypted"}),
-            "call_id": "send-one",
-        },
-    }) + "\n"
+    call = (
+        json.dumps(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call",
+                    "name": "send_message",
+                    "arguments": json.dumps({"target": "/root/weather", "message": "encrypted"}),
+                    "call_id": "send-one",
+                },
+            }
+        )
+        + "\n"
+    )
     rollout_path = tmp_path / "lead.jsonl"
     rollout_path.write_text(call)
-    activity = replace(raw_event(
-        {
-            "type": "event_msg",
-            "payload": {
-                "type": "item_completed",
-                "turn_id": "lead-turn",
-                "item": {
-                    "type": "SubAgentActivity",
-                    "id": "send-one",
-                    "kind": "interacted",
-                    "agent_thread_id": "child-one",
-                    "agent_path": "/root/weather",
+    activity = replace(
+        raw_event(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "turn_id": "lead-turn",
+                    "item": {
+                        "type": "SubAgentActivity",
+                        "id": "send-one",
+                        "kind": "interacted",
+                        "agent_thread_id": "child-one",
+                        "agent_path": "/root/weather",
+                    },
                 },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="send-activity",
-        source_position=str(len(call.encode())),
-    ), source_name=str(rollout_path))
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="send-activity",
+            source_position=str(len(call.encode())),
+        ),
+        source_name=str(rollout_path),
+    )
 
     message = payloads(
         CodexCanonicalTranslator().translate(activity),
@@ -5276,19 +7392,23 @@ def test_codex_actor_message_correlation_survives_translator_restart(tmp_path):
 
 
 def test_codex_child_abort_cancels_only_its_current_assignment():
-    child_raw = replace(raw_event(
-        {
-            "type": "event_msg",
-            "payload": {
-                "type": "turn_aborted",
-                "turn_id": "child-turn-two",
-                "reason": "interrupted",
+    child_raw = replace(
+        raw_event(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "turn_aborted",
+                    "turn_id": "child-turn-two",
+                    "reason": "interrupted",
+                },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="child_rollout",
-        raw_event_id="child-abort",
-    ), actor_id=ActorId("child-one"), parent_actor_id=ActorId("lead-one"))
+            harness=HarnessName.CODEX,
+            source_type="child_rollout",
+            raw_event_id="child-abort",
+        ),
+        actor_id=ActorId("child-one"),
+        parent_actor_id=ActorId("lead-one"),
+    )
 
     assignment = payloads(
         CodexCanonicalTranslator().translate(child_raw),
@@ -5304,48 +7424,61 @@ def test_codex_web_tool_uses_shared_search_vocabulary(tmp_path):
     """One web tool covers search and fetch, and which one it was is decided by
     the fields it was called with — so the call names the tool and the result
     completes the fact."""
-    call = json.dumps({
-        "type": "response_item",
-        "payload": {
-            "type": "custom_tool_call",
-            "name": "exec",
-            "call_id": "web-one",
-            "input": (
-                'const result = await tools.web__run('
-                '{"search_query":"Bali weather"}); text(result);'
-            ),
-        },
-    }) + "\n"
-    rollout_path = tmp_path / "rollout.jsonl"
-    rollout_path.write_text(call)
-    translator = CodexCanonicalTranslator()
-    opened = translator.translate(replace(
-        raw_event(
-            json.loads(call),
-            harness=HarnessName.CODEX,
-            source_type="rollout",
-            raw_event_id="web-search",
-            source_position="0",
-        ),
-        source_name=str(rollout_path),
-    ))
-    answered = translator.translate(replace(
-        raw_event(
+    call = (
+        json.dumps(
             {
                 "type": "response_item",
                 "payload": {
-                    "type": "custom_tool_call_output",
+                    "type": "custom_tool_call",
+                    "name": "exec",
                     "call_id": "web-one",
-                    "output": "26C and sunny",
+                    "input": (
+                        "const result = await tools.web__run("
+                        '{search_query:[{q:"Bali weather"}],response_length:"short"}'
+                        "); text(result);"
+                    ),
                 },
-            },
-            harness=HarnessName.CODEX,
-            source_type="rollout",
-            raw_event_id="web-search-result",
-            source_position=str(len(call.encode())),
-        ),
-        source_name=str(rollout_path),
-    ))
+            }
+        )
+        + "\n"
+    )
+    rollout_path = tmp_path / "rollout.jsonl"
+    rollout_path.write_text(call)
+    translator = CodexCanonicalTranslator()
+    opened = translator.translate(
+        replace(
+            raw_event(
+                json.loads(call),
+                harness=HarnessName.CODEX,
+                source_type="rollout",
+                raw_event_id="web-search",
+                source_position="0",
+            ),
+            source_name=str(rollout_path),
+        )
+    )
+    answered = translator.translate(
+        replace(
+            raw_event(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "custom_tool_call_output",
+                        "call_id": "web-one",
+                        "output": [
+                            {"type": "input_text", "text": "Script completed\nOutput:\n"},
+                            {"type": "input_text", "text": "26C and sunny"},
+                        ],
+                    },
+                },
+                harness=HarnessName.CODEX,
+                source_type="rollout",
+                raw_event_id="web-search-result",
+                source_position=str(len(call.encode())),
+            ),
+            source_name=str(rollout_path),
+        )
+    )
 
     assert opened.canonical_events == ()
     performed = payloads(answered, SearchPerformed)[0].payload
@@ -5354,44 +7487,206 @@ def test_codex_web_tool_uses_shared_search_vocabulary(tmp_path):
     assert performed.result.text == "26C and sunny"
 
 
+def test_codex_web_extension_item_is_the_covered_copy_of_the_custom_tool_result():
+    translated = CodexCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "thread_id": "session-one",
+                    "turn_id": "turn-one",
+                    "item": {
+                        "type": "Extension",
+                        "kind": "web.search",
+                        "id": "exec-one",
+                        "query": "Bali weather",
+                        "action": {"type": "search", "query": "Bali weather"},
+                        "results": [{"type": "text_result", "title": "Weather"}],
+                    },
+                    "started_at_ms": 1,
+                    "completed_at_ms": 2,
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="web-extension",
+        )
+    )
+
+    assert translated.canonical_events == ()
+    assert translated.decision == "ignored_nonsemantic"
+
+
+def test_codex_web_open_uses_a_url_ref_as_the_fetched_address(tmp_path):
+    call = (
+        json.dumps(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "web-open-one",
+                    "input": (
+                        "const result = await tools.web__run("
+                        '{open:[{ref_id:"https://example.com"}],response_length:"short"}'
+                        "); text(result);"
+                    ),
+                },
+            }
+        )
+        + "\n"
+    )
+    rollout_path = tmp_path / "rollout.jsonl"
+    rollout_path.write_text(call)
+    translator = CodexCanonicalTranslator()
+    translator.translate(
+        replace(
+            raw_event(
+                json.loads(call),
+                harness=HarnessName.CODEX,
+                source_type="rollout",
+                raw_event_id="web-open",
+                source_position="0",
+            ),
+            source_name=str(rollout_path),
+        )
+    )
+    answered = translator.translate(
+        replace(
+            raw_event(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "custom_tool_call_output",
+                        "call_id": "web-open-one",
+                        "output": [
+                            {"type": "input_text", "text": "Script completed\nOutput:\n"},
+                            {"type": "input_text", "text": "Example Domain"},
+                        ],
+                    },
+                },
+                harness=HarnessName.CODEX,
+                source_type="rollout",
+                raw_event_id="web-open-result",
+                source_position=str(len(call.encode())),
+            ),
+            source_name=str(rollout_path),
+        )
+    )
+
+    fetched = payloads(answered, WebFetched)[0].payload
+    assert fetched.url == "https://example.com"
+    assert fetched.result.text == "Example Domain"
+
+
+def test_codex_failed_local_mcp_resource_read_is_a_failed_file_fact(tmp_path):
+    call = (
+        json.dumps(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "resource-read-one",
+                    "input": (
+                        "const result = await tools.read_mcp_resource("
+                        '{server:"filesystem",uri:"/work/missing.txt"}); text(result);'
+                    ),
+                },
+            }
+        )
+        + "\n"
+    )
+    rollout_path = tmp_path / "rollout.jsonl"
+    rollout_path.write_text(call)
+    translator = CodexCanonicalTranslator()
+    opened = translator.translate(
+        replace(
+            raw_event(
+                json.loads(call),
+                harness=HarnessName.CODEX,
+                source_type="rollout",
+                raw_event_id="resource-read",
+                source_position="0",
+            ),
+            source_name=str(rollout_path),
+        )
+    )
+    answered = translator.translate(
+        replace(
+            raw_event(
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "custom_tool_call_output",
+                        "call_id": "resource-read-one",
+                        "output": [
+                            {"type": "input_text", "text": "Script failed\nOutput:\n"},
+                            {"type": "input_text", "text": "resource was not found"},
+                        ],
+                    },
+                },
+                harness=HarnessName.CODEX,
+                source_type="rollout",
+                raw_event_id="resource-read-result",
+                source_position=str(len(call.encode())),
+            ),
+            source_name=str(rollout_path),
+        )
+    )
+
+    assert opened.canonical_events == ()
+    accessed = payloads(answered, FileAccessed)[0].payload
+    assert accessed.path == "/work/missing.txt"
+    assert accessed.action == "read"
+    assert accessed.outcome == "failed"
+
+
 def test_codex_node_repl_file_read_keeps_its_path_and_content():
     translator = CodexCanonicalTranslator()
-    opened = translator.translate(raw_event(
-        {
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call",
-                "name": "exec",
-                "call_id": "read-one",
-                "input": (
-                    "const result = await tools.mcp__node_repl__js({"
-                    'title:"Read README.md",code:`var fs = await import('
-                    '"node:fs/promises"); var text = await fs.readFile('
-                    '"${"/work/README.md"}", "utf8"); nodeRepl.write(text);`});'
-                    "text(result);"
-                ),
+    opened = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "read-one",
+                    "input": (
+                        "const result = await tools.mcp__node_repl__js({"
+                        'title:"Read README.md",code:`var fs = await import('
+                        '"node:fs/promises"); var text = await fs.readFile('
+                        '"${"/work/README.md"}", "utf8"); nodeRepl.write(text);`});'
+                        "text(result);"
+                    ),
+                },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="read-start",
-    ))
-    answered = translator.translate(raw_event(
-        {
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call_output",
-                "call_id": "read-one",
-                "output": json.dumps({
-                    "content": [{"type": "text", "text": "# Guide\nBody\n"}],
-                    "isError": False,
-                }),
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="read-start",
+        )
+    )
+    answered = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "read-one",
+                    "output": json.dumps(
+                        {
+                            "content": [{"type": "text", "text": "# Guide\nBody\n"}],
+                            "isError": False,
+                        }
+                    ),
+                },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="read-result",
-    ))
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="read-result",
+        )
+    )
 
     assert opened.canonical_events == ()
     accessed = payloads(answered, FileAccessed)[0].payload
@@ -5402,85 +7697,186 @@ def test_codex_node_repl_file_read_keeps_its_path_and_content():
 
 def test_codex_node_repl_file_read_accepts_plain_wrapper_output():
     translator = CodexCanonicalTranslator()
-    translator.translate(raw_event(
-        {
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call",
-                "name": "exec",
-                "call_id": "read-plain",
-                "input": (
-                    "const result = await tools.mcp__node_repl__js({"
-                    'title:"Read README.md",code:`await fs.readFile('
-                    '"/work/README.md", "utf8")`});text(result);'
-                ),
+    translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "read-plain",
+                    "input": (
+                        "const result = await tools.mcp__node_repl__js({"
+                        'title:"Read README.md",code:`await fs.readFile('
+                        '"/work/README.md", "utf8")`});text(result);'
+                    ),
+                },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="read-plain-start",
-    ))
-    answered = translator.translate(raw_event(
-        {
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call_output",
-                "call_id": "read-plain",
-                "output": [{
-                    "type": "input_text",
-                    "text": "Script completed\nOutput:\n# Guide\nBody\n",
-                }],
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="read-plain-start",
+        )
+    )
+    answered = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "read-plain",
+                    "output": [
+                        {
+                            "type": "input_text",
+                            "text": "Script completed\nOutput:\n# Guide\nBody\n",
+                        }
+                    ],
+                },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="read-plain-result",
-    ))
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="read-plain-result",
+        )
+    )
 
     accessed = payloads(answered, FileAccessed)[0].payload
     assert accessed.path == "/work/README.md"
     assert accessed.content.text == "# Guide\nBody"
 
 
+def test_codex_node_repl_file_read_uses_the_native_mcp_failure_state():
+    translator = CodexCanonicalTranslator()
+    translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "read-failed",
+                    "input": (
+                        "const r = await tools.mcp__node_repl__js({"
+                        'title:"Read requested file",code:`var fs = await import('
+                        '"node:fs/promises"); await fs.readFile('
+                        '"/work/missing.txt", "utf8");`});'
+                        'for (const c of r.content) if (c.type === "text") text(c.text);'
+                    ),
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="read-failed-start",
+        )
+    )
+    completion = translator.translate(
+        raw_event(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "item": {
+                        "type": "McpToolCall",
+                        "id": "exec-native",
+                        "server": "node_repl",
+                        "tool": "js",
+                        "arguments": {
+                            "title": "Read requested file",
+                            "code": 'await fs.readFile("/work/missing.txt", "utf8")',
+                        },
+                        "readOnlyHint": True,
+                        "status": "failed",
+                        "result": {
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "ENOENT: no such file or directory",
+                                }
+                            ],
+                            "isError": True,
+                        },
+                    },
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="read-failed-native-result",
+        )
+    )
+    answered = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "read-failed",
+                    "output": [
+                        {
+                            "type": "input_text",
+                            "text": "Script completed\nWall time 0.3 seconds\nOutput:\n",
+                        },
+                        {
+                            "type": "input_text",
+                            "text": "ENOENT: no such file or directory",
+                        },
+                    ],
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="read-failed-result",
+        )
+    )
+
+    assert completion.canonical_events == ()
+    accessed = payloads(answered, FileAccessed)[0].payload
+    assert accessed.path == "/work/missing.txt"
+    assert accessed.outcome == "failed"
+
+
 def test_codex_execution_introspection_and_mirrored_items_are_known_plumbing():
-    introspection = CodexCanonicalTranslator().translate(raw_event(
-        {
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call",
-                "name": "exec",
-                "call_id": "inspect-tools",
-                "input": "text(ALL_TOOLS.filter(item => item.name));",
+    introspection = CodexCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "inspect-tools",
+                    "input": "text(ALL_TOOLS.filter(item => item.name));",
+                },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="inspect-tools",
-    ))
-    completed_item = CodexCanonicalTranslator().translate(raw_event(
-        {
-            "type": "event_msg",
-            "payload": {
-                "type": "item_completed",
-                "item": {"type": "McpToolCall", "id": "mcp-one"},
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="inspect-tools",
+        )
+    )
+    completed_item = CodexCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "item": {"type": "McpToolCall", "id": "mcp-one"},
+                },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="mcp-item",
-    ))
-    compacted_item = CodexCanonicalTranslator().translate(raw_event(
-        {
-            "type": "event_msg",
-            "payload": {
-                "type": "item_completed",
-                "item": {"type": "ContextCompaction", "id": "compact-one"},
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="mcp-item",
+        )
+    )
+    compacted_item = CodexCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "item": {"type": "ContextCompaction", "id": "compact-one"},
+                },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="compaction-item",
-    ))
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="compaction-item",
+        )
+    )
 
     assert introspection.decision == "ignored_nonsemantic"
     assert completed_item.decision == "ignored_nonsemantic"
@@ -5489,33 +7885,37 @@ def test_codex_execution_introspection_and_mirrored_items_are_known_plumbing():
 
 def test_codex_v2_agent_transport_records_are_known_plumbing():
     translator = CodexCanonicalTranslator()
-    trigger = translator.translate(raw_event(
-        {
-            "type": "inter_agent_communication_metadata",
-            "payload": {"trigger_turn": True},
-        },
-        harness=HarnessName.CODEX,
-        source_type="child_rollout",
-        raw_event_id="v2-trigger",
-    ))
-    envelope = translator.translate(raw_event(
-        {
-            "type": "response_item",
-            "payload": {
-                "type": "agent_message",
-                "id": "v2-message",
-                "author": "/root",
-                "recipient": "/root/worker",
-                "content": [
-                    {"type": "input_text", "text": "Message Type: NEW_TASK"},
-                    {"type": "encrypted_content", "encrypted_content": "ciphertext"},
-                ],
+    trigger = translator.translate(
+        raw_event(
+            {
+                "type": "inter_agent_communication_metadata",
+                "payload": {"trigger_turn": True},
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="child_rollout",
-        raw_event_id="v2-envelope",
-    ))
+            harness=HarnessName.CODEX,
+            source_type="child_rollout",
+            raw_event_id="v2-trigger",
+        )
+    )
+    envelope = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "agent_message",
+                    "id": "v2-message",
+                    "author": "/root",
+                    "recipient": "/root/worker",
+                    "content": [
+                        {"type": "input_text", "text": "Message Type: NEW_TASK"},
+                        {"type": "encrypted_content", "encrypted_content": "ciphertext"},
+                    ],
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="child_rollout",
+            raw_event_id="v2-envelope",
+        )
+    )
 
     assert trigger.canonical_events == ()
     assert trigger.decision == "ignored_nonsemantic"
@@ -5527,20 +7927,22 @@ def test_codex_unmapped_tool_is_unknown_evidence_not_a_failure():
     """An unmapped tool is a hole in this translator, not bad evidence: the
     verdict says `ignored_unknown` so the audit can name it, and the rest of
     the session carries on."""
-    translation = CodexCanonicalTranslator().translate(raw_event(
-        {
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call",
-                "name": "exec",
-                "call_id": "unknown-one",
-                "input": "const result = await tools.unknown_tool({}); text(result);",
+    translation = CodexCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "unknown-one",
+                    "input": "const result = await tools.unknown_tool({}); text(result);",
+                },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="unknown-tool",
-    ))
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="unknown-tool",
+        )
+    )
 
     assert translation.canonical_events == ()
     assert translation.decision == "ignored_unknown"
@@ -5552,10 +7954,12 @@ def test_codex_interrupt_detects_a_queued_turn_after_abort(tmp_path):
     rollout_path.write_text(
         json.dumps({"type": "event_msg", "payload": {"type": "turn_aborted"}})
         + "\n"
-        + json.dumps({
-            "type": "event_msg",
-            "payload": {"type": "task_started", "turn_id": "turn-two"},
-        })
+        + json.dumps(
+            {
+                "type": "event_msg",
+                "payload": {"type": "task_started", "turn_id": "turn-two"},
+            }
+        )
         + "\n"
     )
 
@@ -5564,38 +7968,42 @@ def test_codex_interrupt_detects_a_queued_turn_after_abort(tmp_path):
 
 def test_codex_abort_cancels_its_unfinished_exec():
     translator = CodexCanonicalTranslator()
-    started = translator.translate(raw_event(
-        {
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call",
-                "name": "exec",
-                "call_id": "sleep-one",
-                "input": 'tools.exec_command({cmd:"sleep 60"})',
-                "internal_chat_message_metadata_passthrough": {
-                    "turn_id": "turn-one",
+    started = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "sleep-one",
+                    "input": 'tools.exec_command({cmd:"sleep 60"})',
+                    "internal_chat_message_metadata_passthrough": {
+                        "turn_id": "turn-one",
+                    },
                 },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="sleep-started",
-        source_position="10",
-    ))
-    aborted = translator.translate(raw_event(
-        {
-            "type": "event_msg",
-            "payload": {
-                "type": "turn_aborted",
-                "turn_id": "turn-one",
-                "reason": "interrupted",
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="sleep-started",
+            source_position="10",
+        )
+    )
+    aborted = translator.translate(
+        raw_event(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "turn_aborted",
+                    "turn_id": "turn-one",
+                    "reason": "interrupted",
+                },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="turn-aborted",
-        source_position="11",
-    ))
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="turn-aborted",
+            source_position="11",
+        )
+    )
 
     started_shell = payloads(started, ShellStarted)[0].payload.shell_id
     finished = payloads(aborted, ShellFinished)[0].payload
@@ -5605,41 +8013,42 @@ def test_codex_abort_cancels_its_unfinished_exec():
 
 def test_codex_abort_cancels_its_unfinished_skill_load():
     translator = CodexCanonicalTranslator()
-    started = translator.translate(raw_event(
-        {
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call",
-                "name": "exec",
-                "call_id": "skill-one",
-                "input": (
-                    'tools.exec_command({cmd:"cat '
-                    '/work/.agents/skills/audit-skill/SKILL.md"})'
-                ),
-                "internal_chat_message_metadata_passthrough": {
-                    "turn_id": "turn-one",
+    started = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "skill-one",
+                    "input": ('tools.exec_command({cmd:"cat /work/.agents/skills/audit-skill/SKILL.md"})'),
+                    "internal_chat_message_metadata_passthrough": {
+                        "turn_id": "turn-one",
+                    },
                 },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="skill-started",
-        source_position="10",
-    ))
-    aborted = translator.translate(raw_event(
-        {
-            "type": "event_msg",
-            "payload": {
-                "type": "turn_aborted",
-                "turn_id": "turn-one",
-                "reason": "interrupted",
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="skill-started",
+            source_position="10",
+        )
+    )
+    aborted = translator.translate(
+        raw_event(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "turn_aborted",
+                    "turn_id": "turn-one",
+                    "reason": "interrupted",
+                },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="turn-aborted",
-        source_position="11",
-    ))
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="turn-aborted",
+            source_position="11",
+        )
+    )
 
     started_skill = payloads(started, SkillStarted)[0].payload.skill_id
     finished = payloads(aborted, SkillFinished)[0].payload
@@ -5649,104 +8058,124 @@ def test_codex_abort_cancels_its_unfinished_skill_load():
 
 def test_codex_interrupted_exec_wrapper_cancels_the_command():
     translator = CodexCanonicalTranslator()
-    started = translator.translate(raw_event(
-        {
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call",
-                "name": "exec",
-                "call_id": "sleep-one",
-                "input": 'tools.exec_command({cmd:"sleep 60"})',
-                "internal_chat_message_metadata_passthrough": {
-                    "turn_id": "turn-one",
+    started = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "sleep-one",
+                    "input": 'tools.exec_command({cmd:"sleep 60"})',
+                    "internal_chat_message_metadata_passthrough": {
+                        "turn_id": "turn-one",
+                    },
                 },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="sleep-started",
-        source_position="10",
-    ))
-    interrupted = translator.translate(raw_event(
-        {
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call_output",
-                "call_id": "sleep-one",
-                "output": "aborted by user after 1.1s",
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="sleep-started",
+            source_position="10",
+        )
+    )
+    interrupted = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "sleep-one",
+                    "output": "aborted by user after 1.1s",
+                },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="sleep-interrupted",
-        source_position="11",
-    ))
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="sleep-interrupted",
+            source_position="11",
+        )
+    )
 
     started_shell = payloads(started, ShellStarted)[0].payload.shell_id
     finished = payloads(interrupted, ShellFinished)[0].payload
     assert finished.shell_id == started_shell
     assert finished.outcome == Outcome.CANCELLED
     assert payloads(interrupted, ShellBackgrounded) == []
-    late_completion = translator.translate(raw_event(
-        {
-            "type": "event_msg",
-            "payload": {
-                "type": "item_completed",
-                "turn_id": "turn-one",
-                "item": {
-                    "type": "CommandExecution",
-                    "id": "native-process-one",
-                    "status": "completed",
-                    "process_id": "1234",
-                    "aggregated_output": "should-not-replace-cancellation\n",
-                    "exit_code": 0,
+    late_completion = translator.translate(
+        raw_event(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "turn_id": "turn-one",
+                    "item": {
+                        "type": "CommandExecution",
+                        "id": "native-process-one",
+                        "status": "completed",
+                        "process_id": "1234",
+                        "aggregated_output": "should-not-replace-cancellation\n",
+                        "exit_code": 0,
+                    },
                 },
             },
-        },
-        harness=HarnessName.CODEX,
-        source_type="rollout",
-        raw_event_id="late-process-completion",
-        source_position="12",
-    ))
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="late-process-completion",
+            source_position="12",
+        )
+    )
     assert payloads(late_completion, ShellFinished) == []
 
 
 def test_codex_tool_batch_tracks_one_exec_and_its_dynamic_wait():
     translator = CodexCanonicalTranslator()
-    started = translator.translate(raw_event({
-        "type": "response_item",
-        "payload": {
-            "type": "custom_tool_call",
-            "name": "exec",
-            "call_id": "exec-and-wait",
-            "input": (
-                'const r = await tools.exec_command({cmd:"sleep 30"});'
-                "if(r.session_id) text(await tools.write_stdin("
-                "{session_id:r.session_id,yield_time_ms:30000}));"
-            ),
-            "internal_chat_message_metadata_passthrough": {"turn_id": "turn-one"},
-        },
-    }, harness=HarnessName.CODEX, source_type="rollout",
-       raw_event_id="exec-and-wait", source_position="10"))
+    started = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "exec-and-wait",
+                    "input": (
+                        'const r = await tools.exec_command({cmd:"sleep 30"});'
+                        "if(r.session_id) text(await tools.write_stdin("
+                        "{session_id:r.session_id,yield_time_ms:30000}));"
+                    ),
+                    "internal_chat_message_metadata_passthrough": {"turn_id": "turn-one"},
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="exec-and-wait",
+            source_position="10",
+        )
+    )
     shell = payloads(started, ShellStarted)[0].payload
     assert shell.command.text == "sleep 30"
 
-    completed = translator.translate(raw_event({
-        "type": "event_msg",
-        "payload": {
-            "type": "item_completed",
-            "turn_id": "turn-one",
-            "item": {
-                "type": "CommandExecution",
-                "id": "native-process-one",
-                "status": "completed",
-                "process_id": "1234",
-                "aggregated_output": "done\n",
-                "exit_code": 0,
+    completed = translator.translate(
+        raw_event(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "turn_id": "turn-one",
+                    "item": {
+                        "type": "CommandExecution",
+                        "id": "native-process-one",
+                        "status": "completed",
+                        "process_id": "1234",
+                        "aggregated_output": "done\n",
+                        "exit_code": 0,
+                    },
+                },
             },
-        },
-    }, harness=HarnessName.CODEX, source_type="rollout",
-       raw_event_id="exec-and-wait-completed", source_position="11"))
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="exec-and-wait-completed",
+            source_position="11",
+        )
+    )
     finished = payloads(completed, ShellFinished)[0].payload
     assert finished.shell_id == shell.shell_id
     assert finished.outcome == Outcome.SUCCEEDED
@@ -5924,11 +8353,11 @@ def test_codex_yielded_output_waits_for_the_completed_item(output):
                     "type": "custom_tool_call",
                     "name": "exec",
                     "call_id": "yielded-call",
-                        "input": (
-                            "const r = await tools.exec_command("
-                            '{cmd:"sleep 5; echo done",yield_time_ms:1000});'
-                            'text(r.output || r.session_id || "");'
-                        ),
+                    "input": (
+                        "const r = await tools.exec_command("
+                        '{cmd:"sleep 5; echo done",yield_time_ms:1000});'
+                        'text(r.output || r.session_id || "");'
+                    ),
                 },
             },
             harness=HarnessName.CODEX,
@@ -5988,30 +8417,43 @@ def test_codex_yielded_output_waits_for_the_completed_item(output):
 
 def test_codex_numeric_command_output_is_not_a_process_reference():
     translator = CodexCanonicalTranslator()
-    started = translator.translate(raw_event({
-        "type": "response_item",
-        "payload": {
-            "type": "custom_tool_call",
-            "name": "exec",
-            "call_id": "numeric-output",
-            "input": (
-                "const r = await tools.exec_command("
-                '{cmd:"printf 55812",yield_time_ms:1000});text(r.output);'
-            ),
-        },
-    }, harness=HarnessName.CODEX, source_type="rollout",
-       raw_event_id="numeric-output", source_position="20"))
+    started = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "numeric-output",
+                    "input": (
+                        'const r = await tools.exec_command({cmd:"printf 55812",yield_time_ms:1000});text(r.output);'
+                    ),
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="numeric-output",
+            source_position="20",
+        )
+    )
     shell = payloads(started, ShellStarted)[0].payload
 
-    result = translator.translate(raw_event({
-        "type": "response_item",
-        "payload": {
-            "type": "custom_tool_call_output",
-            "call_id": "numeric-output",
-            "output": "Script completed\nOutput:\n55812",
-        },
-    }, harness=HarnessName.CODEX, source_type="rollout",
-       raw_event_id="numeric-output-result", source_position="21"))
+    result = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "numeric-output",
+                    "output": "Script completed\nOutput:\n55812",
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="numeric-output-result",
+            source_position="21",
+        )
+    )
 
     finished = payloads(result, ShellFinished)[0].payload
     assert finished.shell_id == shell.shell_id
@@ -6123,70 +8565,84 @@ def test_claude_hook_and_transcript_produce_identical_tool_start_facts():
 
 def test_claude_interrupt_marker_aborts_the_turn_and_cancels_its_shell():
     translator = ClaudeCanonicalTranslator()
-    prompt = translator.translate(raw_event(
-        {
-            "type": "user",
-            "uuid": "prompt-one",
-            "message": {"role": "user", "content": "Run a long command"},
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="transcript",
-        raw_event_id="prompt",
-    ))
-    translator.translate(raw_event(
-        {
-            "type": "assistant",
-            "uuid": "assistant-one",
-            "message": {
-                "id": "message-one",
-                "content": [{
-                    "type": "tool_use",
-                    "id": "shell-one",
-                    "name": "Bash",
-                    "input": {"command": "python -c 'import time; time.sleep(60)'"},
-                }],
+    prompt = translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "prompt-one",
+                "message": {"role": "user", "content": "Run a long command"},
             },
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="transcript",
-        raw_event_id="shell-start",
-    ))
-    shell_result = translator.translate(raw_event(
-        {
-            "type": "user",
-            "uuid": "shell-result",
-            "toolDenialKind": "user-rejected",
-            "message": {
-                "role": "user",
-                "content": [{
-                    "type": "tool_result",
-                    "tool_use_id": "shell-one",
-                    "is_error": True,
-                    "content": "User rejected tool use",
-                }],
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="prompt",
+        )
+    )
+    translator.translate(
+        raw_event(
+            {
+                "type": "assistant",
+                "uuid": "assistant-one",
+                "message": {
+                    "id": "message-one",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "shell-one",
+                            "name": "Bash",
+                            "input": {"command": "python -c 'import time; time.sleep(60)'"},
+                        }
+                    ],
+                },
             },
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="transcript",
-        raw_event_id="shell-result",
-    ))
-    aborted = translator.translate(raw_event(
-        {
-            "type": "user",
-            "uuid": "interrupt-one",
-            "interruptedMessageId": "message-one",
-            "message": {
-                "role": "user",
-                "content": [{
-                    "type": "text",
-                    "text": "[Request interrupted by user for tool use]",
-                }],
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="shell-start",
+        )
+    )
+    shell_result = translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "shell-result",
+                "toolDenialKind": "user-rejected",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "shell-one",
+                            "is_error": True,
+                            "content": "User rejected tool use",
+                        }
+                    ],
+                },
             },
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="transcript",
-        raw_event_id="turn-abort",
-    ))
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="shell-result",
+        )
+    )
+    aborted = translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "interrupt-one",
+                "interruptedMessageId": "message-one",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "[Request interrupted by user for tool use]",
+                        }
+                    ],
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="turn-abort",
+        )
+    )
 
     assert payloads(shell_result, ShellFinished)[0].payload.outcome == Outcome.CANCELLED
     started_turn = payloads(prompt, TurnStarted)[0]
@@ -6216,42 +8672,40 @@ def test_claude_file_facts_converge_from_either_evidence_stream():
         "uuid": "assistant-one",
         "message": {
             "id": "api-message",
-            "content": [
-                {"type": "tool_use", "id": "tool-one", "name": "Read", "input": {"file_path": "/work/a.py"}}
-            ],
+            "content": [{"type": "tool_use", "id": "tool-one", "name": "Read", "input": {"file_path": "/work/a.py"}}],
         },
     }
     for translator in (hook_translator, transcript_translator):
-        translator.translate(raw_event(
-            call, harness=HarnessName.CLAUDE_CODE, source_type="transcript", raw_event_id="start"
-        ))
-    hook = hook_translator.translate(raw_event(
-        {
-            "hook_event_name": "PostToolUse",
-            "tool_use_id": "tool-one",
-            "tool_name": "Read",
-            "tool_input": {"file_path": "/work/a.py"},
-            "tool_response": response,
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="hook",
-        raw_event_id="hook-finish",
-    ))
-    transcript = transcript_translator.translate(raw_event(
-        {
-            "type": "user",
-            "uuid": "result-one",
-            "message": {
-                "content": [
-                    {"type": "tool_result", "tool_use_id": "tool-one", "content": "print(1)\n"}
-                ]
+        translator.translate(
+            raw_event(call, harness=HarnessName.CLAUDE_CODE, source_type="transcript", raw_event_id="start")
+        )
+    hook = hook_translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PostToolUse",
+                "tool_use_id": "tool-one",
+                "tool_name": "Read",
+                "tool_input": {"file_path": "/work/a.py"},
+                "tool_response": response,
             },
-            "toolUseResult": response,
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="transcript",
-        raw_event_id="transcript-finish",
-    ))
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="hook-finish",
+        )
+    )
+    transcript = transcript_translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "result-one",
+                "message": {"content": [{"type": "tool_result", "tool_use_id": "tool-one", "content": "print(1)\n"}]},
+                "toolUseResult": response,
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="transcript-finish",
+        )
+    )
 
     assert mapper.encode_canonical_event(payloads(hook, FileAccessed)[0]) == mapper.encode_canonical_event(
         payloads(transcript, FileAccessed)[0]
@@ -6260,51 +8714,55 @@ def test_claude_file_facts_converge_from_either_evidence_stream():
 
 
 def test_claude_edit_completion_preserves_the_native_structured_patch():
-    translated = ClaudeCanonicalTranslator().translate(raw_event(
-        {
-            "hook_event_name": "PostToolUse",
-            "tool_use_id": "edit-one",
-            "tool_name": "Edit",
-            "tool_input": {"file_path": "/work/a.py", "old_string": "old", "new_string": "new"},
-            "tool_response": {
-                "structuredPatch": [{
-                    "oldStart": 1,
-                    "oldLines": 1,
-                    "newStart": 1,
-                    "newLines": 1,
-                    "lines": ["-old", "+new"],
-                }],
+    translated = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {
+                "hook_event_name": "PostToolUse",
+                "tool_use_id": "edit-one",
+                "tool_name": "Edit",
+                "tool_input": {"file_path": "/work/a.py", "old_string": "old", "new_string": "new"},
+                "tool_response": {
+                    "structuredPatch": [
+                        {
+                            "oldStart": 1,
+                            "oldLines": 1,
+                            "newStart": 1,
+                            "newLines": 1,
+                            "lines": ["-old", "+new"],
+                        }
+                    ],
+                },
             },
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="hook",
-        raw_event_id="edit-finish",
-    ))
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="edit-finish",
+        )
+    )
 
     file_event = payloads(translated, FileAccessed)[0].payload
     assert file_event.lines_added == 1
     assert file_event.lines_removed == 1
-    assert file_event.unified_diff == (
-        "--- /work/a.py\n+++ /work/a.py\n@@ -1,1 +1,1 @@\n-old\n+new\n"
-    )
+    assert file_event.unified_diff == ("--- /work/a.py\n+++ /work/a.py\n@@ -1,1 +1,1 @@\n-old\n+new\n")
 
 
 def test_claude_write_counts_created_content_without_a_structured_patch():
-    translated = ClaudeCanonicalTranslator().translate(raw_event(
-        {
-            "hook_event_name": "PostToolUse",
-            "tool_use_id": "write-one",
-            "tool_name": "Write",
-            "tool_input": {
-                "file_path": "/work/a.py",
-                "content": "first\nsecond\n",
+    translated = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {
+                "hook_event_name": "PostToolUse",
+                "tool_use_id": "write-one",
+                "tool_name": "Write",
+                "tool_input": {
+                    "file_path": "/work/a.py",
+                    "content": "first\nsecond\n",
+                },
+                "tool_response": {"content": "File created successfully"},
             },
-            "tool_response": {"content": "File created successfully"},
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="hook",
-        raw_event_id="write-finish",
-    ))
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="write-finish",
+        )
+    )
 
     file_event = payloads(translated, FileAccessed)[0].payload
     assert file_event.lines_added == 2
@@ -6317,17 +8775,19 @@ def test_claude_hook_and_transcript_tool_finish_deduplicate_transactionally(tmp_
     # The transcript's own tool_result names no tool, so the call it belongs to
     # has to have been seen. It always has been: the request precedes its result
     # in both streams.
-    translator.translate(raw_event(
-        {
-            "hook_event_name": "PreToolUse",
-            "tool_use_id": "tool-one",
-            "tool_name": "Bash",
-            "tool_input": {"command": "pwd"},
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="hook",
-        raw_event_id="hook-start",
-    ))
+    translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_use_id": "tool-one",
+                "tool_name": "Bash",
+                "tool_input": {"command": "pwd"},
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="hook-start",
+        )
+    )
     hook_raw = raw_event(
         {
             "hook_event_name": "PostToolUse",
@@ -6344,9 +8804,7 @@ def test_claude_hook_and_transcript_tool_finish_deduplicate_transactionally(tmp_
         {
             "type": "user",
             "uuid": "result-one",
-            "message": {
-                "content": [{"type": "tool_result", "tool_use_id": "tool-one", "content": "output"}]
-            },
+            "message": {"content": [{"type": "tool_result", "tool_use_id": "tool-one", "content": "output"}]},
         },
         harness=HarnessName.CLAUDE_CODE,
         source_type="transcript",
@@ -6354,6 +8812,7 @@ def test_claude_hook_and_transcript_tool_finish_deduplicate_transactionally(tmp_
     )
     hook = translator.translate(hook_raw)
     transcript = translator.translate(transcript_raw)
+    assert translator._toolcalls.calls == {}
     hook_finished = payloads(hook, ShellFinished)[0]
     transcript_finished = payloads(transcript, ShellFinished)[0]
     assert mapper.encode_canonical_event(hook_finished) == mapper.encode_canonical_event(transcript_finished)
@@ -6381,60 +8840,68 @@ def test_claude_hook_and_transcript_tool_finish_deduplicate_transactionally(tmp_
 def test_claude_failed_shell_exit_code_converges_from_hook_and_transcript():
     hook_translator = ClaudeCanonicalTranslator()
     transcript_translator = ClaudeCanonicalTranslator()
-    transcript_translator.translate(raw_event(
-        {
-            "type": "assistant",
-            "uuid": "assistant-one",
-            "message": {
-                "content": [{
-                    "type": "tool_use",
-                    "id": "shell-failed",
-                    "name": "Bash",
-                    "input": {"command": "exit 7"},
-                }],
+    transcript_translator.translate(
+        raw_event(
+            {
+                "type": "assistant",
+                "uuid": "assistant-one",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "shell-failed",
+                            "name": "Bash",
+                            "input": {"command": "exit 7"},
+                        }
+                    ],
+                },
             },
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="transcript",
-        raw_event_id="shell-failed-start",
-    ))
-    hook = hook_translator.translate(raw_event(
-        {
-            "hook_event_name": "PostToolUseFailure",
-            "tool_use_id": "shell-failed",
-            "tool_name": "Bash",
-            "tool_input": {"command": "exit 7"},
-            "error": "Exit code 7\nexpected-error",
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="hook",
-        raw_event_id="shell-failed-hook",
-    ))
-    transcript = transcript_translator.translate(raw_event(
-        {
-            "type": "user",
-            "uuid": "shell-failed-result",
-            "message": {
-                "content": [{
-                    "type": "tool_result",
-                    "tool_use_id": "shell-failed",
-                    "content": "Exit code 7\nexpected-error",
-                    "is_error": True,
-                }],
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="shell-failed-start",
+        )
+    )
+    hook = hook_translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PostToolUseFailure",
+                "tool_use_id": "shell-failed",
+                "tool_name": "Bash",
+                "tool_input": {"command": "exit 7"},
+                "error": "Exit code 7\nexpected-error",
             },
-            "toolUseResult": "Error: Exit code 7\nexpected-error",
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="transcript",
-        raw_event_id="shell-failed-transcript",
-    ))
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="shell-failed-hook",
+        )
+    )
+    transcript = transcript_translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "shell-failed-result",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "shell-failed",
+                            "content": "Exit code 7\nexpected-error",
+                            "is_error": True,
+                        }
+                    ],
+                },
+                "toolUseResult": "Error: Exit code 7\nexpected-error",
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="shell-failed-transcript",
+        )
+    )
 
     hook_finished = payloads(hook, ShellFinished)[0]
     transcript_finished = payloads(transcript, ShellFinished)[0]
     assert hook_finished.payload.exit_code == 7
-    assert mapper.encode_canonical_event(hook_finished) == mapper.encode_canonical_event(
-        transcript_finished
-    )
+    assert mapper.encode_canonical_event(hook_finished) == mapper.encode_canonical_event(transcript_finished)
 
 
 def test_claude_question_preserves_multiple_prompts_and_multiselect():
@@ -6510,42 +8977,47 @@ def test_claude_refused_question_resolves_from_the_transcript_not_a_missing_hook
     transcript's tool_result is the only evidence the question ended — and it names no
     tool, so the resolution depends on remembering the id from the request."""
     translator = ClaudeCanonicalTranslator()
-    translator.translate(raw_event(
-        {
-            "hook_event_name": "PreToolUse",
-            "tool_use_id": "question-refused",
-            "tool_name": "AskUserQuestion",
-            "tool_input": {"questions": [{"question": "Which approach?", "options": []}]},
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="hook",
-        raw_event_id="ask-refused",
-    ))
-
-    refusal = translator.translate(raw_event(
-        {
-            "type": "user",
-            "uuid": "question-refused-result",
-            "message": {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": "question-refused",
-                        "is_error": True,
-                        "content": (
-                            "The user doesn't want to proceed with this tool use. "
-                            "The tool use was rejected. To tell you how to proceed, "
-                            "the user said:\nThe user wants to clarify these questions."
-                        ),
-                    }
-                ],
+    translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_use_id": "question-refused",
+                "tool_name": "AskUserQuestion",
+                "tool_input": {"questions": [{"question": "Which approach?", "options": []}]},
             },
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="transcript",
-        raw_event_id="ask-refused-result",
-    ))
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="ask-refused",
+        )
+    )
+
+    refusal = translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "question-refused-result",
+                "userFeedback": ("The user wants to clarify these questions. No answer provided."),
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "question-refused",
+                            "is_error": True,
+                            "content": (
+                                "The user doesn't want to proceed with this tool use. "
+                                "The tool use was rejected. To tell you how to proceed, "
+                                "the user said:\nThe user wants to clarify these questions."
+                            ),
+                        }
+                    ],
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="ask-refused-result",
+        )
+    )
 
     # A refusal answers nothing, and the harness's own word for the refusal
     # (rejected, discussed) is deliberately not carried: every reader collapsed
@@ -6561,37 +9033,41 @@ def test_claude_answered_question_leaves_the_transcript_result_to_the_hook():
     Both would converge on one event_id where the first writer wins, so the transcript
     must stay silent on a question that succeeded."""
     translator = ClaudeCanonicalTranslator()
-    translator.translate(raw_event(
-        {
-            "hook_event_name": "PreToolUse",
-            "tool_use_id": "question-answered",
-            "tool_name": "AskUserQuestion",
-            "tool_input": {"questions": [{"question": "Which approach?", "options": []}]},
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="hook",
-        raw_event_id="ask-answered",
-    ))
-
-    result = translator.translate(raw_event(
-        {
-            "type": "user",
-            "uuid": "question-answered-result",
-            "message": {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": "question-answered",
-                        "content": "The user answered: vulture wrapper",
-                    }
-                ],
+    translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_use_id": "question-answered",
+                "tool_name": "AskUserQuestion",
+                "tool_input": {"questions": [{"question": "Which approach?", "options": []}]},
             },
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="transcript",
-        raw_event_id="ask-answered-result",
-    ))
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="ask-answered",
+        )
+    )
+
+    result = translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "question-answered-result",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "question-answered",
+                            "content": "The user answered: vulture wrapper",
+                        }
+                    ],
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="ask-answered-result",
+        )
+    )
 
     assert payloads(result, QuestionAnswered) == []
 
@@ -6656,6 +9132,30 @@ def test_codex_session_turn_operation_usage_and_context_records():
     assert len(payloads(usage, UsageReported)) == 1
     assert len(payloads(usage, ContextReported)) == 1
 
+    limits_only = translator.translate(
+        raw_event(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": None,
+                    "rate_limits": {
+                        "primary": {
+                            "used_percent": 19.0,
+                            "window_minutes": 10080,
+                            "resets_at": 1788142132,
+                        }
+                    },
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="limits-only",
+        )
+    )
+    assert limits_only.canonical_events == ()
+    assert limits_only.decision == "ignored_nonsemantic"
+
 
 def test_codex_rewind_session_keeps_its_prior_session_identity():
     result = CodexCanonicalTranslator().translate(
@@ -6703,12 +9203,8 @@ def test_codex_rewind_intent_supplies_the_relation_missing_from_native_metadata(
     first = translator.translate(native)
     repeated = translator.translate(native)
 
-    assert payloads(first, SessionStarted)[0].payload.continued_from == SessionId(
-        "session-before-rewind"
-    )
-    assert payloads(repeated, SessionStarted)[0].payload.continued_from == SessionId(
-        "session-before-rewind"
-    )
+    assert payloads(first, SessionStarted)[0].payload.continued_from == SessionId("session-before-rewind")
+    assert payloads(repeated, SessionStarted)[0].payload.continued_from == SessionId("session-before-rewind")
 
 
 def test_codex_message_keeps_its_native_turn_identity():
@@ -6789,14 +9285,18 @@ def test_codex_question_uses_the_same_attention_prompt_model():
                     "type": "function_call",
                     "name": "request_user_input",
                     "call_id": "ask-one",
-                    "arguments": json.dumps({
-                        "questions": [{
-                            "id": "choice",
-                            "header": "Choice",
-                            "question": "Continue?",
-                            "options": [{"label": "Yes", "description": "Proceed"}],
-                        }]
-                    }),
+                    "arguments": json.dumps(
+                        {
+                            "questions": [
+                                {
+                                    "id": "choice",
+                                    "header": "Choice",
+                                    "question": "Continue?",
+                                    "options": [{"label": "Yes", "description": "Proceed"}],
+                                }
+                            ]
+                        }
+                    ),
                 },
             },
             harness=HarnessName.CODEX,
@@ -6819,17 +9319,21 @@ def test_codex_question_result_records_the_selected_labels():
                     "type": "function_call",
                     "name": "request_user_input",
                     "call_id": "ask-one",
-                    "arguments": json.dumps({
-                        "questions": [{
-                            "id": "colour",
-                            "header": "Colour",
-                            "question": "Which colour?",
-                            "options": [
-                                {"label": "Blue", "description": "Use blue"},
-                                {"label": "Green", "description": "Use green"},
-                            ],
-                        }]
-                    }),
+                    "arguments": json.dumps(
+                        {
+                            "questions": [
+                                {
+                                    "id": "colour",
+                                    "header": "Colour",
+                                    "question": "Which colour?",
+                                    "options": [
+                                        {"label": "Blue", "description": "Use blue"},
+                                        {"label": "Green", "description": "Use green"},
+                                    ],
+                                }
+                            ]
+                        }
+                    ),
                 },
             },
             harness=HarnessName.CODEX,
@@ -6845,9 +9349,7 @@ def test_codex_question_result_records_the_selected_labels():
                 "payload": {
                     "type": "function_call_output",
                     "call_id": "ask-one",
-                    "output": json.dumps({
-                        "answers": {"colour": {"answers": ["Green"]}}
-                    }),
+                    "output": json.dumps({"answers": {"colour": {"answers": ["Green"]}}}),
                 },
             },
             harness=HarnessName.CODEX,
@@ -6863,18 +9365,198 @@ def test_codex_question_result_records_the_selected_labels():
     assert answer.labels == ("Green",)
 
 
+def test_codex_interrupted_question_resolves_without_answers():
+    translator = CodexCanonicalTranslator()
+    translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call",
+                    "name": "request_user_input",
+                    "call_id": "ask-interrupted",
+                    "arguments": json.dumps(
+                        {
+                            "questions": [
+                                {
+                                    "id": "path",
+                                    "header": "Path",
+                                    "question": "Which path?",
+                                    "options": [
+                                        {
+                                            "label": "Safe",
+                                            "description": "Use the safe path",
+                                        }
+                                    ],
+                                }
+                            ]
+                        }
+                    ),
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="ask-interrupted",
+        )
+    )
+    resolved = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call_output",
+                    "call_id": "ask-interrupted",
+                    "output": "aborted by user after 32.0s",
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="answer-interrupted",
+        )
+    )
+
+    answer = payloads(resolved, QuestionAnswered)[0].payload
+    assert answer.answers == ()
+    assert answer.feedback is None
+
+
+def test_codex_question_result_replaces_native_free_text_labels():
+    translator = CodexCanonicalTranslator()
+    translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call",
+                    "name": "request_user_input",
+                    "call_id": "ask-free-text",
+                    "arguments": json.dumps(
+                        {
+                            "questions": [
+                                {
+                                    "id": "colour",
+                                    "header": "Colour",
+                                    "question": "Which colour?",
+                                    "options": [{"label": "Blue", "description": "Use blue"}],
+                                }
+                            ]
+                        }
+                    ),
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="ask-free-text",
+            source_position="20",
+        )
+    )
+    answered = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call_output",
+                    "call_id": "ask-free-text",
+                    "output": json.dumps(
+                        {
+                            "answers": {
+                                "colour": {
+                                    "answers": [
+                                        "None of the above",
+                                        "user_note: Amber",
+                                    ]
+                                }
+                            }
+                        }
+                    ),
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="answer-free-text",
+            source_position="21",
+        )
+    )
+
+    answer = payloads(answered, QuestionAnswered)[0].payload.answers[0]
+    assert answer.labels == ("Amber",)
+
+
+def test_codex_subagent_question_error_resolves_the_false_pending_question():
+    translator = CodexCanonicalTranslator()
+    translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call",
+                    "name": "request_user_input",
+                    "call_id": "ask-child",
+                    "arguments": json.dumps(
+                        {
+                            "questions": [
+                                {
+                                    "id": "continue",
+                                    "header": "Continue",
+                                    "question": "Should the child continue?",
+                                    "options": [{"label": "Yes", "description": "Continue"}],
+                                }
+                            ]
+                        }
+                    ),
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="child_rollout",
+            raw_event_id="ask-child",
+            source_position="30",
+        )
+    )
+    resolved = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call_output",
+                    "call_id": "ask-child",
+                    "output": ("request_user_input can only be used by the root thread"),
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="child_rollout",
+            raw_event_id="answer-child",
+            source_position="31",
+        )
+    )
+
+    answer = payloads(resolved, QuestionAnswered)[0].payload
+    assert answer.answers == ()
+    assert answer.feedback is None
+
+
 # A `/command` turn is THREE user-shaped transcript records (measured, session
 # 6a23d1c5): the isMeta caveat, the `<command-name>` envelope, and the command's
 # echoed stdout. Two of them carried no structural flag, so each became its own
 # `role="user"` message and one keystroke drew three blocks, two labelled "you".
 CLAUDE_SLASH_COMMAND_TURN = (
-    ("caveat", "<local-command-caveat>Caveat: The messages below were generated "
-               "by the user while running local commands.</local-command-caveat>", True),
-    ("envelope", "<command-name>/model</command-name>\n            "
-                 "<command-message>model</command-message>\n            "
-                 "<command-args>opus</command-args>", False),
-    ("stdout", "<local-command-stdout>Set model to Opus 5 and saved as your "
-               "default for new sessions</local-command-stdout>", False),
+    (
+        "caveat",
+        "<local-command-caveat>Caveat: The messages below were generated "
+        "by the user while running local commands.</local-command-caveat>",
+        True,
+    ),
+    (
+        "envelope",
+        "<command-name>/model</command-name>\n            "
+        "<command-message>model</command-message>\n            "
+        "<command-args>opus</command-args>",
+        False,
+    ),
+    (
+        "stdout",
+        "<local-command-stdout>Set model to Opus 5 and saved as your default for new sessions</local-command-stdout>",
+        False,
+    ),
 )
 
 
@@ -6923,8 +9605,11 @@ def test_claude_slash_model_reports_the_selection_at_the_moment_it_was_made():
 def test_claude_slash_effort_reports_the_selection():
     translation = ClaudeCanonicalTranslator().translate(
         raw_event(
-            {"type": "user", "uuid": "eff", "message": {"content":
-                "<command-name>/effort</command-name><command-args>high</command-args>"}},
+            {
+                "type": "user",
+                "uuid": "eff",
+                "message": {"content": "<command-name>/effort</command-name><command-args>high</command-args>"},
+            },
             harness=HarnessName.CLAUDE_CODE,
             source_type="transcript",
             raw_event_id="slash-effort",
@@ -6939,37 +9624,41 @@ def test_claude_subagent_hook_reports_its_own_effort():
     # hook firing mid-turn inside the subagent's own process is the only place
     # its effort level is ever observed from.
     translator = ClaudeCanonicalTranslator()
-    translator.translate(replace(
-        raw_event(
-            {
-                "hook_event_name": "SubagentStart",
-                "hook_event_id": "child-start",
-                "agent_id": "child-one",
-            },
-            harness=HarnessName.CLAUDE_CODE,
-            source_type="hook",
-            raw_event_id="child-start-hook",
-        ),
-        actor_id=ActorId("child-one"),
-        parent_actor_id=ActorId("session-one:lead"),
-    ))
-    pretool = translator.translate(replace(
-        raw_event(
-            {
-                "hook_event_name": "PreToolUse",
-                "hook_event_id": "child-pretool",
-                "tool_use_id": "tool-one",
-                "tool_name": "Read",
-                "tool_input": {"file_path": "/work/a.py"},
-                "effort": {"level": "high"},
-            },
-            harness=HarnessName.CLAUDE_CODE,
-            source_type="hook",
-            raw_event_id="child-pretool-hook",
-        ),
-        actor_id=ActorId("child-one"),
-        parent_actor_id=ActorId("session-one:lead"),
-    ))
+    translator.translate(
+        replace(
+            raw_event(
+                {
+                    "hook_event_name": "SubagentStart",
+                    "hook_event_id": "child-start",
+                    "agent_id": "child-one",
+                },
+                harness=HarnessName.CLAUDE_CODE,
+                source_type="hook",
+                raw_event_id="child-start-hook",
+            ),
+            actor_id=ActorId("child-one"),
+            parent_actor_id=ActorId("session-one:lead"),
+        )
+    )
+    pretool = translator.translate(
+        replace(
+            raw_event(
+                {
+                    "hook_event_name": "PreToolUse",
+                    "hook_event_id": "child-pretool",
+                    "tool_use_id": "tool-one",
+                    "tool_name": "Read",
+                    "tool_input": {"file_path": "/work/a.py"},
+                    "effort": {"level": "high"},
+                },
+                harness=HarnessName.CLAUDE_CODE,
+                source_type="hook",
+                raw_event_id="child-pretool-hook",
+            ),
+            actor_id=ActorId("child-one"),
+            parent_actor_id=ActorId("session-one:lead"),
+        )
+    )
 
     effort_events = payloads(pretool, EffortChanged)
     assert len(effort_events) == 1
@@ -6979,18 +9668,20 @@ def test_claude_subagent_hook_reports_its_own_effort():
 
 
 def test_claude_pretool_without_effort_reports_no_effort_change():
-    translation = ClaudeCanonicalTranslator().translate(raw_event(
-        {
-            "hook_event_name": "PreToolUse",
-            "hook_event_id": "no-effort-pretool",
-            "tool_use_id": "tool-two",
-            "tool_name": "Read",
-            "tool_input": {"file_path": "/work/b.py"},
-        },
-        harness=HarnessName.CLAUDE_CODE,
-        source_type="hook",
-        raw_event_id="no-effort-hook",
-    ))
+    translation = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {
+                "hook_event_name": "PreToolUse",
+                "hook_event_id": "no-effort-pretool",
+                "tool_use_id": "tool-two",
+                "tool_name": "Read",
+                "tool_input": {"file_path": "/work/b.py"},
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="no-effort-hook",
+        )
+    )
 
     assert not payloads(translation, EffortChanged)
 
@@ -6998,8 +9689,7 @@ def test_claude_pretool_without_effort_reports_no_effort_change():
 def test_claude_argless_slash_command_settles_no_state():
     translation = ClaudeCanonicalTranslator().translate(
         raw_event(
-            {"type": "user", "uuid": "bare", "message": {"content":
-                "<command-name>/model</command-name>"}},
+            {"type": "user", "uuid": "bare", "message": {"content": "<command-name>/model</command-name>"}},
             harness=HarnessName.CLAUDE_CODE,
             source_type="transcript",
             raw_event_id="slash-bare",

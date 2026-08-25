@@ -64,10 +64,16 @@ type AnswersBody = {
   readonly kind: 'answers';
   readonly answers: readonly {
     readonly questionId: string;
+    readonly question: string;
     readonly labels: readonly string[];
   }[];
   readonly feedback: string | null;
 };
+
+export type QuestionTextIndex = ReadonlyMap<
+  string,
+  ReadonlyMap<string, string>
+>;
 
 type PlanResolutionBody = {
   readonly kind: 'plan-resolution';
@@ -279,6 +285,7 @@ function note(
 export function presentEntry(
   entry: Entry,
   actors: ReadonlyMap<ActorId, string>,
+  questionText: QuestionTextIndex = new Map(),
 ): EntryPresentation {
   switch (entry.type) {
     case 'turn_started':
@@ -400,7 +407,13 @@ export function presentEntry(
         label: 'you ▸ answered',
         body: {
           kind: 'answers',
-          answers: entry.body.answers,
+          answers: entry.body.answers.map((answer) => ({
+            ...answer,
+            question:
+              questionText
+                .get(entry.body.attentionId)
+                ?.get(answer.questionId) ?? answer.questionId,
+          })),
           feedback: entry.body.feedback,
         },
         questions: [],

@@ -171,10 +171,7 @@ def decide(
 def feedback(
     screen_driver: ScreenDriver, win: WindowId, text: str, sleep: Callable[[float], None] = time.sleep,
 ) -> Fedback:
-    """Reject the plan with feedback: focus the "Tell Claude what to change"
-    row (its digit only focuses — measured), type the text inline, Enter
-    submits. Newlines collapse to spaces (the row is a single-line editor;
-    a raw CR mid-text would submit early)."""
+    """Reject the plan with feedback through the verified feedback row."""
     text = " ".join((text or "").split())
     if not text:
         raise PlanError("feedback", "empty feedback")
@@ -182,8 +179,19 @@ def feedback(
     row = next((row for row in rs if row.feedback), None)
     if row is None:
         raise PlanError("feedback", "no feedback row on screen")
-    screen_driver.send_key(win, row.digit)
-    sleep(POLL_S)
+    try:
+        numberedmenu.select(
+            screen_driver,
+            win,
+            lambda: _numbered_rows(screen_driver, win),
+            row.digit,
+            sleep=sleep,
+            key_gap=POLL_S,
+        )
+    except numberedmenu.SelectionError as error:
+        raise PlanError("feedback", str(error)) from error
+    if not dialog_open(screen_driver.get_text(win) or ""):
+        raise PlanError("feedback", "feedback row closed the plan dialog")
     if not screen_driver.send_text(win, text):
         raise PlanError("feedback", "text not delivered")
     _, ok = screendrive.poll_until(

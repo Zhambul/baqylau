@@ -7,7 +7,6 @@ from domain.events import (
     ActorNameChanged,
     ActorStarted,
     CanonicalEvent,
-    CompactionFinished,
     CompactionStarted,
     EventPayload,
     GoalChanged,
@@ -21,7 +20,7 @@ from harness.impl.claude_code.canonical.support import event
 from harness.impl.claude_code.canonical.tasks import task_hook_event
 from harness.impl.claude_code.canonical.toolcalls import ToolCallSemantics
 from harness.impl.claude_code.canonical.turns import TurnSemantics
-from harness.models import RawEvent
+from harness.models import RawEvent, session_run_finished_event
 from harness.models.selections import SelectionSemantics
 
 
@@ -91,8 +90,16 @@ def translate_hook(
     if hook_name == "SessionStart":
         return session_events(raw_event, hook)
     if hook_name == "SessionEnd":
-        payload: EventPayload = SessionFinished(Outcome.SUCCEEDED, hook.reason or None)
-        return [event(raw_event, "session", str(raw_event.session_id), "finished", payload)]
+        session_finished = SessionFinished(Outcome.SUCCEEDED, hook.reason or None)
+        if raw_event.terminal_window_id is not None:
+            return [session_run_finished_event(raw_event, session_finished)]
+        return [event(
+            raw_event,
+            "session",
+            str(raw_event.session_id),
+            "finished",
+            session_finished,
+        )]
     if hook_name == "Stop":
         return [
             turn_finished(raw_event, turn_semantics, native_identity, Outcome.SUCCEEDED),
@@ -119,7 +126,7 @@ def translate_hook(
             *effort_report(raw_event, hook, selection_semantics),
         ]
     if hook_name in ("PostToolUse", "PostToolUseFailure"):
-        return [
+        events = [
             *tool_call_semantics.tool_finished(raw_event, records.ToolCallNative(
                 tool_use_id=hook.tool_use_id,
                 tool_name=hook.tool_name,
@@ -132,6 +139,7 @@ def translate_hook(
             ), hook_name == "PostToolUseFailure"),
             *effort_report(raw_event, hook, selection_semantics),
         ]
+        return events
     if hook_name == "SubagentStart":
         actor_id = raw_event.actor_id
         role: ActorRole = ActorRole.TEAMMATE if raw_event.source_type == "teammate_hook" else ActorRole.CHILD
@@ -180,13 +188,9 @@ def translate_hook(
             )
         ]
     if hook_name == "PostCompact":
-        return [
-            event(
-                raw_event,
-                "compaction",
-                native_identity,
-                "finished",
-                CompactionFinished(None, None),
-            )
-        ]
+        # Claude writes the authoritative `compact_boundary` transcript record
+        # for this same finish. That record has the exact pre-compaction token
+        # count; this hook has no counts. Treat the hook as delivery plumbing so
+        # one native compaction produces one finished fact and one feed entry.
+        return []
     return []

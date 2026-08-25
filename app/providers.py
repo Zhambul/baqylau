@@ -32,7 +32,10 @@ from core.repository import RepositoryQueries
 from dashboard import config as dashboard_config
 from dashboard.services.notices import DashboardNotificationState
 from dashboard.services.preferences import ApplicationPreferenceService
-from dashboard.services.workspace import SessionApplicationService
+from dashboard.services.workspace import (
+    QueuedPromptCanonicalEventReaction,
+    SessionApplicationService,
+)
 from audit.recorder import AuditRecorder
 from audit.telemetry import BrowserTelemetryService
 from engine.interpret.loop import Interpreter
@@ -58,23 +61,31 @@ from engine.interpret.reactions import (
     SessionUpsertCanonicalEventReaction,
 )
 from engine.interpret.translators import (
+    ControlTranslator,
     InterruptTranslator,
     LivenessTranslator,
+    ResumeLivenessTranslator,
+    SessionResumeTranslator,
     ShellOutputTranslator,
 )
 from harness.contract import CanonicalEventReaction, CoreTranslator
 from harness.hooks.gateway import HookGatewayService
 from harness.impl import installed
 from harness.models import (
+    CONTROL_SOURCE_TYPE,
     INTERRUPT_SOURCE_TYPE,
     LIVENESS_SOURCE_TYPE,
     OUTPUT_LOCATION_SOURCE_TYPE,
+    RESUME_LIVENESS_SOURCE_TYPE,
+    RESUME_SOURCE_TYPE,
     InterruptRegistry,
 )
 from harness.registry import HarnessRegistry
 from harness.services.catalog import HarnessCatalogService
+from harness.services.control_effects import ControlEffectRecorder
 from harness.services.controls import HarnessControlService
 from harness.services.launcher import HarnessLauncherService
+from harness.services.launch_effects import SessionLaunchEffectRecorder
 from harness.services.probe import TerminalInputService
 from harness.services.telemetry import TelemetryGatewayService
 from harness.services.usage import ApplicationUsageState, HarnessUsageService
@@ -247,7 +258,6 @@ def session_data(database: MainDb) -> SessionDataRepository:
 SessionDataStore = Annotated[SessionDataRepository, Depends(session_data)]
 
 
-
 @singleton
 def workspaces(database: MainDb) -> SessionWorkspaceRepository:
     return SqliteSessionWorkspaceRepository(database)
@@ -398,6 +408,18 @@ InterruptTracking = Annotated[InterruptRegistry, Depends(interrupt_registry)]
 
 
 @singleton
+def control_effects(
+    raw: RawEvents,
+    workspaces: Workspaces,
+    read_model: SessionDataStore,
+) -> ControlEffectRecorder:
+    return ControlEffectRecorder(raw, workspaces, read_model)
+
+
+ControlEffects = Annotated[ControlEffectRecorder, Depends(control_effects)]
+
+
+@singleton
 def controls(
     session_storage: Sessions,
     adapter: Terminal,
@@ -405,10 +427,9 @@ def controls(
     read_model: SessionDataStore,
     audit: Recorder,
     interrupts: InterruptTracking,
+    effects: ControlEffects,
 ) -> HarnessControlService:
-    return HarnessControlService(
-        session_storage, adapter, plugin, read_model, audit, interrupts
-    )
+    return HarnessControlService(session_storage, adapter, plugin, read_model, audit, interrupts, effects)
 
 
 Controls = Annotated[HarnessControlService, Depends(controls)]
@@ -430,11 +451,8 @@ def usage_state(harnesses: Registry, usage: AccountUsage) -> ApplicationUsageSta
 UsageState = Annotated[ApplicationUsageState, Depends(usage_state)]
 
 
-
 @singleton
-def terminal_input(
-    session_storage: Sessions, adapter: Terminal, plugin: InstalledTerminal
-) -> TerminalInputService:
+def terminal_input(session_storage: Sessions, adapter: Terminal, plugin: InstalledTerminal) -> TerminalInputService:
     return TerminalInputService(session_storage, adapter, plugin.viewport)
 
 
@@ -461,7 +479,6 @@ def dashboard_notification_state() -> DashboardNotificationState:
 NotificationState = Annotated[DashboardNotificationState, Depends(dashboard_notification_state)]
 
 
-
 @singleton
 def hook_gateway(harnesses: Registry, raw: RawEvents) -> HookGatewayService:
     return HookGatewayService(harnesses, raw)
@@ -483,6 +500,7 @@ TelemetryGateway = Annotated[TelemetryGatewayService, Depends(telemetry_gateway)
 @singleton
 def application_preferences(
     read_model: SessionDataStore,
+    session_storage: Sessions,
     adapter: Terminal,
     checkouts: Repositories,
     usage: UsageState,
@@ -494,14 +512,21 @@ def application_preferences(
     signals: PresenceSignals,
 ) -> ApplicationPreferenceService:
     return ApplicationPreferenceService(
-        read_model, adapter, checkouts, usage, notices, drafts, settings, directories,
-        subscriptions, signals
+        read_model,
+        session_storage,
+        adapter,
+        checkouts,
+        usage,
+        notices,
+        drafts,
+        settings,
+        directories,
+        subscriptions,
+        signals,
     )
 
 
-ApplicationPreferences = Annotated[
-    ApplicationPreferenceService, Depends(application_preferences)
-]
+ApplicationPreferences = Annotated[ApplicationPreferenceService, Depends(application_preferences)]
 
 
 @singleton
@@ -529,10 +554,45 @@ SessionApplication = Annotated[SessionApplicationService, Depends(session_applic
 
 
 @singleton
+def launch_effects(
+    raw: RawEvents,
+    session_storage: Sessions,
+) -> SessionLaunchEffectRecorder:
+    return SessionLaunchEffectRecorder(raw, session_storage)
+
+
+LaunchEffects = Annotated[SessionLaunchEffectRecorder, Depends(launch_effects)]
+
+
+def harness_launch_environment() -> tuple[tuple[str, str], ...]:
+    """Values that a terminal-launched harness must get from Baqylau.
+
+    A terminal application is a separate process. It does not inherit changes
+    from the daemon environment. Pass only the values that define the harness
+    runtime and the callback endpoint.
+    """
+    return (
+        (
+            "BAQYLAU_DASHBOARD_PORT",
+            os.environ.get("BAQYLAU_DASHBOARD_PORT", "8377"),
+        ),
+    )
+
+
+@singleton
 def launcher(
-    harnesses: Registry, adapter: Terminal, plugin: InstalledTerminal
+    harnesses: Registry,
+    adapter: Terminal,
+    plugin: InstalledTerminal,
+    effects: LaunchEffects,
 ) -> HarnessLauncherService:
-    return HarnessLauncherService(harnesses, adapter, plugin.tabs)
+    return HarnessLauncherService(
+        harnesses,
+        adapter,
+        plugin.tabs,
+        effects,
+        launch_environment=harness_launch_environment(),
+    )
 
 
 Launcher = Annotated[HarnessLauncherService, Depends(launcher)]
@@ -549,8 +609,11 @@ PaneCommands = Annotated[PaneCommandService, Depends(pane_commands)]
 @singleton
 def core_translators() -> Mapping[str, CoreTranslator]:
     return {
+        CONTROL_SOURCE_TYPE: ControlTranslator(),
         OUTPUT_LOCATION_SOURCE_TYPE: ShellOutputTranslator(),
         LIVENESS_SOURCE_TYPE: LivenessTranslator(),
+        RESUME_SOURCE_TYPE: SessionResumeTranslator(),
+        RESUME_LIVENESS_SOURCE_TYPE: ResumeLivenessTranslator(),
         INTERRUPT_SOURCE_TYPE: InterruptTranslator(),
     }
 
@@ -563,6 +626,7 @@ def translation_inputs(
     session_storage: Sessions,
     output: ShellOutput,
     raw: RawEvents,
+    repositories: Repositories,
 ) -> tuple[CanonicalEventReaction, ...]:
     """The two facts the interpreter's own next pull depends on.
 
@@ -573,7 +637,7 @@ def translation_inputs(
     keeps safe.
     """
     return (
-        SessionUpsertCanonicalEventReaction(session_storage),
+        SessionUpsertCanonicalEventReaction(session_storage, repositories),
         ShellOutputCanonicalEventReaction(output, raw),
     )
 
@@ -587,10 +651,12 @@ def reactions(
     adapter: Terminal,
     widths: PaneWidths,
     interrupts: InterruptTracking,
+    workspaces: Workspaces,
 ) -> tuple[CanonicalEventReaction, ...]:
     """What a committed fact CAUSES, in dependency order, on the reaction loop."""
     return (
         PaneCanonicalEventReaction(adapter, session_storage, widths),
+        QueuedPromptCanonicalEventReaction(workspaces),
         InterruptCanonicalEventReaction(interrupts),
     )
 
@@ -602,11 +668,13 @@ Reactions = Annotated[tuple[CanonicalEventReaction, ...], Depends(reactions)]
 def model_naming(harness_registry: Registry) -> ModelNaming:
     """One namer per harness, for the writers: the reason a model shows the
     SAME name in the picker, on the actor row and in the feed."""
-    return ModelNaming({
-        plugin.info.name: plugin.model_display
-        for plugin in harness_registry.plugins()
-        if plugin.model_display is not None
-    })
+    return ModelNaming(
+        {
+            plugin.info.name: plugin.model_display
+            for plugin in harness_registry.plugins()
+            if plugin.model_display is not None
+        }
+    )
 
 
 Naming = Annotated[ModelNaming, Depends(model_naming)]
@@ -655,6 +723,8 @@ def interpreter(
     inputs: TranslationInputs,
     audit: Recorder,
     interrupts: InterruptTracking,
+    adapter: Terminal,
+    effects: LaunchEffects,
 ) -> Interpreter:
     return Interpreter(
         session_storage,
@@ -666,13 +736,13 @@ def interpreter(
         inputs,
         audit,
         interrupts,
+        session_terminal_state=adapter,
+        session_resume_recorder=effects,
     )
 
 
 @singleton
-def applied_listeners(
-    adapter: Terminal, session_storage: Sessions
-) -> tuple[AppliedActorListener, ...]:
+def applied_listeners(adapter: Terminal, session_storage: Sessions) -> tuple[AppliedActorListener, ...]:
     """What a COMMITTED aggregate change causes, as opposed to what a fact does.
 
     Wired here rather than inside the loop for the same reason the pane reaction
@@ -707,7 +777,6 @@ def reaction_loop(
         control_service,
         audit,
     )
-
 
 
 @singleton

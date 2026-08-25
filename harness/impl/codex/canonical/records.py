@@ -98,6 +98,7 @@ class ToolRequest(BaseModel):
     q: str | None = None
     query: str | None = None
     url: str | None = None
+    reference: str | None = Field(default=None, alias="ref_id")
 
 
 class CodexToolArguments(BaseModel):
@@ -115,6 +116,7 @@ class CodexToolArguments(BaseModel):
     url: str | None = None
     path: str | None = None
     file_path: str | None = None
+    uri: str | None = None
 
 
 PayloadModel = TypeVar("PayloadModel", bound=BaseModel)
@@ -385,6 +387,22 @@ class PlanItem(BaseModel):
     id: str | None = None
 
 
+class McpToolCallItem(BaseModel):
+    """The authoritative completion state for one MCP call.
+
+    The call arguments and result have a tool-specific shape. The outer custom
+    tool records own that content. This item owns only the MCP identity and its
+    native completion state.
+    """
+
+    model_config = OPEN_FOREIGN
+    type: Literal["McpToolCall"]
+    id: str | None = None
+    server: str | None = None
+    tool: str | None = None
+    status: str | None = None
+
+
 class CoveredItem(BaseModel):
     """An item whose canonical facts come from another native record.
 
@@ -396,13 +414,14 @@ class CoveredItem(BaseModel):
 
     model_config = OPEN_FOREIGN
     type: Literal[
-        "UserMessage", "AgentMessage", "Reasoning", "McpToolCall", "ContextCompaction",
+        "UserMessage", "AgentMessage", "Reasoning", "ContextCompaction",
+        "Extension", "ImageView",
     ]
 
 
 ItemCompletedItem: TypeAlias = Union[
     FileChangeItem, CommandExecutionItem, SubAgentActivityItem, CollabAgentToolCallItem,
-    PlanItem, CoveredItem,
+    PlanItem, McpToolCallItem, CoveredItem,
 ]
 
 
@@ -417,6 +436,8 @@ class ItemCompletedType(StrEnum):
     REASONING = "Reasoning"
     MCP_TOOL_CALL = "McpToolCall"
     CONTEXT_COMPACTION = "ContextCompaction"
+    EXTENSION = "Extension"
+    IMAGE_VIEW = "ImageView"
 
 # `item.type` -> the declared model for it. A plain dict, not a pydantic
 # discriminated union: pydantic's "smart" union mode picks by a coercion-cost
@@ -435,8 +456,10 @@ ITEM_COMPLETED_ITEMS: Mapping[ItemCompletedType, type[ItemCompletedItem]] = {
     ItemCompletedType.USER_MESSAGE: CoveredItem,
     ItemCompletedType.AGENT_MESSAGE: CoveredItem,
     ItemCompletedType.REASONING: CoveredItem,
-    ItemCompletedType.MCP_TOOL_CALL: CoveredItem,
+    ItemCompletedType.MCP_TOOL_CALL: McpToolCallItem,
     ItemCompletedType.CONTEXT_COMPACTION: CoveredItem,
+    ItemCompletedType.EXTENSION: CoveredItem,
+    ItemCompletedType.IMAGE_VIEW: CoveredItem,
 }
 
 
@@ -447,7 +470,7 @@ class FileChanges(RootModel[Mapping[str, FileChangeEntry]]):
 CompletedItem = Annotated[
     Union[
         FileChangeItem, CommandExecutionItem, SubAgentActivityItem,
-        CollabAgentToolCallItem, PlanItem, CoveredItem,
+        CollabAgentToolCallItem, PlanItem, McpToolCallItem, CoveredItem,
     ],
     Field(discriminator="type"),
 ]
@@ -736,6 +759,8 @@ class ContentPart(BaseModel):
     model_config = FOREIGN
     type: str | None = None
     text: str | None = None
+    image_url: str | None = None
+    detail: str | None = None
 
 
 class AgentCommunicationPayload(BaseModel):
@@ -1182,8 +1207,18 @@ class StdinRecord:
 class CommandCompletedRecord:
     kind: Literal["command_completed"] = "command_completed"
     process_id: CodexShellId
+    command: tuple[str, ...]
     output: str
     exit: int | None
+    item_id: str
+
+
+@dataclass(frozen=True, kw_only=True)
+class McpToolCompletedRecord:
+    kind: Literal["mcp_tool_completed"] = "mcp_tool_completed"
+    server: str
+    tool: str
+    status: str
     item_id: str
 
 
@@ -1327,6 +1362,7 @@ RolloutRecord: TypeAlias = Union[
     TurnContextRecord, UsageRecord, PatchRecord, CompactRecord, TaskStartedRecord,
     TaskCompleteRecord, TurnAbortedRecord, PromptRecord, SkillRecord, ReasoningRecord, MessageRecord,
     SearchRecord, ExecRecord, ExecResultRecord, StdinRecord, CommandCompletedRecord,
+    McpToolCompletedRecord,
     ChatRecord, ThinkRecord, PatchCallRecord, AskRecord, PlanRecord, SettingsRecord,
     CompactBoundaryRecord, ToolRecord, ActorActivityRecord, CollaborationCallRecord,
     TaskListRecord, GoalRecord, GoalToolRecord, ToolBatchRecord,

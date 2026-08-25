@@ -22,6 +22,7 @@ class ComposerDraftResponse(BaseModel):
 
 
 class QueuedMessageResponse(BaseModel):
+    request_id: str
     text: str
 
 

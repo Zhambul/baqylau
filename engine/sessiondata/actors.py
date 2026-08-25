@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from decimal import Decimal
+from typing import TypeVar
 
 from domain.events import (
     CanonicalEvent,
@@ -50,7 +51,7 @@ from domain.events import (
     WebFetched,
     WorktreeChanged,
 )
-from domain.ids import AttentionId, ShellId
+from domain.ids import AssignmentId, ShellId
 from domain.sessiondata import (
     ActorContext,
     ActorFacts,
@@ -59,7 +60,15 @@ from domain.sessiondata import (
     ActorUsage,
     LifecycleState,
 )
-from domain.values import ExecutionMode, FileAction, MessagePhase, MessageRole, Outcome, WorktreeAction
+from domain.values import (
+    ActorRole,
+    ExecutionMode,
+    FileAction,
+    MessagePhase,
+    MessageRole,
+    Outcome,
+    WorktreeAction,
+)
 from engine.sessiondata.contract import AggregateState, SessionDataWriter
 from engine.sessiondata.naming import ModelNaming
 
@@ -81,20 +90,20 @@ class ActorWriter(SessionDataWriter):
     def __init__(self, model_naming: ModelNaming | None = None) -> None:
         self.model_naming = model_naming or ModelNaming()
 
-    def write(
-        self, canonical_event: CanonicalEvent[EventPayload], aggregate_state: AggregateState
-    ) -> AggregateState:
+    def write(self, canonical_event: CanonicalEvent[EventPayload], aggregate_state: AggregateState) -> AggregateState:
         event = canonical_event
         payload = event.payload
         if isinstance(payload, SessionFinished):
-            return aggregate_state.with_actors({
-                actor_id: replace(
-                    actor,
-                    state=LifecycleState.FINISHED,
-                    finished_at=canonical_event.happened_at,
-                )
-                for actor_id, actor in dict(aggregate_state.actors).items()
-            })
+            return aggregate_state.with_actors(
+                {
+                    actor_id: replace(
+                        actor,
+                        state=LifecycleState.FINISHED,
+                        finished_at=canonical_event.happened_at,
+                    )
+                    for actor_id, actor in dict(aggregate_state.actors).items()
+                }
+            )
         if isinstance(payload, ActorStarted):
             existing = aggregate_state.actor(event.actor_id)
             born = ActorFacts(
@@ -109,9 +118,7 @@ class ActorWriter(SessionDataWriter):
             # An actor announced twice — two raw event streams both saying so —
             # keeps everything already folded about it and only reopens.
             return aggregate_state.with_actor(
-                born
-                if existing is None
-                else replace(existing, state=LifecycleState.RUNNING, finished_at=None)
+                born if existing is None else replace(existing, state=LifecycleState.RUNNING, finished_at=None)
             )
         actor = aggregate_state.actor(event.actor_id)
         if actor is None:
@@ -120,7 +127,9 @@ class ActorWriter(SessionDataWriter):
             return aggregate_state.with_actor(replace(actor, name=payload.name))
         if isinstance(payload, ActorDescriptionChanged):
             return aggregate_state.with_actor(replace(actor, description=payload.description))
-        if isinstance(payload, (ActorFinished, ActorAssignmentFinished)):
+        if isinstance(payload, ActorFinished) or (
+            isinstance(payload, ActorAssignmentFinished) and actor.role != ActorRole.LEAD
+        ):
             return aggregate_state.with_actor(
                 replace(actor, state=LifecycleState.FINISHED, finished_at=canonical_event.happened_at)
             )
@@ -157,26 +166,19 @@ class StatusWriter(SessionDataWriter):
     what ends background work.
     """
 
-    def write(
-        self, canonical_event: CanonicalEvent[EventPayload], aggregate_state: AggregateState
-    ) -> AggregateState:
+    def write(self, canonical_event: CanonicalEvent[EventPayload], aggregate_state: AggregateState) -> AggregateState:
         event = canonical_event
         payload = event.payload
         if isinstance(payload, SessionFinished):
             # The session is over: nobody is doing anything, and every actor
             # should say so rather than keep the last thing it was doing.
             return aggregate_state.with_actors(
-                {
-                    actor_id: replace(actor, status=None)
-                    for actor_id, actor in dict(aggregate_state.actors).items()
-                }
+                {actor_id: replace(actor, status=None) for actor_id, actor in dict(aggregate_state.actors).items()}
             )
         actor = aggregate_state.actor(event.actor_id)
         if actor is None:
             return aggregate_state
-        if isinstance(payload, SessionStarted) or (
-            isinstance(payload, ActorStarted) and actor.status is None
-        ):
+        if isinstance(payload, SessionStarted) or (isinstance(payload, ActorStarted) and actor.status is None):
             # An actor that has just been announced has done nothing yet, which
             # is what `idle` says. Both facts are here because they arrive in
             # either order and either one can be the first this actor sees: a
@@ -195,19 +197,18 @@ class StatusWriter(SessionDataWriter):
         if isinstance(payload, ShellBackgrounded):
             # Background work gained, status untouched: `awaiting_background` is
             # reached at the END of a turn, not the moment a job moves.
-            return aggregate_state.with_actor(
-                _with_background(actor, payload.shell_id, counts_as_job=True)
-            )
+            return aggregate_state.with_actor(_with_background(actor, payload.shell_id, counts_as_job=True))
         if isinstance(payload, ShellOutputFinished):
-            return aggregate_state.with_actor(_without_background(actor, payload.shell_id))
+            settled = _without_background(actor, payload.shell_id)
+            return aggregate_state.with_actor(
+                replace(settled, status=_status_after_work_settled(settled))
+            )
         if isinstance(payload, (QuestionAsked, PlanProposed)):
             return aggregate_state.with_actor(
                 replace(
                     actor,
                     status=ActorStatus.AWAITING_ATTENTION,
-                    pending_attention_internal=_added(
-                        actor.pending_attention_internal, payload.attention_id
-                    ),
+                    pending_attention_internal=_added(actor.pending_attention_internal, payload.attention_id),
                 )
             )
         if isinstance(payload, (QuestionAnswered, PlanResolved)):
@@ -216,24 +217,53 @@ class StatusWriter(SessionDataWriter):
                     actor,
                     status=ActorStatus.WORKING,
                     pending_attention_internal=tuple(
-                        pending
-                        for pending in actor.pending_attention_internal
-                        if pending != payload.attention_id
+                        pending for pending in actor.pending_attention_internal if pending != payload.attention_id
                     ),
+                )
+            )
+        if isinstance(payload, ActorAssignmentStarted):
+            owner = aggregate_state.actor(event.parent_actor_id) if event.parent_actor_id is not None else actor
+            if owner is None:
+                return aggregate_state
+            return aggregate_state.with_actor(
+                replace(
+                    owner,
+                    status=ActorStatus.EXECUTING,
+                    running_assignment_ids_internal=_added(
+                        owner.running_assignment_ids_internal,
+                        payload.assignment_id,
+                    ),
+                )
+            )
+        if isinstance(payload, ActorAssignmentFinished):
+            owner = _assignment_owner(aggregate_state, actor, payload.assignment_id)
+            if owner is None:
+                return aggregate_state
+            remaining = tuple(
+                assignment_id
+                for assignment_id in owner.running_assignment_ids_internal
+                if assignment_id != payload.assignment_id
+            )
+            if owner.pending_attention_internal:
+                next_status = ActorStatus.AWAITING_ATTENTION
+            elif owner.status == ActorStatus.AWAITING_BACKGROUND and (remaining or owner.background.running_shell_ids):
+                next_status = ActorStatus.AWAITING_BACKGROUND
+            elif owner.status == ActorStatus.AWAITING_BACKGROUND:
+                next_status = ActorStatus.AWAITING_RESPONSE
+            else:
+                next_status = ActorStatus.WORKING
+            return aggregate_state.with_actor(
+                replace(
+                    owner,
+                    status=next_status,
+                    running_assignment_ids_internal=remaining,
                 )
             )
         if isinstance(payload, CompactionStarted):
             return aggregate_state.with_actor(replace(actor, status=ActorStatus.WORKING))
         if _is_finished_work(payload):
             return aggregate_state.with_actor(
-                replace(
-                    actor,
-                    status=(
-                        ActorStatus.AWAITING_ATTENTION
-                        if actor.pending_attention_internal
-                        else ActorStatus.WORKING
-                    ),
-                )
+                replace(actor, status=_status_after_work_settled(actor))
             )
         if isinstance(payload, (TurnFinished, TurnAborted)):
             return aggregate_state.with_actor(
@@ -241,7 +271,7 @@ class StatusWriter(SessionDataWriter):
                     actor,
                     status=(
                         ActorStatus.AWAITING_BACKGROUND
-                        if actor.background.running_shell_ids
+                        if (actor.background.running_shell_ids or actor.running_assignment_ids_internal)
                         else ActorStatus.AWAITING_RESPONSE
                     ),
                 )
@@ -268,17 +298,31 @@ def _is_finished_work(event_payload: EventPayload) -> bool:
     )
 
 
+def _status_after_work_settled(actor_facts: ActorFacts) -> ActorStatus:
+    """Do not reopen an actor whose turn already ended.
+
+    Native result registers can arrive after the turn-finished register. The
+    active interval is the stable boundary: a result resumes ordinary work only
+    inside an active turn. Outside one, it settles to the applicable waiting
+    state.
+    """
+    if actor_facts.pending_attention_internal:
+        return ActorStatus.AWAITING_ATTENTION
+    if actor_facts.statistics.active_since_internal is not None:
+        return ActorStatus.WORKING
+    if actor_facts.background.running_shell_ids or actor_facts.running_assignment_ids_internal:
+        return ActorStatus.AWAITING_BACKGROUND
+    return ActorStatus.AWAITING_RESPONSE
+
+
 def _shell_started(actor_facts: ActorFacts, shell_started: ShellStarted) -> ActorFacts:
     if shell_started.execution == ExecutionMode.FOREGROUND:
         return replace(actor_facts, status=ActorStatus.EXECUTING)
     counted = replace(
         actor_facts.background,
-        monitor_count=(
-            actor_facts.background.monitor_count + (shell_started.execution == ExecutionMode.MONITOR)
-        ),
+        monitor_count=(actor_facts.background.monitor_count + (shell_started.execution == ExecutionMode.MONITOR)),
         background_job_count=(
-            actor_facts.background.background_job_count
-            + (shell_started.execution == ExecutionMode.BACKGROUND)
+            actor_facts.background.background_job_count + (shell_started.execution == ExecutionMode.BACKGROUND)
         ),
     )
     return replace(
@@ -317,18 +361,44 @@ def _without_background(actor_facts: ActorFacts, shell_id: ShellId) -> ActorFact
         background=replace(
             actor_facts.background,
             running_shell_ids=tuple(
-                running
-                for running in actor_facts.background.running_shell_ids
-                if running != shell_id
+                running for running in actor_facts.background.running_shell_ids if running != shell_id
             ),
         ),
     )
 
 
-def _added(
-    pending: tuple[AttentionId, ...], value: AttentionId
-) -> tuple[AttentionId, ...]:
+_Id = TypeVar("_Id")
+
+
+def _added(pending: tuple[_Id, ...], value: _Id) -> tuple[_Id, ...]:
     return pending if value in pending else (*pending, value)
+
+
+def _assignment_owner(
+    aggregate_state: AggregateState,
+    event_actor_facts: ActorFacts,
+    assignment_id: AssignmentId,
+) -> ActorFacts | None:
+    """Find the actor that started one assignment.
+
+    A failed launch can finish on the lead. A successful child assignment
+    finishes on the child. The stored assignment id connects both shapes to
+    the actor whose status must change.
+    """
+    if assignment_id in event_actor_facts.running_assignment_ids_internal:
+        return event_actor_facts
+    if event_actor_facts.parent_actor_id is not None:
+        parent = aggregate_state.actor(event_actor_facts.parent_actor_id)
+        if parent is not None and assignment_id in parent.running_assignment_ids_internal:
+            return parent
+    return next(
+        (
+            candidate
+            for candidate in aggregate_state.actors.values()
+            if assignment_id in candidate.running_assignment_ids_internal
+        ),
+        None,
+    )
 
 
 class UsageWriter(SessionDataWriter):
@@ -339,9 +409,7 @@ class UsageWriter(SessionDataWriter):
     treating them alike is how a session's cost silently doubles.
     """
 
-    def write(
-        self, canonical_event: CanonicalEvent[EventPayload], aggregate_state: AggregateState
-    ) -> AggregateState:
+    def write(self, canonical_event: CanonicalEvent[EventPayload], aggregate_state: AggregateState) -> AggregateState:
         payload = canonical_event.payload
         if not isinstance(payload, UsageReported):
             return aggregate_state
@@ -369,9 +437,7 @@ def _cost(
 class ContextWriter(SessionDataWriter):
     """How full the window is, and whether it is being emptied."""
 
-    def write(
-        self, canonical_event: CanonicalEvent[EventPayload], aggregate_state: AggregateState
-    ) -> AggregateState:
+    def write(self, canonical_event: CanonicalEvent[EventPayload], aggregate_state: AggregateState) -> AggregateState:
         payload = canonical_event.payload
         actor = aggregate_state.actor(canonical_event.actor_id)
         if actor is None:
@@ -388,9 +454,7 @@ class ContextWriter(SessionDataWriter):
                 )
             )
         if isinstance(payload, CompactionStarted):
-            return aggregate_state.with_actor(
-                replace(actor, context=replace(actor.context, compacting=True))
-            )
+            return aggregate_state.with_actor(replace(actor, context=replace(actor.context, compacting=True)))
         if isinstance(payload, CompactionFinished):
             return aggregate_state.with_actor(
                 replace(
@@ -399,9 +463,7 @@ class ContextWriter(SessionDataWriter):
                         actor.context,
                         compacting=False,
                         used_tokens=(
-                            payload.after_tokens
-                            if payload.after_tokens is not None
-                            else actor.context.used_tokens
+                            payload.after_tokens if payload.after_tokens is not None else actor.context.used_tokens
                         ),
                     ),
                 )
@@ -418,9 +480,7 @@ class StatisticsWriter(SessionDataWriter):
     would mean writing a row per second.
     """
 
-    def write(
-        self, canonical_event: CanonicalEvent[EventPayload], aggregate_state: AggregateState
-    ) -> AggregateState:
+    def write(self, canonical_event: CanonicalEvent[EventPayload], aggregate_state: AggregateState) -> AggregateState:
         event = canonical_event
         payload = event.payload
         actor = aggregate_state.actor(event.actor_id)
@@ -437,13 +497,9 @@ def _counted(actor_statistics: ActorStatistics, event_payload: EventPayload) -> 
     if _is_prompt(event_payload):
         return replace(actor_statistics, prompt_count=actor_statistics.prompt_count + 1)
     if isinstance(event_payload, MessageCreated) and event_payload.recipient_actor_id is not None:
-        return replace(
-            actor_statistics, actor_message_count=actor_statistics.actor_message_count + 1
-        )
+        return replace(actor_statistics, actor_message_count=actor_statistics.actor_message_count + 1)
     if isinstance(event_payload, ShellStarted):
-        return replace(
-            actor_statistics, shell_command_count=actor_statistics.shell_command_count + 1
-        )
+        return replace(actor_statistics, shell_command_count=actor_statistics.shell_command_count + 1)
     if isinstance(event_payload, ShellFinished):
         if event_payload.outcome == Outcome.SUCCEEDED:
             return actor_statistics
@@ -506,8 +562,7 @@ def _timed(actor_statistics: ActorStatistics, canonical_event: CanonicalEvent[Ev
     if isinstance(payload, (TurnFinished, TurnAborted, SessionFinished)):
         return replace(
             actor_statistics,
-            active_seconds=actor_statistics.active_seconds
-            + max(0.0, at - actor_statistics.active_since_internal),
+            active_seconds=actor_statistics.active_seconds + max(0.0, at - actor_statistics.active_since_internal),
             active_since_internal=None,
         )
     return actor_statistics

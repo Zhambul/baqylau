@@ -18,7 +18,7 @@ from engine.interpret.translators import (
 from engine.interpret.interrupts import GRACE_SECONDS, PendingInterruptSource
 from engine.interpret.liveness import ProcessProbe, SessionLivenessSource
 from engine.interpret.output_source import ShellOutputRawEventSource
-from engine.interpret.loop import Interpreter
+from engine.interpret.loop import Interpreter, TerminalSnapshotSampler
 from engine.react.loop import ReactionLoop
 from engine.sessiondata.actors import (
     ActorWriter,
@@ -120,19 +120,27 @@ OWN_PROCESS_NAME = os.path.basename(
 class FixedTranslator:
     def __init__(self, translation: TranslationResult | TranslationError) -> None:
         self.translation = translation
+        self.released: list[SessionId] = []
 
     def translate(self, raw_event):
         if isinstance(self.translation, TranslationError):
             raise self.translation
         return self.translation
 
+    def release_session(self, session_id):
+        self.released.append(session_id)
+
 
 class FixedSources:
     def __init__(self, sources=()) -> None:
         self.fixed = sources
+        self.released: list[SessionId] = []
 
     def for_session(self, session):
         return self.fixed
+
+    def release_session(self, session_id):
+        self.released.append(session_id)
 
 
 class FixedReadSource:
@@ -338,6 +346,78 @@ def build_interpreter(
     return interpreter, sessions, recorder, store, shell_output
 
 
+def test_terminal_snapshot_sampler_uses_one_read_per_slow_interval():
+    now = [0.0]
+
+    class CountingTerminal:
+        def __init__(self):
+            self.calls = 0
+
+        def windows(self):
+            self.calls += 1
+            return ()
+
+    terminal = CountingTerminal()
+    sampler = TerminalSnapshotSampler(terminal, lambda: now[0])
+
+    sampler.sample()
+    now[0] = 0.9
+    sampler.sample()
+    assert terminal.calls == 1
+
+    now[0] = 1.0
+    sampler.sample()
+    assert terminal.calls == 2
+
+
+def test_terminal_snapshot_sampler_reads_again_after_a_session_starts():
+    now = [0.0]
+
+    class CountingTerminal:
+        def __init__(self):
+            self.calls = 0
+
+        def windows(self):
+            self.calls += 1
+            return ()
+
+    terminal = CountingTerminal()
+    sampler = TerminalSnapshotSampler(terminal, lambda: now[0])
+
+    sampler.sample()
+    now[0] = 0.1
+    sampler.invalidate()
+    sampler.sample()
+
+    assert terminal.calls == 2
+
+
+def test_an_accepted_session_start_invalidates_the_terminal_snapshot(tmp_path):
+    store, recorder, _sessions, interpreter = registered_runtime(
+        tmp_path,
+        TranslationResult((session_started_event(),), "translated"),
+    )
+
+    class RecordingSnapshots:
+        def __init__(self):
+            self.invalidations = 0
+
+        def sample(self):
+            return ()
+
+        def invalidate(self):
+            self.invalidations += 1
+
+    snapshots = RecordingSnapshots()
+    interpreter.terminal_snapshots = snapshots
+    recorder.record((raw_observation("raw-start"),))
+
+    interpreter.tick()
+
+    assert len(store.page_from(0, 10)) == 1
+    assert snapshots.invalidations == 1
+
+
 def build_reaction_loop(
     database_path,
     harnesses,
@@ -468,20 +548,16 @@ def test_actor_lifecycle_payload_contract(payload, event_type, expected_payload)
     assert "child" not in event_type
 
 
-def test_a_repository_never_leaves_its_connection_open(tmp_path):
-    """Every call opens a fresh short-lived connection and closes it.
-
-    The daemon serves requests on many threads and sqlite connections are
-    thread-bound, so a connection outliving its call is a connection used from
-    the wrong thread later.
-    """
+def test_a_repository_never_leaves_its_transaction_open(tmp_path):
     database = main_database(str(tmp_path / "main.db"))
     with database.write() as connection:
         opened_connection = connection
         connection.execute("CREATE TABLE example(value TEXT)")
 
-    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
-        opened_connection.execute("SELECT * FROM example")
+    assert not opened_connection.in_transaction
+    with database.read() as reused_connection:
+        assert reused_connection is opened_connection
+        assert reused_connection.execute("SELECT * FROM example").fetchall() == []
 
 
 def test_a_saved_session_row_is_not_yet_a_canonical_session(tmp_path):
@@ -709,6 +785,7 @@ def test_the_session_is_born_by_the_reaction_to_its_own_started_fact(tmp_path):
     assert born is not None
     assert born.source_reference == "fixture.jsonl"
     assert born.working_directory == "/work"
+    assert born.project_directory == "/work"
     assert born.terminal_window_id == "the-session-tab"
     assert born.harness_process_id == 4242
     assert born.plugin is harnesses.plugin(HarnessName.CODEX)
@@ -748,6 +825,7 @@ def test_a_later_delivery_updates_the_live_columns_of_the_row(tmp_path):
     assert updated is not None
     assert updated.terminal_window_id == "new-window"
     assert updated.harness_process_id == 2
+    assert updated.project_directory == "/work"
 
     # A file-borne fact carries no location and touches nothing.
     reaction.react(canonical_message())
@@ -891,6 +969,9 @@ def test_a_translator_bug_becomes_a_verdict_and_never_wedges_the_backlog(tmp_pat
     class BuggyTranslator:
         def translate(self, raw_event):
             raise ZeroDivisionError("translator bug")
+
+        def release_session(self, session_id):
+            del session_id
 
     database_path = str(tmp_path / "main.db")
     harnesses = HarnessRegistry()
@@ -1037,11 +1118,64 @@ def test_one_failing_source_neither_stops_its_siblings_nor_the_interpreter(tmp_p
     sessions.save(HarnessName.CODEX, example_session())
 
     interpreter.tick()
+    interpreter.tick()
 
     # The healthy sibling still drained, behind the broken one.
     assert len(store.page_from(0, 10)) == 1
+    # A fast retry does not write the same full traceback again.
     assert audited.failures() == ["source read"]
     assert audited.errors[0][1]["source_identity"] == "broken"
+
+
+def test_one_pull_cycle_reads_resume_positions_for_all_sessions_at_once(tmp_path, monkeypatch):
+    database_path = str(tmp_path / "main.db")
+    harnesses = HarnessRegistry()
+    harnesses.register(example_plugin(TranslationResult((), "ignored_nonsemantic")))
+    interpreter, sessions, recorder, _store, _shell_output = build_interpreter(
+        database_path, harnesses
+    )
+    sessions.save(HarnessName.CODEX, example_session("session-one"))
+    sessions.save(HarnessName.CODEX, example_session("session-two"))
+    real_latest_positions = recorder.latest_positions
+    calls: list[tuple[str, ...]] = []
+
+    def recording_latest_positions(source_identities):
+        calls.append(tuple(source_identities))
+        return real_latest_positions(source_identities)
+
+    monkeypatch.setattr(recorder, "latest_positions", recording_latest_positions)
+
+    interpreter.tick()
+
+    assert len(calls) == 1
+
+
+def test_an_accepted_session_finish_releases_translator_memory(tmp_path):
+    finish = CanonicalEvent(
+        CanonicalEventId("finish-one"),
+        SessionId("session-one"),
+        ActorId("actor-lead"),
+        None,
+        None,
+        HarnessName.CODEX,
+        10.0,
+        None,
+        None,
+        SessionFinished(Outcome.SUCCEEDED, None),
+    )
+    plugin = example_plugin(TranslationResult((finish,), "translated"))
+    harnesses = HarnessRegistry()
+    harnesses.register(plugin)
+    interpreter, sessions, recorder, _store, _shell_output = build_interpreter(
+        str(tmp_path / "main.db"), harnesses
+    )
+    sessions.save(HarnessName.CODEX, example_session())
+    recorder.record((raw_observation("raw-finish"),))
+
+    interpreter.tick()
+
+    assert plugin.translator.released == [SessionId("session-one")]
+    assert plugin.sources.released == [SessionId("session-one")]
 
 
 def test_watchable_is_every_unfinished_session_without_a_count_limit(tmp_path):

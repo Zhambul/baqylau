@@ -234,7 +234,7 @@ def _answer_question(
         if other:
             _require_type_row(screen_driver, win, type_digit)
             cursor_to(screen_driver, win, _by_digit(type_digit), sleep, "Type row")
-            if not screen_driver.send_text(win, other):     # types inline + CR
+            if not screen_driver.paste_text(win, other):    # atomic text + CR
                 raise AskError("type", "other text not delivered")
             sleep(POLL_S)
             # the CR may or may not have checked the custom row; ensure it is
@@ -254,7 +254,7 @@ def _answer_question(
     if other:
         _require_type_row(screen_driver, win, type_digit)
         cursor_to(screen_driver, win, _by_digit(type_digit), sleep, "Type row")
-        if not screen_driver.send_text(win, other):         # type + CR selects + advances
+        if not screen_driver.paste_text(win, other):        # atomic text + CR
             raise AskError("type", "other text not delivered")
         return
     if not selected:

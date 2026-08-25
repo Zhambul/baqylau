@@ -8,11 +8,12 @@ Feature: harness catalogs describe available session controls
     And harness <harness> in list "launch options" advertises control send_text
     And harness <harness> in list "launch options" advertises control interrupt
     And harness <harness> in list "launch options" advertises control answer_question
+    And harness <harness> in list "launch options" advertises exactly controls '<controls>'
 
     Examples:
-      | harness     |
-      | codex       |
-      | claude_code |
+      | harness     | controls |
+      | codex       | answer_question,apply_rewind,close_session,compact,decide_plan,interrupt,read_plan_choices,rename_session,select_effort,select_model,send_text |
+      | claude_code | answer_question,apply_rewind,auto_name_session,background,close_session,compact,decide_plan,interrupt,open_rewind,read_plan_choices,rename_session,select_effort,select_model,send_text |
 
   Scenario Outline: a harness catalog has usable model and command choices
     When I read the <harness> catalog as "selected catalog"
@@ -20,8 +21,9 @@ Feature: harness catalogs describe available session controls
     And catalog "selected catalog" has exactly one default model
     And each model in catalog "selected catalog" has exactly one default effort
     And catalog "selected catalog" has command compact
+    And catalog "selected catalog" advertises exactly rewind modes '<rewind_modes>'
 
     Examples:
-      | harness     | model        |
-      | codex       | gpt-5.6-luna |
-      | claude_code | haiku        |
+      | harness     | model        | rewind_modes          |
+      | codex       | gpt-5.6-luna | conversation          |
+      | claude_code | haiku        | both,conversation,code |

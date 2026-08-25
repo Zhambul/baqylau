@@ -213,7 +213,7 @@
     }
     if (escapeTimer !== null) {
       clearEscapeTimer();
-      if (view.capabilities?.rewind === true) void rewindFromKeyboard(view);
+      if (view.capabilities?.rewind === true) rewindFromKeyboard(view);
       return;
     }
     escapeTimer = setTimeout(() => {
@@ -238,13 +238,8 @@
     }
   }
 
-  async function rewindFromKeyboard(view: SessionViewState): Promise<void> {
-    try {
-      const result = await view.beginRewind();
-      showControlFailure('rewind failed', result);
-    } catch (error) {
-      appState.showToast('ask', 'rewind failed', errorMessage(error));
-    }
+  function rewindFromKeyboard(view: SessionViewState): void {
+    view.beginRewind();
   }
 
   function showControlFailure(heading: string, result: ControlOutcome): void {

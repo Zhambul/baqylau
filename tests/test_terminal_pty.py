@@ -8,11 +8,12 @@ codes filtered out of it — that `read_screen` answers with what is VISIBLE.
 from __future__ import annotations
 
 import time
+from types import SimpleNamespace
 
 import pytest
 
-from conftest import REPOSITORY_ROOT  # noqa: F401  (path setup for the imports below)
-from terminal.impl.pty.plugin import PtyWindows, pty_plugin
+from terminal.impl.pty import plugin as pty_module
+from terminal.impl.pty.plugin import PtyInput, PtyWindows, pty_plugin
 from terminal.models import ScreenReadRequest, TabOpenRequest, TextSubmitRequest
 from terminal.models.input import KeySendRequest
 from terminal.models.tabs import TabCloseRequest
@@ -49,6 +50,26 @@ def _await_screen(plugin, window_id, contains):
         time.sleep(0.05)
 
 
+def test_window_identity_does_not_repeat_after_terminal_restart():
+    first = pty_plugin(PtyWindows())
+    second = pty_plugin(PtyWindows())
+    first_window = first.tabs.open_tab(
+        TabOpenRequest("/tmp", ("/bin/cat",), "")
+    )
+    second_window = second.tabs.open_tab(
+        TabOpenRequest("/tmp", ("/bin/cat",), "")
+    )
+    try:
+        assert first_window.succeeded and first_window.window_id
+        assert second_window.succeeded and second_window.window_id
+        assert first_window.window_id != second_window.window_id
+    finally:
+        if first_window.window_id is not None:
+            first.tabs.close_tab(TabCloseRequest(first_window.window_id))
+        if second_window.window_id is not None:
+            second.tabs.close_tab(TabCloseRequest(second_window.window_id))
+
+
 def test_the_screen_is_what_is_visible_not_everything_that_was_printed(terminal):
     """The reason this terminal runs an emulator. A pty carries paint
     operations, and a clear-and-repaint is two of them: everything a program
@@ -82,6 +103,33 @@ def test_typing_and_keying_reach_the_program(terminal):
     while plugin.metadata.windows() and time.monotonic() < deadline:
         time.sleep(0.05)
     assert plugin.metadata.windows() == (), "cat outlived the ctrl+d that should have ended it"
+
+
+def test_text_submit_keeps_enter_in_a_separate_terminal_read(monkeypatch):
+    events = []
+    window = SimpleNamespace(
+        write=lambda payload: events.append(("write", payload)) or True,
+    )
+    windows = SimpleNamespace(get=lambda _window_id: window)
+    monkeypatch.setattr(
+        pty_module.time,
+        "sleep",
+        lambda seconds: events.append(("sleep", seconds)),
+    )
+
+    result = PtyInput(windows).submit_text(
+        TextSubmitRequest("window-one", "queued prompt", "paste")
+    )
+
+    assert result.succeeded
+    assert events == [
+        (
+            "write",
+            b"\x1b[200~queued prompt\x1b[201~",
+        ),
+        ("sleep", pty_module.SUBMIT_ENTER_DELAY_SECONDS),
+        ("write", b"\r"),
+    ]
 
 
 def test_a_key_this_terminal_cannot_send_is_refused_rather_than_guessed(terminal):

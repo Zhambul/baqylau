@@ -50,12 +50,12 @@ from harness.impl.codex.canonical.records import (
     AskRecord,
     ChatRecord,
     CollaborationCallRecord,
+    CoveredItemRecord,
     ExecRecord,
     ExecResultRecord,
     GoalRecord,
     GoalToolRecord,
     PatchCallRecord,
-    PlanRecord,
     PlanTask,
     RolloutRecord,
     SearchRecord,
@@ -318,6 +318,10 @@ def _exec_output_body(txt: str) -> str:
     return "" if txt.endswith(_OUTPUT_MARK.rstrip("\n")) else txt
 
 
+def _interrupted_output(text: str) -> bool:
+    return text.strip().casefold().startswith("aborted by user after ")
+
+
 def content_text(c: str | list[ContentPart | str] | None) -> str:
     """A response_item content list -> its text. The items are usually
     {"type": "input_text"|"output_text", "text": …}; older versions (and the
@@ -341,14 +345,15 @@ def _rsp_web_search_call(web_search_call_payload: WebSearchCallPayload) -> Searc
     return SearchRecord(query=q) if q else None
 
 
-def _rsp_function_call_output(function_call_output_payload: FunctionCallOutputPayload) -> ExecResultRecord | None:
+def _rsp_function_call_output(function_call_output_payload: FunctionCallOutputPayload) -> ExecResultRecord:
     p = function_call_output_payload
     out = content_text(p.output) if not isinstance(p.output, str) else p.output
-    if not out:
-        return None
     m = EXIT_RE.search(out[:EXIT_SCAN_B])
     return ExecResultRecord(
-        exit=m.group(1) if m else None, output=_exec_output_body(out), call_id=CodexCallId(p.call_id or "")
+        exit=m.group(1) if m else None,
+        output=_exec_output_body(out),
+        call_id=CodexCallId(p.call_id or ""),
+        interrupted=_interrupted_output(out),
     )
 
 
@@ -370,15 +375,13 @@ def _rsp_message(message_payload: MessagePayload) -> RolloutRecord:
             name=skill_name,
             turn=(metadata.turn_id if metadata else None) or "",
         )
-    # A PLAN before anything else: it is an assistant turn wearing a wrapper tag,
-    # so the structural synthetic rule below would drop it as machinery (see
-    # vocabulary.PLAN_WRAPPER). Its own kind, not a `chat`, because it is a
-    # different KIND of turn — the web renders it as a plan bubble, exactly as a
-    # Claude ExitPlanMode plan is.
+    # A plan wrapper is the response-register copy of the structured Plan item.
+    # The item-completed register has the stable plan ID and owns the canonical
+    # plan. Mark this copy as covered so one native plan makes one card.
     if role == "assistant":
         plan = plan_body(txt)
         if plan:
-            return PlanRecord(text=plan, id="")
+            return CoveredItemRecord()
     # role-aware synthetic on the RAW text (the `<tag>` is the signal), THEN unwrap
     # an INPUT wrapper so a kept `<task>` prompt reads as its inner text.
     synth = is_synthetic(txt, role)
@@ -472,6 +475,12 @@ def _rsp_custom_tool_call(custom_tool_call_payload: CustomToolCallPayload) -> Ro
             return empty_record()
         if fn == "write_stdin":
             return _stdin_record(CodexCallId(call_id), args)
+        if fn == "exec_command":
+            # A dynamic JavaScript expression can run one command or a loop of
+            # commands, but it does not expose a stable command at call time.
+            # Each completed CommandExecution item is authoritative and carries
+            # the exact command, output, exit code and native item identity.
+            return CoveredItemRecord()
         if fn == "update_plan":
             tasks = _plan_tasks(args)
             if tasks is None:
@@ -541,10 +550,10 @@ def _rsp_custom_tool_call_output(
             return empty_record()
     m = EXIT_RE.search(txt[:EXIT_SCAN_B])
     return ExecResultRecord(
-        exit=m.group(1) if m else None,
+        exit=m.group(1) if m else 1 if txt.startswith("Script failed") else None,
         output=body,
         call_id=CodexCallId(p.call_id or ""),
-        interrupted=body.casefold().startswith("aborted by user after "),
+        interrupted=_interrupted_output(body),
     )
 
 

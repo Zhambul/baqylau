@@ -4,10 +4,33 @@ from __future__ import annotations
 
 
 from harness.contract import CoreTranslator
-from harness.models import RawEvent, TranslationResult, canonical_event
-from domain.events import SessionFinished, ShellOutputLocated, TurnAborted
+from harness.models import (
+    RawEvent,
+    TranslationResult,
+    canonical_event,
+    session_run_finished_event,
+    session_run_started_events,
+)
+from domain.events import (
+    ActorStarted,
+    ActorAssignmentFinished,
+    PlanResolved,
+    SessionFinished,
+    SessionStarted,
+    SessionTitleChanged,
+    ShellFinished,
+    ShellOutputLocated,
+    TurnAborted,
+)
+from domain.ids import AssignmentId, ShellId
 from domain.records import RecordedTranslationDecision
-from domain.values import Outcome
+from domain.values import ActorRole, OpenWorkKind, Outcome
+from harness.models.directives import (
+    PlanDecisionObservation,
+    SessionCloseWorkObservation,
+    SessionRenameObservation,
+    SessionResumeObservation,
+)
 from repository.mapper.documents import decode_document
 
 
@@ -43,6 +66,43 @@ class LivenessTranslator(CoreTranslator):
         )
 
 
+class ResumeLivenessTranslator(CoreTranslator):
+    """A resumed terminal window that closed finishes that resume run."""
+
+    def translate(self, raw_event: RawEvent) -> TranslationResult:
+        if raw_event.terminal_window_id is None:
+            raise ValueError("resume liveness has no terminal window")
+        finished = SessionFinished(Outcome.UNKNOWN, "terminal_closed")
+        return TranslationResult(
+            (session_run_finished_event(raw_event, finished),),
+            RecordedTranslationDecision.TRANSLATED,
+        )
+
+
+class SessionResumeTranslator(CoreTranslator):
+    """A confirmed resume launch reopens the known session and lead actor."""
+
+    def translate(self, raw_event: RawEvent) -> TranslationResult:
+        observed = decode_document(SessionResumeObservation, raw_event.payload)
+        started = SessionStarted(
+            working_directory=observed.working_directory,
+            source_reference=observed.source_reference,
+            resumed_from=raw_event.session_id,
+            title=None,
+            model=None,
+            effort=None,
+            account=None,
+        )
+        return TranslationResult(
+            session_run_started_events(
+                raw_event,
+                started,
+                ActorStarted("lead", ActorRole.LEAD),
+            ),
+            RecordedTranslationDecision.TRANSLATED,
+        )
+
+
 class InterruptTranslator(CoreTranslator):
     """Interrupt raw event (an acknowledged interrupt no native raw event
     corroborated within its grace period, see `engine/interpret/interrupts.py`)
@@ -53,5 +113,95 @@ class InterruptTranslator(CoreTranslator):
         aborted = TurnAborted("interrupt acknowledged; no harness raw event confirmed it")
         return TranslationResult(
             (canonical_event(raw_event, "turn", raw_event.source_position, "aborted", aborted),),
+            RecordedTranslationDecision.TRANSLATED,
+        )
+
+
+class ControlTranslator(CoreTranslator):
+    """A confirmed control effect becomes the same fact as a native event."""
+
+    def translate(self, raw_event: RawEvent) -> TranslationResult:
+        if raw_event.source_name == "session_close":
+            return self._session_close(raw_event)
+        if raw_event.source_name == "session_rename":
+            rename_observation = decode_document(
+                SessionRenameObservation,
+                raw_event.payload,
+            )
+            return TranslationResult(
+                (
+                    canonical_event(
+                        raw_event,
+                        "session",
+                        str(raw_event.session_id),
+                        f"title:{rename_observation.origin}:{raw_event.source_position}",
+                        SessionTitleChanged(
+                            rename_observation.title,
+                            rename_observation.origin,
+                        ),
+                    ),
+                ),
+                RecordedTranslationDecision.TRANSLATED,
+            )
+        observed = decode_document(PlanDecisionObservation, raw_event.payload)
+        resolved = PlanResolved(
+            observed.attention_id,
+            observed.state,
+            observed.feedback,
+            observed.edited,
+        )
+        return TranslationResult(
+            (
+                canonical_event(
+                    raw_event,
+                    "plan",
+                    str(observed.attention_id),
+                    "resolved",
+                    resolved,
+                    turn_id=observed.turn_id,
+                ),
+            ),
+            RecordedTranslationDecision.TRANSLATED,
+        )
+
+    @staticmethod
+    def _session_close(raw_event: RawEvent) -> TranslationResult:
+        observed = decode_document(SessionCloseWorkObservation, raw_event.payload)
+        if observed.kind == OpenWorkKind.TURN:
+            event = canonical_event(
+                raw_event,
+                "turn",
+                str(observed.subject_id),
+                "aborted",
+                TurnAborted("session closed"),
+                turn_id=observed.turn_id,
+            )
+        elif observed.kind == OpenWorkKind.SHELL:
+            shell_id = ShellId(observed.subject_id)
+            event = canonical_event(
+                raw_event,
+                "shell",
+                str(observed.subject_id),
+                "finished",
+                ShellFinished(shell_id, Outcome.CANCELLED, None, None),
+                turn_id=observed.turn_id,
+            )
+        else:
+            assignment_id = AssignmentId(observed.subject_id)
+            event = canonical_event(
+                raw_event,
+                "actor_assignment",
+                str(observed.subject_id),
+                "finished",
+                ActorAssignmentFinished(
+                    assignment_id,
+                    Outcome.CANCELLED,
+                    None,
+                    "session closed",
+                ),
+                turn_id=observed.turn_id,
+            )
+        return TranslationResult(
+            (event,),
             RecordedTranslationDecision.TRANSLATED,
         )

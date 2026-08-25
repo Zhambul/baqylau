@@ -6,10 +6,10 @@ import ast
 import os
 import re
 import shlex
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal
+from typing import Literal, TypeVar
 
 from pydantic import ValidationError
 
@@ -20,6 +20,7 @@ from harness.models import (
     TranslationError,
     TranslationResult,
     UnknownRawEvent,
+    session_run_started_events,
 )
 from harness.models.directives import NativeTitleObservation
 from repository.mapper.documents import StoredDocumentError, decode_document
@@ -115,6 +116,7 @@ from domain.values import (
     TitleOrigin,
     UsageScope,
 )
+
 from harness.impl.codex.canonical import rollout
 from harness.impl.codex.canonical.events import PHASE_FINAL
 from harness.impl.codex.canonical.records import (
@@ -135,6 +137,7 @@ from harness.impl.codex.canonical.records import (
     GoalRecord,
     GoalToolRecord,
     MessageRecord,
+    McpToolCompletedRecord,
     NodeReplResultDocument,
     PatchCallRecord,
     PatchRecord,
@@ -176,6 +179,18 @@ from harness.impl.codex.canonical.support import (
 )
 from harness.models.selections import SelectionSemantics
 
+SourceIndexValue = TypeVar("SourceIndexValue")
+
+
+def _drop_source_keys(
+    index: MutableMapping[tuple[str, str], SourceIndexValue],
+    source_keys: set[str],
+) -> None:
+    """Remove keys that belong to a finished session's source files."""
+    for key in tuple(index):
+        if key[0] in source_keys:
+            del index[key]
+
 
 # What one of Codex's non-shell tool calls IS. `IGNORED` is named rather than
 # left to fall through: a generated image exposes no readable path to put on a
@@ -195,6 +210,7 @@ class ToolMeaning:
 
 CODEX_TOOLS: Mapping[str, ToolMeaning] = {
     "view_image": ToolMeaning(CodexToolKind.FILE, "ReadImage"),
+    "read_mcp_resource": ToolMeaning(CodexToolKind.FILE, "ReadResource"),
     "image_gen__imagegen": ToolMeaning(CodexToolKind.IGNORED, "GenerateImage"),
 }
 
@@ -253,6 +269,10 @@ def _codex_tool(native_name: str, arguments: str | None) -> tuple[CodexToolKind,
 # same shape `_JS_CMD` in items.py reads, and for the same reason: the arguments
 # are JavaScript source, and nothing here interprets JavaScript.
 _JS_STRING_FIELD = re.compile(r"""["']?([A-Za-z_][A-Za-z0-9_]*)["']?\s*:\s*"((?:[^"\\]|\\.)*)\"""")
+_JS_REQUEST_VALUE = re.compile(
+    r'''["']?(?:q|query|url|ref_id)["']?\s*:\s*'''
+    r'''("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')'''
+)
 _NODE_READ_FILE = re.compile(
     r'''\breadFile\(\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')'''
 )
@@ -279,6 +299,7 @@ class CodexToolField(StrEnum):
     URL = "url"
     PATH = "path"
     FILE_PATH = "file_path"
+    URI = "uri"
 
 
 _SEARCH_QUERY_FIELDS = (
@@ -297,6 +318,38 @@ class ToolStringField:
 class ToolFields:
     document: CodexToolArguments | None
     javascript_strings: tuple[ToolStringField, ...]
+    javascript_source: str
+
+    def _javascript_array(self, codex_tool_field: CodexToolField) -> str | None:
+        """Return one named JavaScript array without evaluating JavaScript."""
+        match = re.search(
+            rf'''(?:^|[{{,])\s*["']?{re.escape(codex_tool_field.value)}["']?\s*:\s*\[''',
+            self.javascript_source,
+        )
+        if match is None:
+            return None
+        start = match.end() - 1
+        depth = 0
+        quote = ""
+        escaped = False
+        for index in range(start, len(self.javascript_source)):
+            character = self.javascript_source[index]
+            if escaped:
+                escaped = False
+            elif quote:
+                if character == "\\":
+                    escaped = True
+                elif character == quote:
+                    quote = ""
+            elif character in "\"'`":
+                quote = character
+            elif character == "[":
+                depth += 1
+            elif character == "]":
+                depth -= 1
+                if depth == 0:
+                    return self.javascript_source[start:index + 1]
+        return self.javascript_source[start:]
 
     def requests(self, codex_tool_field: CodexToolField) -> list[ToolRequest] | None:
         name = codex_tool_field
@@ -320,8 +373,12 @@ class ToolFields:
             if name is CodexToolField.URL: return self.document.url is not None
             if name is CodexToolField.PATH: return self.document.path is not None
             if name is CodexToolField.FILE_PATH: return self.document.file_path is not None
+            if name is CodexToolField.URI: return self.document.uri is not None
             return self.requests(name) is not None
-        return any(field.name == name.value for field in self.javascript_strings)
+        return any(field.name == name.value for field in self.javascript_strings) or re.search(
+            rf'''(?:^|[{{,])\s*["']?{re.escape(name.value)}["']?\s*:''',
+            self.javascript_source,
+        ) is not None
 
     def string(self, codex_tool_field: CodexToolField) -> str | None:
         name = codex_tool_field
@@ -330,14 +387,25 @@ class ToolFields:
             if name is CodexToolField.URL: return self.document.url
             if name is CodexToolField.PATH: return self.document.path
             if name is CodexToolField.FILE_PATH: return self.document.file_path
+            if name is CodexToolField.URI: return self.document.uri
             requests = self.requests(name)
             if requests:
                 request = requests[0]
-                return request.query or request.q or request.url
-        return next(
+                return request.query or request.q or request.url or request.reference
+        direct = next(
             (field.value for field in self.javascript_strings if field.name == name.value),
             None,
         )
+        if direct is not None:
+            return direct
+        request_array = self._javascript_array(name)
+        request_value = _JS_REQUEST_VALUE.search(request_array or "")
+        if request_value is None:
+            return None
+        try:
+            return str(ast.literal_eval(request_value.group(1)))
+        except (SyntaxError, ValueError):
+            return None
 
 
 def _tool_fields(arguments: str | None) -> ToolFields:
@@ -362,7 +430,7 @@ def _tool_fields(arguments: str | None) -> ToolFields:
         ToolStringField(match.group(1), match.group(2).encode().decode("unicode_escape"))
         for match in _JS_STRING_FIELD.finditer(arguments or "")
     )
-    return ToolFields(parsed, strings)
+    return ToolFields(parsed, strings, arguments or "")
 
 
 def _search_query(arguments: str | None) -> Content:
@@ -390,7 +458,7 @@ def _web_url(arguments: str | None) -> str | None:
 
 def _tool_path(arguments: str | None) -> str:
     fields = _tool_fields(arguments)
-    for name in (CodexToolField.PATH, CodexToolField.FILE_PATH):
+    for name in (CodexToolField.PATH, CodexToolField.FILE_PATH, CodexToolField.URI):
         value = fields.string(name)
         if value:
             return value
@@ -440,6 +508,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
         self._process_shells: dict[tuple[str, str], ShellId] = {}
         self._continuation_shells: dict[tuple[str, str], ShellId] = {}
         self._finished_shells: set[tuple[str, ShellId]] = set()
+        self._finished_shell_outcomes: set[tuple[str, ShellId, Outcome]] = set()
         self._finished_skills: set[tuple[str, SkillId]] = set()
         # Announced background once. An exec that outlived its yield is reported
         # again by every continuation poll, and the fact is about the command,
@@ -449,9 +518,12 @@ class CodexCanonicalTranslator(HarnessTranslator):
         self._call_records: dict[
             tuple[str, str], ExecRecord | ToolRecord | AskRecord | None
         ] = {}
+        self._mcp_tool_outcomes: dict[tuple[str, str], Outcome] = {}
+        self._finished_tool_calls: set[tuple[str, str]] = set()
         self._plan_tasks: dict[tuple[str, str], tuple[TaskChanged, ...]] = {}
         self._goals: dict[str, GoalChanged] = {}
         self._working_directories: dict[str, str] = {}
+        self._sources_by_session: dict[SessionId, set[str]] = {}
         self._selections = SelectionSemantics()
         self._rewind_continuity = rewind_continuity or RewindContinuity()
 
@@ -474,6 +546,38 @@ class CodexCanonicalTranslator(HarnessTranslator):
     def _source_key(raw_event: RawEvent) -> str:
         return os.path.realpath(raw_event.source_name)
 
+    def release_session(self, session_id: SessionId) -> None:
+        """Release all transient correlation for one finished session."""
+        sources = self._sources_by_session.pop(session_id, set())
+        _drop_source_keys(self._collaboration_calls, sources)
+        _drop_source_keys(self._process_shells, sources)
+        _drop_source_keys(self._continuation_shells, sources)
+        self._finished_shells = {
+            key for key in self._finished_shells if key[0] not in sources
+        }
+        self._finished_shell_outcomes = {
+            key for key in self._finished_shell_outcomes if key[0] not in sources
+        }
+        self._finished_skills = {
+            key for key in self._finished_skills if key[0] not in sources
+        }
+        self._backgrounded_shells = {
+            key for key in self._backgrounded_shells if key[0] not in sources
+        }
+        self._semantic_tool_calls = {
+            key for key in self._semantic_tool_calls if key[0] not in sources
+        }
+        _drop_source_keys(self._call_records, sources)
+        _drop_source_keys(self._mcp_tool_outcomes, sources)
+        self._finished_tool_calls = {
+            key for key in self._finished_tool_calls if key[0] not in sources
+        }
+        _drop_source_keys(self._plan_tasks, sources)
+        self._goals.pop(str(session_id), None)
+        self._working_directories.pop(str(session_id), None)
+        self._selections.release_session(session_id)
+        self._rewind_continuity.release(session_id)
+
     def _only_pending_exec_shell(self, source_key: str) -> ShellId | None:
         """The shell belonging to a fast CommandExecution item.
 
@@ -493,6 +597,39 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 not in self._finished_shells
         ]
         return candidates[0] if len(candidates) == 1 else None
+
+    def _pending_exec_shell_for_command(
+        self,
+        source_key: str,
+        native_command: tuple[str, ...],
+    ) -> ShellId | None:
+        """Match a completed native process to its wrapper command.
+
+        Current Codex does not put the wrapper call id on a CommandExecution
+        item. It does put the exact shell command there. This identity remains
+        usable when a JavaScript cell starts several commands in parallel,
+        where the old "only pending command" fallback is ambiguous.
+        """
+        if not native_command:
+            return None
+        command_texts = {" ".join(native_command)}
+        if len(native_command) >= 3 and native_command[-2] in ("-c", "-lc"):
+            command_texts.add(native_command[-1])
+        candidates = [
+            shell_id_from_codex_call(CodexCallId(call_id))
+            for (known_source, call_id), record in self._call_records.items()
+            if known_source == source_key
+            and isinstance(record, ExecRecord)
+            and _read_skill_name(record.cmd) is None
+            and record.cmd in command_texts
+            and (
+                source_key,
+                shell_id_from_codex_call(CodexCallId(call_id)),
+            ) not in self._finished_shells
+        ]
+        # Equal commands have equal meaning here. Native completions arrive in
+        # start order, so the oldest open wrapper is the stable owner.
+        return candidates[0] if candidates else None
 
     @staticmethod
     def _collaboration_call_from_line(
@@ -606,6 +743,9 @@ class CodexCanonicalTranslator(HarnessTranslator):
         return None
 
     def translate(self, raw_event: RawEvent) -> TranslationResult:
+        self._sources_by_session.setdefault(raw_event.session_id, set()).add(
+            self._source_key(raw_event)
+        )
         try:
             return self._translate(raw_event)
         except UnknownRawEvent as unknown:
@@ -776,22 +916,33 @@ class CodexCanonicalTranslator(HarnessTranslator):
         continued_from: SessionId | None = None,
     ) -> list[CanonicalEvent[EventPayload]]:
         self._working_directories[str(raw_event.session_id)] = working_directory
+        session_started = SessionStarted(
+            working_directory=working_directory,
+            source_reference=source_reference,
+            resumed_from=None,
+            title=None,
+            model=None,
+            effort=None,
+            account=None,
+            continued_from=continued_from,
+        )
+        actor_started = ActorStarted("codex", ActorRole.LEAD)
+        if raw_event.source_type == "hook" and raw_event.terminal_window_id is not None:
+            return list(
+                session_run_started_events(
+                    raw_event,
+                    session_started,
+                    actor_started,
+                    occurred_at=occurred_at,
+                )
+            )
         return [
             event(
                 raw_event,
                 "session",
                 str(raw_event.session_id),
                 "started",
-                SessionStarted(
-                    working_directory=working_directory,
-                    source_reference=source_reference,
-                    resumed_from=None,
-                    title=None,
-                    model=None,
-                    effort=None,
-                    account=None,
-                    continued_from=continued_from,
-                ),
+                session_started,
                 occurred_at=occurred_at,
             ),
             event(
@@ -799,7 +950,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 "actor",
                 str(raw_event.actor_id),
                 "started",
-                ActorStarted("codex", ActorRole.LEAD),
+                actor_started,
                 occurred_at=occurred_at,
             ),
         ]
@@ -920,6 +1071,9 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 if (source_key, shell_id) in self._backgrounded_shells:
                     continue
                 self._finished_shells.add((source_key, shell_id))
+                self._finished_shell_outcomes.add(
+                    (source_key, shell_id, Outcome.CANCELLED)
+                )
                 events.append(event(
                     raw_event,
                     "shell",
@@ -1356,6 +1510,33 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 )]
             shell_id = shell_id_from_codex_call(call_id)
             if (source_key, shell_id) in self._finished_shells:
+                settled_outcome = next(
+                    (
+                        outcome
+                        for known_source, known_shell, outcome
+                        in self._finished_shell_outcomes
+                        if known_source == source_key and known_shell == shell_id
+                    ),
+                    None,
+                )
+                if (
+                    settled_outcome is not None
+                    and call_record.yield_ms is not None
+                    and record.exit is None
+                    and not record.output
+                ):
+                    # The native completion can precede an empty yielded
+                    # wrapper. This closing fact is harmless when no background
+                    # state exists and repairs an older false background fact
+                    # when a versioned source replay finds one.
+                    return [event(
+                        raw_event,
+                        "shell",
+                        str(shell_id),
+                        "settled_after_native_finish",
+                        ShellOutputFinished(shell_id, settled_outcome),
+                        occurred_at=occurred_at,
+                    )]
                 return []
             process_exit_code = exit_code(record.exit)
             reported_process_id = (
@@ -1372,6 +1553,9 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 if (source_key, shell_id) in self._backgrounded_shells:
                     return []
                 self._finished_shells.add((source_key, shell_id))
+                self._finished_shell_outcomes.add(
+                    (source_key, shell_id, Outcome.CANCELLED)
+                )
                 return [event(
                     raw_event,
                     "shell",
@@ -1424,6 +1608,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
             outcome: Outcome = Outcome.SUCCEEDED if process_exit_code in (None, 0) else Outcome.FAILED
             payload = ShellFinished(shell_id, outcome, content(record.output), process_exit_code)
             self._finished_shells.add((source_key, shell_id))
+            self._finished_shell_outcomes.add((source_key, shell_id, outcome))
             finished_events = [
                 event(
                     raw_event,
@@ -1452,15 +1637,51 @@ class CodexCanonicalTranslator(HarnessTranslator):
             # optional, the id every line after it uses is not.
             completed_shell_id = self._process_shells.get((source_key, process_id))
             if completed_shell_id is None:
+                completed_shell_id = self._pending_exec_shell_for_command(
+                    source_key,
+                    record.command,
+                )
+            if completed_shell_id is None:
                 completed_shell_id = self._only_pending_exec_shell(source_key)
-                if completed_shell_id is not None:
-                    self._process_shells[(source_key, process_id)] = completed_shell_id
-            if completed_shell_id is None or (source_key, completed_shell_id) in self._finished_shells:
+            if completed_shell_id is None:
+                if not record.command:
+                    # A late or partial completion cannot open a command when
+                    # it does not identify the command that ran.
+                    return []
+                # Code-mode Codex can build a command dynamically or run one
+                # exec_command call in a JavaScript loop. The wrapper cannot
+                # declare those commands before execution. The native completed
+                # item is a complete record, so it owns both lifecycle facts.
+                completed_shell_id = shell_id_from_codex_call(
+                    CodexCallId(record.item_id or native_identity)
+                )
+                self._process_shells[(source_key, process_id)] = completed_shell_id
+                command = " ".join(record.command)
+                if len(record.command) >= 3 and record.command[-2] in ("-c", "-lc"):
+                    command = record.command[-1]
+                started = event(
+                    raw_event,
+                    "shell",
+                    str(completed_shell_id),
+                    "started",
+                    ShellStarted(
+                        completed_shell_id,
+                        content(command),
+                        ExecutionMode.FOREGROUND,
+                        None,
+                    ),
+                    occurred_at=occurred_at,
+                )
+            else:
+                self._process_shells[(source_key, process_id)] = completed_shell_id
+                started = None
+            if (source_key, completed_shell_id) in self._finished_shells:
                 return []
             shell_id = completed_shell_id
             process_exit_code = exit_code(record.exit)
             outcome = Outcome.SUCCEEDED if process_exit_code == 0 else Outcome.FAILED
             self._finished_shells.add((source_key, shell_id))
+            self._finished_shell_outcomes.add((source_key, shell_id, outcome))
             payload = ShellFinished(shell_id, outcome, content(record.output), process_exit_code)
             finished_events = [event(
                 raw_event,
@@ -1470,6 +1691,8 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 payload,
                 occurred_at=occurred_at,
             )]
+            if started is not None:
+                finished_events.insert(0, started)
             if (source_key, shell_id) in self._backgrounded_shells:
                 self._backgrounded_shells.discard((source_key, shell_id))
                 finished_events.append(event(
@@ -1481,6 +1704,32 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     occurred_at=occurred_at,
                 ))
             return finished_events
+        if isinstance(record, McpToolCompletedRecord):
+            source_key = self._source_key(raw_event)
+            native_name = f"mcp__{record.server}__{record.tool}"
+            candidates = [
+                call_id
+                for (known_source, call_id), call_record in self._call_records.items()
+                if known_source == source_key
+                and isinstance(call_record, ToolRecord)
+                and call_record.name == native_name
+                and (source_key, call_id) not in self._finished_tool_calls
+            ]
+            if len(candidates) != 1:
+                raise TranslationError(
+                    "Codex MCP completion does not identify exactly one pending "
+                    f"{native_name} call"
+                )
+            if record.status == "failed":
+                outcome = Outcome.FAILED
+            elif record.status == "completed":
+                outcome = Outcome.SUCCEEDED
+            else:
+                raise TranslationError(
+                    f"unknown Codex MCP completion state: {record.status!r}"
+                )
+            self._mcp_tool_outcomes[(source_key, candidates[0])] = outcome
+            return []
         if isinstance(record, SearchRecord):
             # Codex reports the query and nothing of what came back, so the
             # result is honestly absent rather than an empty string.
@@ -1589,16 +1838,11 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     ))
             return events
         if isinstance(record, (CompactRecord, CompactBoundaryRecord)):
-            return [
-                event(
-                    raw_event,
-                    "compaction",
-                    native_identity,
-                    "finished",
-                    CompactionFinished(None, None),
-                    occurred_at=occurred_at,
-                )
-            ]
+            # Codex reports the same compaction through PreCompact/PostCompact
+            # hooks. Those hooks own the lifecycle and token counts. The
+            # rollout records are display notices for native clients; mapping
+            # them too creates a second `compaction.finished` feed row.
+            return []
         if isinstance(record, AskRecord):
             call_id = CodexCallId(record.call_id or native_identity)
             self._call_records[(self._source_key(raw_event), call_id)] = record
@@ -1666,6 +1910,8 @@ class CodexCanonicalTranslator(HarnessTranslator):
             return []
         arguments = tool_record.args
         output = exec_result_record.output
+        source_key = self._source_key(raw_event)
+        mcp_outcome = self._mcp_tool_outcomes.pop((source_key, call_id), None)
         native_failed = False
         if tool_record.name == "mcp__node_repl__js":
             try:
@@ -1681,9 +1927,14 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 native_failed = node_result.isError
         outcome: Outcome = (
             Outcome.FAILED
-            if native_failed or exit_code(exec_result_record.exit) not in (None, 0)
+            if (
+                native_failed
+                or mcp_outcome == Outcome.FAILED
+                or exit_code(exec_result_record.exit) not in (None, 0)
+            )
             else Outcome.SUCCEEDED
         )
+        self._finished_tool_calls.add((source_key, call_id))
         answered = content(output) if output else None
         if kind == CodexToolKind.SEARCH:
             payload: EventPayload = SearchPerformed(
@@ -1721,7 +1972,33 @@ class CodexCanonicalTranslator(HarnessTranslator):
         exec_result_record: ExecResultRecord,
         occurred_at: float | None,
     ) -> list[CanonicalEvent[EventPayload]]:
-        document = AskResultDocument.model_validate_json(exec_result_record.output)
+        attention_id = attention_id_from_codex_call(ask_record.call_id)
+        if exec_result_record.interrupted:
+            payload = QuestionAnswered(attention_id, (), None)
+            return [event(
+                raw_event,
+                "question",
+                str(attention_id),
+                "answered",
+                payload,
+                occurred_at=occurred_at,
+            )]
+        try:
+            document = AskResultDocument.model_validate_json(exec_result_record.output)
+        except ValidationError:
+            if exec_result_record.output.strip() != (
+                "request_user_input can only be used by the root thread"
+            ):
+                raise
+            payload = QuestionAnswered(attention_id, (), None)
+            return [event(
+                raw_event,
+                "question",
+                str(attention_id),
+                "answered",
+                payload,
+                occurred_at=occurred_at,
+            )]
         answers: list[AttentionAnswer] = []
         for index, question in enumerate(ask_record.questions):
             native_question_id = question.id or str(index)
@@ -1732,9 +2009,8 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 )
             answers.append(AttentionAnswer(
                 question_id_from_codex(CodexQuestionId(native_question_id)),
-                answer.answers,
+                _question_answer_labels(answer.answers),
             ))
-        attention_id = attention_id_from_codex_call(ask_record.call_id)
         payload = QuestionAnswered(attention_id, tuple(answers), None)
         return [event(
             raw_event,
@@ -1744,3 +2020,25 @@ class CodexCanonicalTranslator(HarnessTranslator):
             payload,
             occurred_at=occurred_at,
         )]
+
+
+def _question_answer_labels(native_labels: tuple[str, ...]) -> tuple[str, ...]:
+    """Remove Codex dialog controls from one canonical question answer."""
+    note_prefix = "user_note:"
+    note = next(
+        (
+            label[len(note_prefix):].strip()
+            for label in native_labels
+            if label.casefold().startswith(note_prefix)
+        ),
+        "",
+    )
+    if not note:
+        return native_labels
+    selected = tuple(
+        label
+        for label in native_labels
+        if label != "None of the above"
+        and not label.casefold().startswith(note_prefix)
+    )
+    return (*selected, note)

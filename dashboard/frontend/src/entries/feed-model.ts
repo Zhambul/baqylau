@@ -5,6 +5,7 @@ import type { Entry } from './model';
 import {
   presentEntry,
   presentShell,
+  type QuestionTextIndex,
   type SummaryKind,
   type VisibleEntryPresentation,
 } from './presentation';
@@ -152,20 +153,58 @@ function suppressReplacedPrompts(entries: readonly Entry[]): readonly Entry[] {
   });
 }
 
+function suppressDuplicateCompactionFinishes(
+  entries: readonly Entry[],
+): readonly Entry[] {
+  // Entries are newest first. Keep the newest finish, which is the hook row
+  // with token counts, and drop older rollout boundaries until the matching
+  // start. This also repairs sessions recorded before rollout boundaries were
+  // classified as hook plumbing.
+  const finishedActors = new Set<ActorId>();
+  return entries.filter((entry) => {
+    if (entry.type === 'compaction_started') {
+      finishedActors.delete(entry.actorId);
+      return true;
+    }
+    if (entry.type !== 'compaction_finished') return true;
+    if (finishedActors.has(entry.actorId)) return false;
+    finishedActors.add(entry.actorId);
+    return true;
+  });
+}
+
+function questionTextIndex(entries: readonly Entry[]): QuestionTextIndex {
+  const index = new Map<string, Map<string, string>>();
+  for (const entry of entries) {
+    if (entry.type !== 'question_asked') continue;
+    let questions = index.get(entry.body.attentionId);
+    if (questions === undefined) {
+      questions = new Map();
+      index.set(entry.body.attentionId, questions);
+    }
+    for (const question of entry.body.questions)
+      questions.set(question.questionId, question.question);
+  }
+  return index;
+}
+
 export function buildFeedItems(
   entries: readonly Entry[],
   actors: ReadonlyMap<ActorId, string>,
   shells: readonly ShellFold[],
 ): readonly FeedItem[] {
   const shellById = new Map(shells.map((shell) => [shell.shellId, shell]));
+  const questions = questionTextIndex(entries);
   const items: FeedItem[] = [];
-  for (const entry of suppressReplacedPrompts(entries)) {
+  for (const entry of suppressDuplicateCompactionFinishes(
+    suppressReplacedPrompts(entries),
+  )) {
     if (entry.type === 'shell_started') {
       const fold = shellById.get(entry.body.shellId);
       if (fold !== undefined) items.push(presentShell(fold));
       continue;
     }
-    const presentation = presentEntry(entry, actors);
+    const presentation = presentEntry(entry, actors, questions);
     if (presentation.kind !== 'hidden') items.push(presentation);
   }
   return items;

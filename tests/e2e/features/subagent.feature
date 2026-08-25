@@ -1,5 +1,34 @@
 Feature: subagent work reaches the session feed
 
+  Scenario Outline: a subagent can send an exact message to the lead
+    Given session configuration "primary" uses <harness> with model <model> and low effort
+    When I launch session "primary" and assign work "message work" to a subagent that sends 'CHILD_TO_LEAD_529' to the lead and returns 'MESSAGE_WORK_DONE'
+    Then work "message work" completes
+    And work "message work" has worker type subagent
+    And work "message work" has final answer 'MESSAGE_WORK_DONE'
+    When I name the exact message 'CHILD_TO_LEAD_529' sent by worker of work "message work" "child message"
+    Then actor message "child message" goes from worker of work "message work" to the lead
+
+    Examples:
+      | harness     | model        |
+      | claude_code | haiku        |
+
+  Scenario Outline: an active subagent receives one follow-up
+    Given session configuration "primary" uses <harness> with model <model> and low effort
+    When I launch session "primary" and assign work "follow-up work" to a subagent with follow-up 'FOLLOWUP_MARKER_417' using prompt
+      """
+      Wait for one follow-up message. When it arrives, reply only with its exact
+      text. Do not use tools.
+      """
+    Then work "follow-up work" completes
+    And work "follow-up work" has worker type subagent
+    And work "follow-up work" has final answer 'FOLLOWUP_MARKER_417'
+
+    Examples:
+      | harness     | model        |
+      | codex       | gpt-5.6-luna |
+      | claude_code | haiku        |
+
   Scenario Outline: the work a subagent does is attributed to that subagent
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" and assign work "ticker work" to the subagent with prompt
@@ -23,6 +52,23 @@ Feature: subagent work reaches the session feed
     Then work "confirm delegation" completes
     And work "confirm delegation" has worker type lead
     And work "confirm delegation" has final answer 'delegated'
+
+    Examples:
+      | harness     | model        |
+      | codex       | gpt-5.6-luna |
+      | claude_code | haiku        |
+
+  Scenario Outline: a lead keeps a running color while it waits for a subagent
+    Given session configuration "primary" uses <harness> with model <model> and low effort
+    When I launch session "primary" and assign work "color work" to the subagent with prompt
+      """
+      Run the exact foreground shell command `sleep 20`. After it finishes,
+      reply only with COLOR_WORK_DONE.
+      """
+    Then subagent work "color work" is running while its lead has status awaiting_background
+    And work "color work" completes
+    And work "color work" has final answer 'COLOR_WORK_DONE'
+    And work "color work" releases the lead
 
     Examples:
       | harness     | model        |

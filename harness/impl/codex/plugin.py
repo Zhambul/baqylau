@@ -12,6 +12,7 @@ from harness.impl.codex.catalog import CodexCatalog
 from harness.impl.codex.controls.controller import controller, rewind_continuity
 from harness.impl.codex.launcher import CodexLauncher
 from harness.impl.codex.usage_rows import usage_reader
+from harness.impl.codex.resume import CodexResumeLocator
 from harness.impl.codex.controls import modeldialog
 
 # codex sets model and effort through ONE picker, and its reasoning levels are
@@ -40,7 +41,7 @@ plugin = HarnessPlugin(
     info=HarnessInfo(
         name=HarnessName.CODEX,
         display_name="Codex",
-        plugin_version="5",
+        plugin_version="7",
         canonical_version=SCHEMA_VERSION,
         cli_process_name=CLI_PROCESS_NAME,
         supports_attachments=True,
@@ -59,4 +60,5 @@ plugin = HarnessPlugin(
     catalog=CodexCatalog(),
     usage=usage_reader,
     launcher=CodexLauncher(),
+    resume_locator=CodexResumeLocator(),
 )

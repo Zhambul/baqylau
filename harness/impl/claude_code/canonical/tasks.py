@@ -28,12 +28,17 @@ def _payload(
     if not task_id:
         raise TranslationError("Claude Code task has no id", context=raw_event.source_position)
     owner_text = str(owner or "").strip()
+    owner_actor_id = (
+        actor_id_from_claude_code(ClaudeCodeActorId(owner_text))
+        if owner_text
+        else raw_event.actor_id
+    )
     return TaskChanged(
         task_id,
         str(subject or ""),
         str(description or "").strip() or None,
         task_state,
-        actor_id_from_claude_code(ClaudeCodeActorId(owner_text)) if owner_text else None,
+        owner_actor_id,
     )
 
 

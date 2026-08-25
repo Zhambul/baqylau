@@ -204,8 +204,8 @@ export interface paths {
         };
         /**
          * Session Data List
-         * @description Every visible session's aggregate, and the cursor to open the global
-         *     stream from — the list view, in two queries.
+         * @description Every live session's aggregate, and the cursor to open the global
+         *     stream from — the live dashboard, in two queries.
          *
          *     The cursor is read BEFORE the rows: a write landing between the two shows
          *     up in `sessions` (its row already carries the change) and is harmlessly
@@ -740,23 +740,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/sessions/{session_id}/application/composer-queue": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Save Composer Queue */
-        post: operations["save_composer_queue_api_sessions__session_id__application_composer_queue_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/sessions/{session_id}/application/dialog-draft": {
         parameters: {
             query?: never;
@@ -1034,6 +1017,23 @@ export interface paths {
         };
         /** Index */
         get: operations["index__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/static/build/{asset_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Build Asset */
+        get: operations["build_asset_static_build__asset_name__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1451,13 +1451,6 @@ export interface components {
             /** Sequence */
             sequence: number;
         };
-        /** ComposerQueueRequest */
-        ComposerQueueRequest: {
-            /** Items */
-            items: components["schemas"]["QueuedMessageBody"][];
-            /** Origin */
-            origin: string;
-        };
         /** ComposerQueueResponse */
         ComposerQueueResponse: {
             /** Items */
@@ -1745,9 +1738,17 @@ export interface components {
         GoalResponse: {
             /** Objective */
             objective: string | null;
+            state: components["schemas"]["GoalState"];
+            /** Reason */
+            reason: string | null;
             /** Completed */
             completed: boolean;
         };
+        /**
+         * GoalState
+         * @enum {string}
+         */
+        GoalState: "active" | "paused" | "blocked" | "usage_limited" | "budget_limited" | "completed" | "cleared";
         /** GrowPaneRequest */
         GrowPaneRequest: {
             /** Working Directory */
@@ -2227,13 +2228,10 @@ export interface components {
             /** Choices */
             choices: components["schemas"]["QuestionChoiceResponse"][];
         };
-        /** QueuedMessageBody */
-        QueuedMessageBody: {
-            /** Text */
-            text: string;
-        };
         /** QueuedMessageResponse */
         QueuedMessageResponse: {
+            /** Request Id */
+            request_id: string;
             /** Text */
             text: string;
         };
@@ -2415,6 +2413,8 @@ export interface components {
             actors: components["schemas"]["ActorResponse"][];
             /** Live */
             live: boolean;
+            /** Project Directory */
+            project_directory: string;
             repository: components["schemas"]["RepositoryStatusResponse"] | null;
         };
         /** SessionPreferencesResponse */
@@ -2654,6 +2654,8 @@ export interface components {
             display_name: string;
             /** Switchable */
             switchable: boolean;
+            /** Default For Launch */
+            default_for_launch: boolean;
             /** Plan */
             plan: string | null;
             /** Windows */
@@ -2665,6 +2667,8 @@ export interface components {
             limit: components["schemas"]["UsageBlockResponse"] | null;
             /** Authentication Error */
             authentication_error: string | null;
+            /** Collection Error */
+            collection_error?: string | null;
         };
         /** UsageWindowResponse */
         UsageWindowResponse: {
@@ -4741,50 +4745,6 @@ export interface operations {
             };
         };
     };
-    save_composer_queue_api_sessions__session_id__application_composer_queue_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                session_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ComposerQueueRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SavedResponse"];
-                };
-            };
-            /** @description The request names something unknown, or cannot be acted on as posed. */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
     save_dialog_draft_api_sessions__session_id__application_dialog_draft_post: {
         parameters: {
             query?: never;
@@ -5433,7 +5393,56 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Not on the content-type whitelist, and not shaped like an app part. */
+            /** @description Not on the static content-type whitelist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description On the whitelist, but unreadable on disk. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    build_asset_static_build__asset_name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                asset_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not on the static content-type whitelist. */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -5484,7 +5493,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Not on the content-type whitelist, and not shaped like an app part. */
+            /** @description Not on the static content-type whitelist. */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -5533,7 +5542,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Not on the content-type whitelist, and not shaped like an app part. */
+            /** @description Not on the static content-type whitelist. */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -5582,7 +5591,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Not on the content-type whitelist, and not shaped like an app part. */
+            /** @description Not on the static content-type whitelist. */
             404: {
                 headers: {
                     [name: string]: unknown;

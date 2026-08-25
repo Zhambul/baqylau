@@ -50,6 +50,10 @@ describe('trusted entry markup', () => {
     ).value;
     expect(diff).toContain('class="dl removed"');
     expect(diff).toContain('class="dl added"');
+    expect(diff).toContain('aria-label="removed line 1"');
+    expect(diff).toContain('aria-label="added line 1"');
+    expect(diff).toContain('<span class="dm" aria-hidden="true">−</span>');
+    expect(diff).toContain('<span class="dm" aria-hidden="true">+</span>');
     expect(diff).toContain('&lt;tag&gt;');
     expect(diff).not.toContain('<tag>');
   });

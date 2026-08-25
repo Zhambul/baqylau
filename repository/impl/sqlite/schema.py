@@ -14,8 +14,8 @@ blobs under nine keys have nine tables with real primary keys; the queue, the
 dialog answers and the usage windows are rows rather than encoded lists. Six
 opaque columns remain and each is deliberate: `canonical_events.payload` is the
 canonical fact body, closed and versioned by `repository/mapper/facts.py`;
-`raw_events.payload` is the verbatim bytes we observed, which is the whole point
-of keeping it; `state_files.content` is a free-form audit blob written by a
+`raw_events.payload` restores to the verbatim bytes we observed, which is the
+whole point of keeping it; `state_files.content` is a free-form audit blob written by a
 facade whose contract is "record anything, never raise"; and the three read-model
 payloads (`session_data`, `session_data_actors`, `session_entries`) are closed
 typed documents of `domain/sessiondata.py` and `domain/entries.py`, validated on
@@ -25,7 +25,7 @@ columns, half of them null, and none of them queried.
 
 from __future__ import annotations
 
-MAIN_SCHEMA_VERSION = 6
+MAIN_SCHEMA_VERSION = 13
 AUDIT_SCHEMA_VERSION = 1
 
 # Version 4 rewrote the canonical vocabulary, so files older than that remain
@@ -33,7 +33,23 @@ AUDIT_SCHEMA_VERSION = 1
 # from ModelReference. Version 6 repairs Codex yielded commands recorded before
 # their adapter emitted the distinct output-finished fact: adding that fact to
 # the canonical log keeps both the current projection and every later rebuild
-# honest.
+# honest. Version 7 gives each queued send its request identity, so an HTTP
+# retry cannot add the same message twice. Version 8 keeps the complete goal
+# state and reason in the session read model instead of one completed flag.
+# Version 9 settles Codex shell results that an older ambiguous parallel-command
+# correlation added after their turn had already ended.
+# Version 10 gives the interpreter a durable, indexed input queue. Before this,
+# every 0.25-second tick scanned all raw-event history to prove that nothing was
+# waiting. The queue is written and cleared in the same transactions as the raw
+# observation and its verdict, so it cannot drift from either fact.
+# Version 11 records the lossless storage codec for raw observations. Old rows
+# stay byte-for-byte in place as `identity`; new rows are compressed before
+# it reaches SQLite and restored at the repository boundary.
+# Version 12 keeps the latest session lifecycle on the session row. SQLite
+# updates it in the same transaction as a canonical start or finish fact. This
+# removes two correlated history reads from every interpreter tick.
+# Version 13 stores the stable owner checkout observed when a session starts.
+# A linked worktree can later be removed, but its project group must not change.
 MAIN_MIGRATIONS: dict[int, tuple[str, ...]] = {
     5: (
         """
@@ -100,6 +116,178 @@ MAIN_MIGRATIONS: dict[int, tuple[str, ...]] = {
           )
         """,
     ),
+    7: (
+        """
+        ALTER TABLE composer_queue_items
+        ADD COLUMN request_id TEXT NOT NULL DEFAULT ''
+        """,
+        """
+        UPDATE composer_queue_items
+        SET request_id = 'legacy:' || position
+        WHERE request_id = ''
+        """,
+        """
+        CREATE UNIQUE INDEX index_composer_queue_request
+        ON composer_queue_items(session_id, request_id)
+        """,
+    ),
+    8: (
+        """
+        UPDATE session_data
+        SET payload = json_set(
+            json_remove(payload, '$.goal.completed'),
+            '$.goal.state',
+            CASE json_extract(payload, '$.goal.completed')
+                WHEN 1 THEN 'completed'
+                ELSE 'active'
+            END,
+            '$.goal.reason', NULL
+        )
+        WHERE json_type(payload, '$.goal') = 'object'
+          AND json_type(payload, '$.goal.state') IS NULL
+        """,
+    ),
+    9: (
+        """
+        INSERT INTO canonical_events(
+            event_id, schema_version, event_type, session_id, actor_id,
+            turn_id, parent_actor_id, harness, occurred_at,
+            terminal_window_id, harness_process_id, accepted_at, payload
+        )
+        SELECT
+            'migration:9:shell-settled:' || finished.event_id,
+            finished.schema_version,
+            'shell.output_finished',
+            finished.session_id,
+            finished.actor_id,
+            finished.turn_id,
+            finished.parent_actor_id,
+            finished.harness,
+            finished.occurred_at,
+            finished.terminal_window_id,
+            finished.harness_process_id,
+            finished.accepted_at,
+            json_object(
+                'shell_id', json_extract(finished.payload, '$.shell_id'),
+                'outcome', json_extract(finished.payload, '$.outcome')
+            )
+        FROM canonical_events AS finished
+        WHERE finished.harness = 'codex'
+          AND finished.event_type = 'shell.finished'
+          AND finished.cursor > COALESCE((
+              SELECT MAX(turn_end.cursor)
+              FROM canonical_events AS turn_end
+              WHERE turn_end.session_id = finished.session_id
+                AND turn_end.actor_id = finished.actor_id
+                AND turn_end.event_type IN ('turn.finished', 'turn.aborted')
+          ), finished.cursor)
+          AND NOT EXISTS (
+              SELECT 1
+              FROM canonical_events AS later_turn
+              WHERE later_turn.session_id = finished.session_id
+                AND later_turn.actor_id = finished.actor_id
+                AND later_turn.event_type = 'turn.started'
+                AND later_turn.cursor > (
+                    SELECT MAX(turn_end.cursor)
+                    FROM canonical_events AS turn_end
+                    WHERE turn_end.session_id = finished.session_id
+                      AND turn_end.actor_id = finished.actor_id
+                      AND turn_end.event_type IN ('turn.finished', 'turn.aborted')
+                )
+                AND later_turn.cursor < finished.cursor
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM canonical_events AS settled
+              WHERE settled.event_id =
+                  'migration:9:shell-settled:' || finished.event_id
+          )
+        """,
+    ),
+    10: (
+        """
+        CREATE TABLE IF NOT EXISTS pending_raw_events(
+            raw_event_row_id INTEGER PRIMARY KEY,
+            raw_event_id TEXT NOT NULL UNIQUE,
+            FOREIGN KEY(raw_event_id) REFERENCES raw_events(raw_event_id)
+                ON DELETE CASCADE
+        )
+        """,
+        """
+        INSERT OR IGNORE INTO pending_raw_events(raw_event_row_id, raw_event_id)
+        SELECT raw_events.id, raw_events.raw_event_id
+        FROM raw_events
+        LEFT JOIN interpretations USING(raw_event_id)
+        WHERE interpretations.raw_event_id IS NULL
+        ORDER BY raw_events.id
+        """,
+    ),
+    11: (
+        """
+        ALTER TABLE raw_events
+        ADD COLUMN payload_codec TEXT NOT NULL DEFAULT 'identity'
+            CHECK(payload_codec IN ('identity', 'zlib'))
+        """,
+    ),
+    12: (
+        """
+        ALTER TABLE sessions
+        ADD COLUMN lifecycle TEXT NOT NULL DEFAULT 'running'
+            CHECK(lifecycle IN ('running', 'finished'))
+        """,
+        """
+        UPDATE sessions
+        SET lifecycle = COALESCE((
+            SELECT CASE canonical_events.event_type
+                WHEN 'session.finished' THEN 'finished'
+                ELSE 'running'
+            END
+            FROM canonical_events
+            WHERE canonical_events.session_id = sessions.session_id
+              AND canonical_events.event_type IN ('session.started', 'session.finished')
+            ORDER BY canonical_events.cursor DESC
+            LIMIT 1
+        ), 'running')
+        """,
+        """
+        CREATE TRIGGER sessions_lifecycle_after_event
+        AFTER INSERT ON canonical_events
+        WHEN NEW.event_type IN ('session.started', 'session.finished')
+        BEGIN
+            UPDATE sessions
+            SET lifecycle = CASE NEW.event_type
+                WHEN 'session.finished' THEN 'finished'
+                ELSE 'running'
+            END
+            WHERE session_id = NEW.session_id;
+        END
+        """,
+        """
+        CREATE TRIGGER sessions_lifecycle_after_insert
+        AFTER INSERT ON sessions
+        BEGIN
+            UPDATE sessions
+            SET lifecycle = COALESCE((
+                SELECT CASE canonical_events.event_type
+                    WHEN 'session.finished' THEN 'finished'
+                    ELSE 'running'
+                END
+                FROM canonical_events
+                WHERE canonical_events.session_id = NEW.session_id
+                  AND canonical_events.event_type IN ('session.started', 'session.finished')
+                ORDER BY canonical_events.cursor DESC
+                LIMIT 1
+            ), 'running')
+            WHERE session_id = NEW.session_id;
+        END
+        """,
+    ),
+    13: (
+        """
+        ALTER TABLE sessions
+        ADD COLUMN project_directory TEXT
+        """,
+    ),
 }
 
 
@@ -122,9 +310,12 @@ CREATE TABLE IF NOT EXISTS sessions(
     harness_session_id TEXT NOT NULL,
     source_reference TEXT NOT NULL,
     working_directory TEXT,
+    project_directory TEXT,
     terminal_window_id TEXT,
     harness_process_id INTEGER,
-    created_at REAL NOT NULL
+    created_at REAL NOT NULL,
+    lifecycle TEXT NOT NULL DEFAULT 'running'
+        CHECK(lifecycle IN ('running', 'finished'))
 );
 
 CREATE TABLE IF NOT EXISTS raw_events(
@@ -141,6 +332,8 @@ CREATE TABLE IF NOT EXISTS raw_events(
     observed_at REAL NOT NULL,
     encoding TEXT NOT NULL,
     payload BLOB NOT NULL,
+    payload_codec TEXT NOT NULL DEFAULT 'identity'
+        CHECK(payload_codec IN ('identity', 'zlib')),
     terminal_window_id TEXT,
     harness_process_id INTEGER,
     account_id TEXT,
@@ -152,6 +345,16 @@ CREATE INDEX IF NOT EXISTS index_raw_by_source
 
 CREATE INDEX IF NOT EXISTS index_raw_by_session
     ON raw_events(session_id, observed_at);
+
+-- The interpreter's durable input queue. The integer primary key preserves raw
+-- arrival order and makes an empty backlog an O(1) read. It is not derivable on
+-- each tick: doing that was a full scan of an ever-growing history table.
+CREATE TABLE IF NOT EXISTS pending_raw_events(
+    raw_event_row_id INTEGER PRIMARY KEY,
+    raw_event_id TEXT NOT NULL UNIQUE,
+    FOREIGN KEY(raw_event_id) REFERENCES raw_events(raw_event_id)
+        ON DELETE CASCADE
+);
 
 CREATE TABLE IF NOT EXISTS interpretations(
     raw_event_id TEXT PRIMARY KEY,
@@ -189,6 +392,36 @@ CREATE INDEX IF NOT EXISTS index_canonical_session_actor
 
 CREATE INDEX IF NOT EXISTS index_canonical_session_cursor
     ON canonical_events(session_id, cursor);
+
+CREATE TRIGGER IF NOT EXISTS sessions_lifecycle_after_event
+AFTER INSERT ON canonical_events
+WHEN NEW.event_type IN ('session.started', 'session.finished')
+BEGIN
+    UPDATE sessions
+    SET lifecycle = CASE NEW.event_type
+        WHEN 'session.finished' THEN 'finished'
+        ELSE 'running'
+    END
+    WHERE session_id = NEW.session_id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS sessions_lifecycle_after_insert
+AFTER INSERT ON sessions
+BEGIN
+    UPDATE sessions
+    SET lifecycle = COALESCE((
+        SELECT CASE canonical_events.event_type
+            WHEN 'session.finished' THEN 'finished'
+            ELSE 'running'
+        END
+        FROM canonical_events
+        WHERE canonical_events.session_id = NEW.session_id
+          AND canonical_events.event_type IN ('session.started', 'session.finished')
+        ORDER BY canonical_events.cursor DESC
+        LIMIT 1
+    ), 'running')
+    WHERE session_id = NEW.session_id;
+END;
 
 CREATE TABLE IF NOT EXISTS interpretation_events(
     event_id TEXT NOT NULL,
@@ -288,10 +521,13 @@ CREATE TABLE IF NOT EXISTS session_workspaces(
 CREATE TABLE IF NOT EXISTS composer_queue_items(
     session_id TEXT NOT NULL,
     position INTEGER NOT NULL,
+    request_id TEXT NOT NULL,
     text TEXT NOT NULL,
     PRIMARY KEY(session_id, position),
     FOREIGN KEY(session_id) REFERENCES session_workspaces(session_id) ON DELETE CASCADE
 );
+CREATE UNIQUE INDEX IF NOT EXISTS index_composer_queue_request
+ON composer_queue_items(session_id, request_id);
 
 CREATE TABLE IF NOT EXISTS dialog_answers(
     session_id TEXT NOT NULL,

@@ -33,7 +33,8 @@ DEFAULT_PANE_LINES = 3
 
 
 def window(window_id, tab_id="tab-one", tags=None, columns=80, lines=24,
-           is_first_in_tab=True, tab_is_active=True, tab_is_focused=True):
+           is_first_in_tab=True, tab_is_active=True, tab_is_focused=True,
+           is_active_in_tab=True):
     return WindowInfo(
         window_id=str(window_id),
         tab_id=str(tab_id),
@@ -43,6 +44,7 @@ def window(window_id, tab_id="tab-one", tags=None, columns=80, lines=24,
         is_first_in_tab=is_first_in_tab,
         tab_is_active=tab_is_active,
         tab_is_focused=tab_is_focused,
+        is_active_in_tab=is_active_in_tab,
     )
 
 

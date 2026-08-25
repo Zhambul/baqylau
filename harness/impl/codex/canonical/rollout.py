@@ -65,6 +65,8 @@
 #   {"kind": "stdin", "text": str, "call_id": str, "process_id": str}
 #   {"kind": "command_completed", "process_id": str, "output": str,
 #    "exit": int|None}
+#   {"kind": "mcp_tool_completed", "server": str, "tool": str,
+#    "status": str, "item_id": str}
 #   {"kind": "chat", "role": str, "text": str, "synthetic": bool}
 #   {"kind": "think", "text": str}                      (never empty)
 #   {"kind": "patch_call", "patch": str, "call_id": str}
@@ -266,7 +268,8 @@ def _stamp(rec: RolloutRecord | None, timestamp: str | None) -> RolloutRecord | 
 KINDS = frozenset({
     "turn_context", "usage", "patch", "compact", "task_started",
     "task_complete", "turn_aborted", "prompt", "skill", "reasoning", "message",
-    "search", "exec", "exec_result", "stdin", "command_completed", "chat", "think", "patch_call",
+    "search", "exec", "exec_result", "stdin", "command_completed", "mcp_tool_completed",
+    "chat", "think", "patch_call",
     "ask", "plan", "settings", "compact_boundary", "tool",
     "actor_activity", "collaboration_call", "task_list", "goal", "goal_tool",
     "tool_batch",

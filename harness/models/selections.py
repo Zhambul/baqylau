@@ -67,3 +67,13 @@ class SelectionSemantics:
             return None
         self._efforts[key] = current
         return EffortChanged(previous, current, effort_change_reason)
+
+    def release_session(self, session_id: SessionId) -> None:
+        """Release the last reported selections for one finished session."""
+        session_key = str(session_id)
+        self._models = {
+            key: value for key, value in self._models.items() if key[0] != session_key
+        }
+        self._efforts = {
+            key: value for key, value in self._efforts.items() if key[0] != session_key
+        }

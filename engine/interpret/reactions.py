@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from dataclasses import replace
 
+from core.repository import RepositoryQueries
 from domain.events import (
     CanonicalEvent,
     EventPayload,
@@ -36,14 +37,22 @@ class SessionUpsertCanonicalEventReaction(CanonicalEventReaction):
     window updates the row with the first fact its first delivery commits.
     """
 
-    def __init__(self, session_repository: SessionRepository) -> None:
+    def __init__(
+        self,
+        session_repository: SessionRepository,
+        repository_queries: RepositoryQueries | None = None,
+    ) -> None:
         self.sessions = session_repository
+        self.repositories = repository_queries or RepositoryQueries()
 
     def react(self, canonical_event: CanonicalEvent[EventPayload]) -> None:
         payload = canonical_event.payload
         started = payload if isinstance(payload, SessionStarted) else None
-        if started is None and canonical_event.terminal_window_id is None \
-                and canonical_event.harness_process_id is None:
+        if (
+            started is None
+            and canonical_event.terminal_window_id is None
+            and canonical_event.harness_process_id is None
+        ):
             return
         session = self.sessions.find(canonical_event.session_id)
         if session is None:
@@ -54,12 +63,34 @@ class SessionUpsertCanonicalEventReaction(CanonicalEventReaction):
                 lead_actor_id=canonical_event.actor_id,
                 source_reference=started.source_reference,
                 working_directory=started.working_directory or None,
+                project_directory=(
+                    self.repositories.project_directory(started.working_directory)
+                    or None
+                ),
             )
-        self.sessions.save(canonical_event.harness, replace(
-            session,
-            terminal_window_id=canonical_event.terminal_window_id or session.terminal_window_id,
-            harness_process_id=canonical_event.harness_process_id or session.harness_process_id,
-        ))
+        project_directory = session.project_directory
+        if project_directory is None:
+            project_directory = (
+                self.repositories.project_directory(
+                    started.working_directory
+                    if started is not None
+                    else session.working_directory or ""
+                )
+                or None
+            )
+        self.sessions.save(
+            canonical_event.harness,
+            replace(
+                session,
+                terminal_window_id=(canonical_event.terminal_window_id or session.terminal_window_id),
+                harness_process_id=(
+                    canonical_event.harness_process_id
+                    if started is not None
+                    else canonical_event.harness_process_id or session.harness_process_id
+                ),
+                project_directory=project_directory,
+            ),
+        )
 
 
 class ShellOutputCanonicalEventReaction(CanonicalEventReaction):
@@ -101,23 +132,17 @@ class ShellOutputCanonicalEventReaction(CanonicalEventReaction):
         elif isinstance(payload, ShellFinished):
             # Ends foreground followings only (until='shell_finished');
             # affects zero rows for commands that never had an output file.
-            self.shell_output.mark_shell_finished(
-                canonical_event.session_id, payload.shell_id
-            )
+            self.shell_output.mark_shell_finished(canonical_event.session_id, payload.shell_id)
         elif isinstance(payload, ShellBackgrounded):
             # Keep reading the file the job is still writing to. Without this the
             # `shell.finished` from the same raw event marks the row finishing,
             # one drain later the row is removed and — for a tee file we made —
             # the file is UNLINKED under a running process.
-            self.shell_output.outlive_shell(
-                canonical_event.session_id, payload.shell_id
-            )
+            self.shell_output.outlive_shell(canonical_event.session_id, payload.shell_id)
         elif isinstance(payload, ShellOutputFinished):
             # The background job's true end: stop following its file now
             # instead of stat-ing it for the rest of the session.
-            self.shell_output.mark_finishing(
-                canonical_event.session_id, payload.shell_id
-            )
+            self.shell_output.mark_finishing(canonical_event.session_id, payload.shell_id)
         elif isinstance(payload, SessionFinished):
             self._drain_all(canonical_event.session_id)
 
@@ -125,22 +150,18 @@ class ShellOutputCanonicalEventReaction(CanonicalEventReaction):
         # A finished session leaves watchable(): read each remaining file to its
         # end, remove the row, and unlink the tee file when we created it.
         followings = self.shell_output.find_for_session(session_id)
-        positions = self.raw_events.latest_positions([
-            output_source.shell_output_source_identity(
-                following.harness, following.session_id, following.shell_id
-            )
-            for following in followings
-        ])
+        positions = self.raw_events.latest_positions(
+            [
+                output_source.shell_output_source_identity(following.harness, following.session_id, following.shell_id)
+                for following in followings
+            ]
+        )
         for following in followings:
-            source = output_source.ShellOutputRawEventSource(
-                following, self.shell_output
-            )
+            source = output_source.ShellOutputRawEventSource(following, self.shell_output)
             raw_events = source.read(positions.get(source.source_identity))
             if raw_events:
                 self.raw_events.record(raw_events)
-            self.shell_output.remove(
-                session_id, ShellId(str(following.shell_id))
-            )
+            self.shell_output.remove(session_id, ShellId(str(following.shell_id)))
             output_source.delete_source_file(following)
 
 

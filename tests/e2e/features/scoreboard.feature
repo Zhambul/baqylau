@@ -29,6 +29,7 @@ Feature: the scoreboard summarizes the session
     And command "expected failure" has state failed
     And command "expected failure" has exit code 7
     And command "expected failure" has output containing 'expected-error'
+    And command "expected failure" belongs to worker of work "failed command"
     And session "primary" has at least 3 prompts
     And session "primary" has at least 2 shell commands
     And session "primary" has at least 1 failed shell command

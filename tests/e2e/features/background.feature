@@ -23,6 +23,49 @@ Feature: background work reaches the session feed
       | codex       | gpt-5.6-luna | subagent | Use the shell execution tool with a 1000 ms yield time and do not poll it. |
       | claude_code | haiku        | lead     | Use the Bash tool with run_in_background set to true.                     |
 
+  Scenario Outline: a completed empty command is not background work
+    Given session configuration "primary" uses <harness> with model <model> and low effort
+    When I launch session "primary" as turn "empty command" with prompt
+      """
+      Run only the shell command `true`. <execution_instruction>
+      Do not poll the command or run another tool. Then, reply only with the exact
+      marker EMPTY_COMMAND_DONE.
+      """
+    Then turn "empty command" completes
+    When I name the only shell command in turn "empty command" containing 'true' "empty command"
+    Then session "primary" has no running work
+    And turn "empty command" has exactly 0 backgrounded command
+    And command "empty command" has state succeeded
+    And turn "empty command" has final answer 'EMPTY_COMMAND_DONE'
+
+    Examples:
+      | harness     | model        | execution_instruction                                                       |
+      | codex       | gpt-5.6-luna | Use the shell execution tool with a 10000 ms yield time.                     |
+      | claude_code | haiku        | Use the Bash tool in the foreground. Do not set run_in_background to true.  |
+
+  Scenario Outline: a subagent owns background work through completion
+    Given session configuration "primary" uses <harness> with model <model> and low effort
+    When I launch session "primary" and assign work "complete child job" to the subagent with prompt
+      """
+      Run `sleep 3; echo child-job-done` as background work.
+      <completion_instruction> Wait until that same command completes. Then,
+      reply only with the exact marker CHILD_JOB_DONE.
+      """
+    Then work "complete child job" completes
+    And work "complete child job" has worker type subagent
+    When I name the only background job in work "complete child job" containing 'sleep 3' "child job"
+    Then job "child job" has output containing 'child-job-done'
+    And job "child job" ends
+    And command "child job" has state succeeded
+    And command "child job" belongs to worker of work "complete child job"
+    And subagent work "complete child job" has assignment state succeeded
+    And work "complete child job" has final answer 'CHILD_JOB_DONE'
+
+    Examples:
+      | harness     | model        | completion_instruction                                                                                   |
+      | codex       | gpt-5.6-luna | Use the shell execution tool with a 1000 ms yield time. Use the process wait operation after it yields.   |
+      | claude_code | haiku        | Use Bash with run_in_background set to true. Use TaskOutput with block set to true after the task starts. |
+
   Scenario Outline: a command backgrounded mid-run keeps reporting
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "run delayed echo" with prompt

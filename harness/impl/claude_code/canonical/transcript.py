@@ -77,6 +77,7 @@
 #       the same monitor's stream ending, which does carry <tool-use-id> — so
 #       the end is attributable on its own even when nothing remembers the arm.
 import html
+import glob
 import os
 import re
 from dataclasses import dataclass
@@ -87,7 +88,7 @@ from pydantic import ValidationError
 
 from harness.impl.claude_code.canonical import records
 from harness.impl.claude_code.ids import ClaudeCodeActorId, ClaudeCodeCallId, ClaudeCodeShellId
-from harness.models import TitleWriteOutcome
+from harness.models import TitleWriteOutcome, TranslationError
 from repository.contract.titles import NativeSessionTitleRepository
 
 
@@ -95,6 +96,7 @@ from repository.contract.titles import NativeSessionTitleRepository
 # record whose text is wrapped in <teammate-message teammate_id="<sender>" …>BODY
 # </teammate-message> (the very first one is the lead's spawn prompt).
 TEAMMSG = re.compile(r'^\s*<teammate-message\b([^>]*)>\s*(.*?)\s*</teammate-message>\s*$', re.S)
+TEAMMSG_BLOCK = re.compile(r'<teammate-message\b([^>]*)>\s*(.*?)\s*</teammate-message>', re.S)
 _TM_ID  = re.compile(r'teammate_id="([^"]*)"')
 
 # A <task-notification> XML block. Read with plain tag scans rather than an XML
@@ -180,6 +182,12 @@ class TeamMessageTranscriptRecord:
 
 
 @dataclass(frozen=True)
+class TeammateIdleTranscriptRecord:
+    notifications: tuple[records.TeammateIdleNotificationDocument, ...]
+    kind: TranscriptKind = TranscriptKind.ACTOR_ASSIGNMENT_FINISHED
+
+
+@dataclass(frozen=True)
 class ResultsTranscriptRecord:
     blocks: tuple[records.ToolResultBlock, ...]
     tool_response: records.ToolResponse | records.ToolResponseBlocks | str | None
@@ -241,6 +249,7 @@ TranscriptRecord: TypeAlias = (
     BadTranscriptRecord | CompactTranscriptRecord | TextTranscriptRecord
     | PromptTranscriptRecord | SlashCommandTranscriptRecord
     | TeamMessageTranscriptRecord | ResultsTranscriptRecord
+    | TeammateIdleTranscriptRecord
     | AssistantTranscriptRecord | GoalTranscriptRecord
     | BackgroundCommandCompletedTranscriptRecord | MonitorEventTranscriptRecord
     | MonitorEndedTranscriptRecord | ActorAssignmentFinishedTranscriptRecord
@@ -346,6 +355,25 @@ def classify_user_text(text: str) -> tuple[str, str, str | None]:
         sid = _TM_ID.search(m.group(1))
         return "teammsg", (sid.group(1) if sid else ""), m.group(2)
     return "prompt", text, None
+
+
+def teammate_idle_notifications(
+    text: str,
+) -> tuple[records.TeammateIdleNotificationDocument, ...]:
+    """Read all structured idle messages in one Claude team mail wrapper."""
+    if not _TEAM_WRAPPER.match(text):
+        return ()
+    found = []
+    for match in TEAMMSG_BLOCK.finditer(text):
+        body = match.group(2).strip()
+        try:
+            header = records.TeammateMessageBodyHeader.model_validate_json(body)
+        except ValidationError:
+            continue
+        if header.type != "idle_notification":
+            continue
+        found.append(records.TeammateIdleNotificationDocument.model_validate_json(body))
+    return tuple(found)
 
 
 # The trailing config hint Claude Code appends to every recap `content` — it
@@ -499,6 +527,9 @@ def parse_line(s: str) -> TranscriptRecord | None:
                 return None
             if user.origin is not None and user.origin.kind == "task-notification":
                 return _task_notification(content)
+            idle_notifications = teammate_idle_notifications(content)
+            if idle_notifications:
+                return TeammateIdleTranscriptRecord(idle_notifications)
             kind, a, b = classify_user_text(content)
             if kind == "teammsg":
                 return TeamMessageTranscriptRecord(a, b or "")
@@ -579,21 +610,25 @@ def parse_line(s: str) -> TranscriptRecord | None:
                 str(goal.reason or "").strip() or None,
             )
         if att_type == "queued_command":
-            queued = records.AttachmentRecord[
+            queued_attachment = records.AttachmentRecord[
                 records.QueuedCommandAttachment
             ].model_validate_json(s).attachment
-            if queued is None:
+            if queued_attachment is None:
                 return None
-            if queued.commandMode == "prompt":
-                return PromptTranscriptRecord(queued.prompt or "")
+            if queued_attachment.commandMode == "prompt":
+                return PromptTranscriptRecord(queued_attachment.prompt or "")
         return None
     if t == "queue-operation":
-        records.QueueOperationRecord.model_validate_json(s)  # shape-check only
-        # The ENQUEUE half of a task-notification's delivery, and the same XML
-        # the `user` record above carries — measured: every notification appeared
-        # in both shapes. Read here too, it would double every monitor event.
-        # The `user` copy owns it, because that copy is the one the model was
-        # actually given and the one that carries `origin.kind`.
+        queue_record = records.QueueOperationRecord.model_validate_json(s)
+        # Monitor notifications have ordered event rows. Reading both their
+        # queue and user copies would create two different ordinals. Background
+        # completion has one stable shell identity, so its usual user copy
+        # deduplicates. Claude Code 2.1.241 can put a CHILD command completion
+        # only in the PARENT queue. Read that one semantic queue shape.
+        if queue_record.operation == "enqueue" and isinstance(queue_record.content, str):
+            notification = _task_notification(queue_record.content)
+            if isinstance(notification, BackgroundCommandCompletedTranscriptRecord):
+                return notification
         return None
     return None
 
@@ -766,6 +801,113 @@ def _claude_head(path: str) -> bool:
         if header.type in RECORD_TYPES:
             return True
     return False
+
+
+def assignment_call_before(
+    path: str,
+    before_position: str,
+    actor_id: ClaudeCodeActorId,
+) -> ClaudeCodeCallId | None:
+    """Find the Agent result that introduced one async child before a position."""
+    try:
+        end_position = int(before_position)
+    except ValueError:
+        return None
+    try:
+        source = open(path, "rb")
+    except OSError:
+        return None
+    candidates: list[ClaudeCodeCallId] = []
+    metadata = teammate_meta(path, actor_id)
+    teammate_name = str(metadata.name or "")
+    with source:
+        while source.tell() < end_position:
+            line = source.readline()
+            if not line:
+                break
+            if (
+                str(actor_id).encode("utf-8") not in line
+                and (not teammate_name or teammate_name.encode("utf-8") not in line)
+            ):
+                continue
+            try:
+                user = records.UserRecord.model_validate_json(line)
+            except ValidationError:
+                continue
+            response = user.toolUseResult
+            if not isinstance(response, records.ToolResponse):
+                continue
+            response_actor_ids = {
+                str(response.agentId or ""),
+                str(response.agent_id or ""),
+                str(response.teammate_id or ""),
+            }
+            if (
+                str(actor_id) not in response_actor_ids
+                and (not teammate_name or response.name != teammate_name)
+            ):
+                continue
+            content_blocks = user.message.content if user.message is not None else None
+            if not isinstance(content_blocks, list):
+                continue
+            result_blocks = [
+                block
+                for block in content_blocks
+                if isinstance(block, records.ToolResultBlock)
+            ]
+            if len(result_blocks) != 1 or not result_blocks[0].tool_use_id:
+                continue
+            candidate = ClaudeCodeCallId(result_blocks[0].tool_use_id)
+            if candidate not in candidates:
+                candidates.append(candidate)
+    if len(candidates) > 1:
+        raise TranslationError(
+            f"Claude Code actor {actor_id!r} has multiple Agent assignments"
+        )
+    return candidates[0] if candidates else None
+
+
+def teammate_meta(path: str, actor_id: ClaudeCodeActorId) -> records.AgentMetaFile:
+    """Read the sidecar for one native teammate actor."""
+    base = path[:-len(".jsonl")] if path.endswith(".jsonl") else path
+    metadata_path = os.path.join(
+        base,
+        AGENT_SUBDIR,
+        f"agent-{actor_id}.meta.json",
+    )
+    try:
+        with open(metadata_path, encoding="utf-8") as source:
+            return records.AgentMetaFile.model_validate_json(source.read())
+    except OSError:
+        return records.AgentMetaFile()
+
+
+def teammate_actor_id(path: str, teammate_name: str) -> ClaudeCodeActorId | None:
+    """Resolve Claude's short teammate name to its transcript actor id."""
+    if not teammate_name:
+        return None
+    base = path[:-len(".jsonl")] if path.endswith(".jsonl") else path
+    matches = []
+    pattern = os.path.join(base, AGENT_SUBDIR, "agent-*.meta.json")
+    for metadata_path in sorted(glob.glob(pattern)):
+        try:
+            with open(metadata_path, encoding="utf-8") as source:
+                metadata = records.AgentMetaFile.model_validate_json(source.read())
+        except OSError:
+            continue
+        if metadata.name != teammate_name:
+            continue
+        filename = os.path.basename(metadata_path)
+        prefix = "agent-"
+        suffix = ".meta.json"
+        actor_text = filename[len(prefix):-len(suffix)]
+        if actor_text:
+            matches.append(ClaudeCodeActorId(actor_text))
+    if len(matches) > 1:
+        raise TranslationError(
+            f"Claude Code teammate name {teammate_name!r} identifies multiple actors"
+        )
+    return matches[0] if matches else None
 
 
 def owns(path: str) -> bool:

@@ -92,6 +92,8 @@ export function translateSession(wire: WireSession): Session {
         ? null
         : {
             objective: wire.goal.objective,
+            state: wire.goal.state,
+            reason: wire.goal.reason,
             completed: wire.goal.completed,
           },
     tasks: wire.tasks.map((task) => ({
@@ -111,6 +113,7 @@ export function translateSessionSnapshot(wire: WireSnapshot): SessionSnapshot {
     session: translateSession(wire.session),
     actors: wire.actors.map(translateActor),
     live: wire.live,
+    projectDirectory: wire.project_directory,
     repository:
       wire.repository === null
         ? null

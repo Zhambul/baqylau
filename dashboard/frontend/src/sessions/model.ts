@@ -11,6 +11,14 @@ export type ActorStatus =
   | 'awaiting_attention'
   | 'awaiting_response';
 type TaskState = 'pending' | 'in_progress' | 'completed' | 'deleted';
+type GoalState =
+  | 'active'
+  | 'paused'
+  | 'blocked'
+  | 'usage_limited'
+  | 'budget_limited'
+  | 'completed'
+  | 'cleared';
 
 export type TokenUsage = {
   readonly inputTokens: number;
@@ -81,6 +89,8 @@ export type Session = {
   readonly leadActorId: ActorId;
   readonly goal: {
     readonly objective: string | null;
+    readonly state: GoalState;
+    readonly reason: string | null;
     readonly completed: boolean;
   } | null;
   readonly tasks: readonly {
@@ -97,6 +107,7 @@ export type SessionSnapshot = {
   readonly session: Session;
   readonly actors: readonly Actor[];
   readonly live: boolean;
+  readonly projectDirectory: string;
   readonly repository: {
     readonly branch: string;
     readonly worktree: string | null;

@@ -54,6 +54,14 @@ class TabAppearance:
 
 
 @dataclass(frozen=True)
+class WindowProcess:
+    """One process that the terminal reports for a window."""
+
+    process_id: int | None
+    command: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class WindowInfo:
     """One window, as the terminal reports it.
 
@@ -74,3 +82,5 @@ class WindowInfo:
     is_first_in_tab: bool
     tab_is_active: bool
     tab_is_focused: bool
+    is_active_in_tab: bool = False
+    processes: tuple[WindowProcess, ...] = ()

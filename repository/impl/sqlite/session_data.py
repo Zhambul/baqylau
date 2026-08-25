@@ -29,6 +29,7 @@ from repository.mapper.documents import encode_document
 from repository.contract.session_data import (
     AggregateDelta,
     EntryPage,
+    SessionLead,
     SessionDataChanges,
     SessionDataRepository,
     SessionDelta,
@@ -187,6 +188,27 @@ class SqliteSessionDataRepository(SessionDataRepository):
                 actors_by_session.get(session_row["session_id"], ()),
                 _value(newest.get(session_row["session_id"]), "cursor"),
                 _value(newest.get(session_row["session_id"]), "occurred_at"),
+            )
+            for session_row in session_rows
+        )
+
+    def lead_sessions(self) -> tuple[SessionLead, ...]:
+        with self.sqlite_database.read() as connection:
+            session_rows = connection.execute(
+                "SELECT * FROM session_data ORDER BY session_id"
+            ).fetchall()
+            lead_rows = connection.execute(
+                "SELECT actor.* FROM session_data_actors AS actor "
+                "JOIN session_data AS session "
+                "ON session.session_id = actor.session_id "
+                "AND actor.actor_id = json_extract(session.payload, '$.lead_actor_id') "
+                "ORDER BY actor.session_id"
+            ).fetchall()
+        leads = {row["session_id"]: _actor_facts(row) for row in lead_rows}
+        return tuple(
+            SessionLead(
+                session=_session_facts(session_row),
+                lead=leads.get(session_row["session_id"]),
             )
             for session_row in session_rows
         )

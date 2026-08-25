@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import glob
 import hashlib
 import os
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pydantic import ValidationError
-from domain.ids import HarnessName, RawEventId
+from domain.ids import HarnessName, RawEventId, SessionId
 from harness.impl.codex.ids import (
     CodexActorId,
     CodexSessionId,
@@ -18,6 +18,7 @@ from harness.impl.codex.ids import (
 )
 from domain.values import ActorRole
 from harness.contract import HarnessRawEventSource, HarnessRawEventSources
+from harness.file_tail import CompleteLineTail
 from harness.impl.codex.canonical import rollout
 from harness.impl.codex.canonical import title as native_title
 from harness.impl.codex.canonical.records import (
@@ -34,11 +35,16 @@ from harness.models import (
 )
 from harness.models.directives import NativeTitleObservation
 from repository.mapper.documents import encode_document
-from domain.values import TitleOrigin
 
 HARNESS = HarnessName.CODEX
 ROLLOUT_NAME = re.compile(r"rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-(.+)\.jsonl$")
 EVENT_BATCH_SIZE = 100
+CATALOG_REFRESH_SECONDS = 1.0
+# A source-identity revision is a data migration. Version 3 re-observes live
+# rollouts so command completions that the older ambiguous correlation skipped
+# can add their missing canonical finish facts and their final settled state.
+# Stable canonical identities deduplicate every fact that was already correct.
+ROLLOUT_OBSERVATION_VERSION = 3
 
 
 def codex_session_id(path: str) -> CodexSessionId:
@@ -80,10 +86,94 @@ def _parent_thread_id(session_meta_payload: SessionMetaPayload | None) -> str | 
     return parent.strip() if parent else None
 
 
-def _rollout_paths() -> tuple[str, ...]:
-    codex_home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
-    pattern = os.path.join(codex_home, "sessions", "*", "*", "*", "rollout-*.jsonl")
-    return tuple(sorted(glob.glob(pattern)))
+@dataclass(frozen=True)
+class DirectorySnapshot:
+    marker: tuple[int, int]
+    entries: tuple[str, ...]
+
+
+class RolloutCatalog:
+    """Find new rollout files without reading every date directory each tick."""
+
+    def __init__(self) -> None:
+        self._root = ""
+        self._directories: dict[str, DirectorySnapshot] = {}
+        self._rollouts: dict[str, DirectorySnapshot] = {}
+
+    def paths(self) -> tuple[str, ...]:
+        root = os.path.join(
+            os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex"),
+            "sessions",
+        )
+        if root != self._root:
+            self._root = root
+            self._directories.clear()
+            self._rollouts.clear()
+        years = self._subdirectories(root, 4)
+        months = tuple(
+            month
+            for year in years
+            for month in self._subdirectories(year, 2)
+        )
+        days = tuple(
+            day
+            for month in months
+            for day in self._subdirectories(month, 2)
+        )
+        return tuple(
+            rollout_path
+            for day in days
+            for rollout_path in self._rollout_files(day)
+        )
+
+    def _subdirectories(self, directory: str, name_width: int) -> tuple[str, ...]:
+        marker = self._marker(directory)
+        if marker is None:
+            return ()
+        previous = self._directories.get(directory)
+        if previous is not None and previous.marker == marker:
+            return previous.entries
+        try:
+            with os.scandir(directory) as entries:
+                found = tuple(sorted(
+                    entry.path
+                    for entry in entries
+                    if len(entry.name) == name_width
+                    and entry.name.isdigit()
+                    and entry.is_dir(follow_symlinks=False)
+                ))
+        except OSError:
+            return ()
+        self._directories[directory] = DirectorySnapshot(marker, found)
+        return found
+
+    def _rollout_files(self, directory: str) -> tuple[str, ...]:
+        marker = self._marker(directory)
+        if marker is None:
+            return ()
+        previous = self._rollouts.get(directory)
+        if previous is not None and previous.marker == marker:
+            return previous.entries
+        try:
+            with os.scandir(directory) as entries:
+                found = tuple(sorted(
+                    entry.path
+                    for entry in entries
+                    if ROLLOUT_NAME.search(entry.name)
+                    and entry.is_file(follow_symlinks=False)
+                ))
+        except OSError:
+            return ()
+        self._rollouts[directory] = DirectorySnapshot(marker, found)
+        return found
+
+    @staticmethod
+    def _marker(directory: str) -> tuple[int, int] | None:
+        try:
+            status = os.stat(directory)
+        except OSError:
+            return None
+        return status.st_ino, status.st_mtime_ns
 
 
 def lead_rollout(path: str) -> bool:
@@ -117,40 +207,29 @@ class CodexRolloutRawEventSource(HarnessRawEventSource):
         self.child_body_position = child_body_position
         self.actor_role = actor_role
         self.source_path = os.path.realpath(raw_event_source_context.source_reference)
+        self.tail = CompleteLineTail(self.source_path)
         source_hash = hashlib.sha256(self.source_path.encode("utf-8")).hexdigest()
-        self.source_identity = f"codex:rollout:{source_hash}"
+        self.source_identity = (
+            f"codex:rollout:v{ROLLOUT_OBSERVATION_VERSION}:{source_hash}"
+        )
 
     def read(self, after_position: str | None) -> tuple[RawEvent, ...]:
         raw_events: list[RawEvent] = []
-        try:
-            source = open(self.source_path, "rb")
-        except FileNotFoundError:
-            return ()
-        with source:
-            if after_position is not None:
-                source.seek(int(after_position))
-                skipped = source.readline()
-                if not skipped.endswith(b"\n"):
-                    return ()
-            for _ in range(EVENT_BATCH_SIZE):
-                line_position = source.tell()
-                line = source.readline()
-                if not line or not line.endswith(b"\n"):
-                    break
-                raw_events.append(RawEvent(
-                    raw_event_id=RawEventId(f"{self.source_identity}:{line_position}"),
-                    harness=HARNESS,
-                    source_type=self._source_type(line_position),
-                    source_name=self.source_path,
-                    source_position=str(line_position),
-                    session_id=self.context.session_id,
-                    actor_id=self.context.actor_id,
-                    parent_actor_id=self.context.parent_actor_id,
-                    observed_at=time.time(),
-                    encoding="jsonl",
-                    payload=line,
-                    source_identity=self.source_identity,
-                ))
+        for line in self.tail.read(after_position, EVENT_BATCH_SIZE):
+            raw_events.append(RawEvent(
+                raw_event_id=RawEventId(f"{self.source_identity}:{line.position}"),
+                harness=HARNESS,
+                source_type=self._source_type(line.position),
+                source_name=self.source_path,
+                source_position=str(line.position),
+                session_id=self.context.session_id,
+                actor_id=self.context.actor_id,
+                parent_actor_id=self.context.parent_actor_id,
+                observed_at=time.time(),
+                encoding="jsonl",
+                payload=line.content,
+                source_identity=self.source_identity,
+            ))
         return tuple(raw_events)
 
     def _source_type(self, line_position: int) -> str:
@@ -167,24 +246,41 @@ class CodexTitleRawEventSource(HarnessRawEventSource):
 
     def __init__(self, raw_event_source_context: RawEventSourceContext) -> None:
         self.context = raw_event_source_context
+        self._checked_store = False
+        self._store_marker: native_title.CodexTitleStoreMarker | None = None
         source_hash = hashlib.sha256(
             os.path.realpath(raw_event_source_context.source_reference).encode("utf-8")
         ).hexdigest()
         self.source_identity = f"codex:title:{source_hash}"
 
     def read(self, after_position: str | None) -> tuple[RawEvent, ...]:
+        store_marker = native_title.title_store_marker(self.context.source_reference)
+        if (
+            store_marker is not None
+            and self._checked_store
+            and store_marker == self._store_marker
+        ):
+            return ()
         observed_title = native_title.titles.read_title(self.context.source_reference)
+        self._store_marker = native_title.title_store_marker(
+            self.context.source_reference
+        )
+        self._checked_store = True
         if observed_title is None:
             return ()
-        position = hashlib.sha256(observed_title.encode("utf-8")).hexdigest()
-        if position == after_position:
+        state_position = hashlib.sha256(
+            f"{observed_title.origin}\0{observed_title.text}".encode("utf-8")
+        ).hexdigest()
+        if _title_state_position(after_position) == state_position:
             return ()
-        origin = (
-            TitleOrigin.AUTOMATIC
-            if after_position is None
-            else TitleOrigin.CUSTOM
+        position = _title_observation_position(
+            state_position,
+            self._store_marker,
         )
-        observation = NativeTitleObservation(observed_title, origin)
+        observation = NativeTitleObservation(
+            observed_title.text,
+            observed_title.origin,
+        )
         return (RawEvent(
             raw_event_id=RawEventId(f"{self.source_identity}:{position}"),
             harness=HARNESS,
@@ -201,6 +297,44 @@ class CodexTitleRawEventSource(HarnessRawEventSource):
         ),)
 
 
+def _title_state_position(source_position: str | None) -> str | None:
+    """Get the title state from a current or legacy source position."""
+    if source_position is None:
+        return None
+    version, separator, remainder = source_position.partition(":")
+    if version != "v2" or not separator:
+        return source_position
+    state_position, separator, _observation_position = remainder.partition(":")
+    return state_position if separator else source_position
+
+
+def _title_observation_position(
+    state_position: str,
+    store_marker: native_title.CodexTitleStoreMarker | None,
+) -> str:
+    """Make repeated title states distinct without replay after a restart.
+
+    The state part lets a new source suppress an unchanged title. The store
+    marker makes A -> B -> A a new observation instead of reusing the first A
+    raw-event identity and losing the final change at the durable dedupe gate.
+    """
+    marker_value = (
+        repr(
+            (
+                store_marker.database,
+                store_marker.database_state,
+                store_marker.write_ahead_state,
+            )
+        )
+        if store_marker is not None
+        else str(time.time_ns())
+    )
+    observation_position = hashlib.sha256(
+        marker_value.encode("utf-8")
+    ).hexdigest()
+    return f"v2:{state_position}:{observation_position}"
+
+
 @dataclass
 class ChildRollouts:
     parent_session_id: CodexSessionId
@@ -208,28 +342,43 @@ class ChildRollouts:
     next_index: int = 0
 
 
+@dataclass
+class PendingRollout:
+    path: str
+    marker: tuple[int, int, int] | None = None
+
+
+@dataclass(frozen=True)
+class CodexSessionSources:
+    session_id: SessionId
+    source_reference: str
+    owns_lead_session: bool
+    sources: tuple[HarnessRawEventSource, ...]
+
+
 class CodexRawEventSources(HarnessRawEventSources):
-    def __init__(self) -> None:
-        self._known_rollout_paths: tuple[str, ...] = ()
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+        self._catalog = RolloutCatalog()
+        self._clock = clock
+        self._catalog_refreshed_at: float | None = None
+        self._known_rollout_paths: frozenset[str] = frozenset()
+        self._pending_rollouts: list[PendingRollout] = []
+        self._child_parent_by_path: dict[str, CodexSessionId] = {}
         self._child_rollouts: list[ChildRollouts] = []
+        self._sessions: dict[SessionId, CodexSessionSources] = {}
+        self._child_sources: dict[
+            tuple[SessionId, str, ActorRole], CodexRolloutRawEventSource
+        ] = {}
+
+    def release_session(self, session_id: SessionId) -> None:
+        """Release rollout readers for one finished session."""
+        self._sessions.pop(session_id, None)
+        for key in tuple(self._child_sources):
+            if key[0] == session_id:
+                del self._child_sources[key]
 
     def _next_child_rollout(self, parent_codex_session_id: CodexSessionId) -> tuple[str, ...]:
-        rollout_paths = _rollout_paths()
-        if rollout_paths != self._known_rollout_paths:
-            children: list[ChildRollouts] = []
-            for rollout_path in rollout_paths:
-                parent_id = _parent_thread_id(session_metadata(rollout_path))
-                if parent_id:
-                    group = next(
-                        (child for child in children if child.parent_session_id == parent_id),
-                        None,
-                    )
-                    if group is None:
-                        group = ChildRollouts(CodexSessionId(parent_id), ())
-                        children.append(group)
-                    group.paths = (*group.paths, rollout_path)
-            self._known_rollout_paths = rollout_paths
-            self._child_rollouts = children
+        self._refresh_child_rollouts()
         selected_children = next(
             (child for child in self._child_rollouts if child.parent_session_id == parent_codex_session_id),
             None,
@@ -240,20 +389,99 @@ class CodexRawEventSources(HarnessRawEventSources):
         selected_children.next_index += 1
         return (selected_children.paths[position],)
 
+    def _refresh_child_rollouts(self) -> None:
+        now = self._clock()
+        if (
+            self._catalog_refreshed_at is not None
+            and now - self._catalog_refreshed_at < CATALOG_REFRESH_SECONDS
+        ):
+            return
+        self._catalog_refreshed_at = now
+        rollout_paths = frozenset(self._catalog.paths())
+        removed = self._known_rollout_paths - rollout_paths
+        added = rollout_paths - self._known_rollout_paths
+        self._pending_rollouts = [
+            pending
+            for pending in self._pending_rollouts
+            if pending.path not in removed
+        ]
+        for rollout_path in removed:
+            self._child_parent_by_path.pop(rollout_path, None)
+        for key in tuple(self._child_sources):
+            if key[1] in removed:
+                del self._child_sources[key]
+        self._pending_rollouts.extend(PendingRollout(path) for path in added)
+        changed = bool(removed or added)
+        for pending in tuple(self._pending_rollouts):
+            marker = self._file_marker(pending.path)
+            if marker == pending.marker:
+                continue
+            pending.marker = marker
+            metadata = session_metadata(pending.path)
+            if metadata is None:
+                continue
+            self._pending_rollouts.remove(pending)
+            parent_id = _parent_thread_id(metadata)
+            if parent_id:
+                self._child_parent_by_path[pending.path] = CodexSessionId(parent_id)
+                changed = True
+        self._known_rollout_paths = rollout_paths
+        if not changed:
+            return
+        existing = {child.parent_session_id: child for child in self._child_rollouts}
+        grouped: dict[CodexSessionId, list[str]] = {}
+        for rollout_path, parent_id in self._child_parent_by_path.items():
+            grouped.setdefault(parent_id, []).append(rollout_path)
+        self._child_rollouts = [
+            ChildRollouts(
+                parent_id,
+                tuple(sorted(paths)),
+                existing.get(parent_id, ChildRollouts(parent_id, ())).next_index,
+            )
+            for parent_id, paths in sorted(grouped.items())
+        ]
+
+    @staticmethod
+    def _file_marker(path: str) -> tuple[int, int, int] | None:
+        try:
+            status = os.stat(path)
+        except OSError:
+            return None
+        return status.st_ino, status.st_mtime_ns, status.st_size
+
     def for_session(self, session: Session) -> tuple[HarnessRawEventSource, ...]:
-        sources: list[HarnessRawEventSource] = []
-        owns_lead_session = lead_rollout(session.source_reference)
-        if owns_lead_session:
-            sources.append(CodexRolloutRawEventSource(session.source_context))
-            sources.append(CodexTitleRawEventSource(session.source_context))
+        cached = self._sessions.get(session.session_id)
+        if cached is None or cached.source_reference != session.source_reference:
+            owns_lead_session = lead_rollout(session.source_reference)
+            lead_sources: tuple[HarnessRawEventSource, ...] = (
+                (
+                    CodexRolloutRawEventSource(session.source_context),
+                    CodexTitleRawEventSource(session.source_context),
+                )
+                if owns_lead_session
+                else ()
+            )
+            cached = CodexSessionSources(
+                session.session_id,
+                session.source_reference,
+                owns_lead_session,
+                lead_sources,
+            )
+            self._sessions[session.session_id] = cached
+        sources = list(cached.sources)
         for child_path in self._next_child_rollout(
             codex_session_id_from_domain(session.session_id)
         ):
             child_body_position = rollout.subagent_body_offset(child_path)
             if child_body_position == 0:
                 continue
-            sources.append(
-                CodexRolloutRawEventSource(
+            actor_role = (
+                ActorRole.CHILD if cached.owns_lead_session else ActorRole.SIDECAR
+            )
+            key = session.session_id, child_path, actor_role
+            child_source = self._child_sources.get(key)
+            if child_source is None:
+                child_source = CodexRolloutRawEventSource(
                     RawEventSourceContext(
                         session_id=session.session_id,
                         lead_actor_id=session.lead_actor_id,
@@ -264,7 +492,8 @@ class CodexRawEventSources(HarnessRawEventSources):
                         source_reference=child_path,
                     ),
                     child_body_position,
-                    ActorRole.CHILD if owns_lead_session else ActorRole.SIDECAR,
+                    actor_role,
                 )
-            )
+                self._child_sources[key] = child_source
+            sources.append(child_source)
         return tuple(sources)

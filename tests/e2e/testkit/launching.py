@@ -25,11 +25,12 @@ def start_named_session(
     spec = session_specs.get(session_name)
     launch = client.sessions.launch(
         spec.harness,
-        workspace=workspace,
+        workspace=spec.workspace or workspace,
         prompt=prompt,
         model=spec.model,
         effort=spec.effort,
         attachments=attachments,
+        account_id=spec.account_id,
     )
     session = client.sessions.wait_for_session(launch, wait_policy.session_announcement)
     sessions.bind(session_name, session)

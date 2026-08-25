@@ -17,3 +17,10 @@ dashboard/frontend/coverage/
 dashboard/frontend/playwright-report/
 dashboard/frontend/test-results/
 dashboard/static/build/
+
+# Keep the shared GitHub Projects skill visible through Claude Code's skill path.
+!.claude/
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/github-projects

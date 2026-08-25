@@ -33,43 +33,94 @@ Feature: file operations reach the session feed
 
   Scenario Outline: a file read reports its path and content
     Given session configuration "primary" uses <harness> with model <model> and <effort> effort
-    When I launch session "primary" as turn "read project guide" with prompt
+    When I launch session "primary" and assign work "read project guide" to the <worker> with prompt
       """
       Use a file reading tool, not a shell command, to read README.md. The
       reading tool must return the file content in its result. Then, reply only
       with the word done.
       """
-    Then turn "read project guide" completes
-    When I name the read operation in turn "read project guide" for workspace file 'README.md' "project guide"
+    Then work "read project guide" completes
+    And work "read project guide" has worker type <worker>
+    When I name the read operation in work "read project guide" for workspace file 'README.md' "project guide"
     Then file operation "project guide" has state succeeded
     And file operation "project guide" has content containing 'baqylau'
-    And turn "read project guide" has final answer 'done'
+    And work "read project guide" has final answer 'done'
 
     Examples:
-      | harness     | model        | effort |
-      | codex       | gpt-5.6-luna | low    |
-      | claude_code | haiku        | low    |
+      | harness     | model        | effort | worker   |
+      | codex       | gpt-5.6-luna | low    | lead     |
+      | codex       | gpt-5.6-luna | low    | subagent |
+      | claude_code | haiku        | low    | lead     |
+      | claude_code | haiku        | low    | subagent |
 
   Scenario Outline: a deleted file keeps its complete operation history
     Given the file operation fixture does not exist
     And session configuration "primary" uses <harness> with model <model> and low effort
-    When I launch session "primary" as turn "delete fixture" with prompt
+    When I launch session "primary" and assign work "delete fixture" to the <worker> with prompt
       """
       Use apply_patch in two separate calls. First, create
       baqylau-e2e-file.txt with the exact content deletion-marker-731. Second,
       delete that file. Do not use a shell command. Reply only with the word
       done.
       """
-    Then turn "delete fixture" completes
-    When I name the created fixture operation in turn "delete fixture" "fixture creation"
-    And I name the deleted fixture operation in turn "delete fixture" "fixture deletion"
+    Then work "delete fixture" completes
+    And work "delete fixture" has worker type <worker>
+    When I name the created fixture operation in work "delete fixture" "fixture creation"
+    And I name the deleted fixture operation in work "delete fixture" "fixture deletion"
     Then file operation "fixture creation" has state succeeded
     And file operation "fixture creation" has content containing 'deletion-marker-731'
     And file operation "fixture deletion" has state succeeded
     And file operation "fixture deletion" has removed lines
     And the file operation fixture is absent
-    And turn "delete fixture" has final answer 'done'
+    And work "delete fixture" has final answer 'done'
 
     Examples:
-      | harness | model        |
-      | codex   | gpt-5.6-luna |
+      | harness | model        | worker   |
+      | codex   | gpt-5.6-luna | lead     |
+      | codex   | gpt-5.6-luna | subagent |
+
+  Scenario Outline: a renamed file keeps both exact paths
+    Given the file rename fixtures do not exist
+    And session configuration "primary" uses <harness> with model <model> and low effort
+    When I launch session "primary" and assign work "rename fixture" to the <worker> with prompt
+      """
+      Use apply_patch in two separate calls. First, create
+      baqylau-e2e-rename-source.txt with the exact content rename-marker-852.
+      Second, use apply_patch with its Move to header to rename that file to
+      baqylau-e2e-rename-target.txt. Do not use a shell command. When complete,
+      reply with the exact marker RENAME_DONE and no other text.
+      """
+    Then work "rename fixture" completes
+    And work "rename fixture" has worker type <worker>
+    When I name the renamed operation in work "rename fixture" for workspace file 'baqylau-e2e-rename-target.txt' "fixture rename"
+    Then file operation "fixture rename" has state succeeded
+    And file operation "fixture rename" moved workspace file 'baqylau-e2e-rename-source.txt' to 'baqylau-e2e-rename-target.txt'
+    And work "rename fixture" has final answer 'RENAME_DONE'
+
+    Examples:
+      | harness | model        | worker   |
+      | codex   | gpt-5.6-luna | lead     |
+      | codex   | gpt-5.6-luna | subagent |
+
+  Scenario Outline: a failed file read keeps its exact path
+    Given the missing file fixture does not exist
+    And session configuration "primary" uses <harness> with model <model> and low effort
+    When I launch session "primary" and assign work "read missing fixture" to the <worker> with prompt
+      """
+      Use a file reading tool exactly once, not a shell command, to read
+      baqylau-e2e-missing-file-963.txt. The file does not exist. Do not create
+      it and do not retry with another tool. After the expected error, reply
+      with the exact marker MISSING_READ_DONE and no other text.
+      """
+    Then work "read missing fixture" completes
+    And work "read missing fixture" has worker type <worker>
+    When I name the read operation in work "read missing fixture" for workspace file 'baqylau-e2e-missing-file-963.txt' "missing file read"
+    Then file operation "missing file read" has state failed
+    And work "read missing fixture" has final answer 'MISSING_READ_DONE'
+
+    Examples:
+      | harness     | model        | worker   |
+      | codex       | gpt-5.6-luna | lead     |
+      | codex       | gpt-5.6-luna | subagent |
+      | claude_code | haiku        | lead     |
+      | claude_code | haiku        | subagent |

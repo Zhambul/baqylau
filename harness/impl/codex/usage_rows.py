@@ -42,14 +42,16 @@ class CodexUsage(HarnessUsage):
         return (UsageRow(
             harness=HARNESS,
             account_id=None,
-            display_name=f"codex · {plan}" if plan else "codex",
+            display_name="codex",
             switchable=False,
+            default_for_launch=False,
             plan=plan or None,
             windows=windows,
             scheduling_score=None,
             scheduling_allowed=False,
             limit=None,
             authentication_error=None,
+            collection_error=None,
         ),)
 
 

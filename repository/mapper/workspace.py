@@ -53,7 +53,7 @@ def _queue(
     queue_items: tuple[ComposerQueueItemRow, ...],
 ) -> ComposerQueue | None:
     messages = tuple(
-        QueuedMessage(item.text)
+        QueuedMessage(item.request_id, item.text)
         for item in sorted(queue_items, key=lambda item: item.position)
     )
     return ComposerQueue(messages, session_workspace_row.queue_origin) if messages else None
@@ -86,16 +86,6 @@ def _dialog(
         AttentionId(session_workspace_row.dialog_attention_id),
         selected,
         session_workspace_row.dialog_origin,
-    )
-
-
-def queue_item_values(
-    session_id: SessionId,
-    composer_queue: ComposerQueue,
-) -> tuple[SqlValues, ...]:
-    return tuple(
-        (str(session_id), position, message.text)
-        for position, message in enumerate(composer_queue.items)
     )
 
 

@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from domain.ids import SessionId
-from domain.workspace import ComposerDraft, ComposerQueue, DialogDraft, SessionWorkspace
+from domain.ids import RequestId, SessionId
+from domain.workspace import ComposerDraft, DialogDraft, QueuedMessage, SessionWorkspace
 
 
 class SessionWorkspaceRepository(Protocol):
@@ -25,8 +25,21 @@ class SessionWorkspaceRepository(Protocol):
         """
         ...
 
-    def save_composer_queue(self, session_id: SessionId, composer_queue: ComposerQueue) -> None:
-        """Replace the whole queue in one transaction."""
+    def enqueue_composer_message(
+        self,
+        session_id: SessionId,
+        queued_message: QueuedMessage,
+        origin: str,
+    ) -> None:
+        """Append one accepted send once; the request ID is idempotent."""
+        ...
+
+    def remove_queued_message(
+        self,
+        session_id: SessionId,
+        request_id: RequestId,
+    ) -> None:
+        """Remove one queued send after its canonical prompt arrives."""
         ...
 
     def save_dialog_draft(self, session_id: SessionId, dialog_draft: DialogDraft) -> None:

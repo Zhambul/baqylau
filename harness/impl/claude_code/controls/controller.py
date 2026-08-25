@@ -25,6 +25,7 @@ from harness.models import (
     ControlName,
     ControlRequest,
     ControlResult,
+    DurableTitleResult,
     DecidePlan,
     DeliveryResult,
     Interrupt,
@@ -41,20 +42,33 @@ from harness.models import (
 from terminal.contract import TerminalPlugin
 from terminal.models import (
     KeySendRequest,
+    PaneResizeRequest,
     ScreenReadRequest,
+    SplitAxis,
     TabCloseRequest,
     TextSubmitMode,
     TextSubmitRequest,
 )
 from domain.events import QuestionAsked
 from domain.ids import WindowId
+
 # The terminal's own window id: `terminal/` may depend on nothing outside
 # itself, so this module — the harness boundary that talks to a live
 # terminal — converts explicitly wherever a domain `WindowId` reaches a
 # terminal contract request.
 from terminal.models.values import WindowId as NativeWindowId
 from harness.impl.claude_code.canonical import records, transcript
-from harness.impl.claude_code.controls import askdialog, confirmdialog, plandialog, rewindmenu, tui
+from harness.impl.claude_code.attachments import (
+    control_prompt_with_attachments,
+)
+from harness.impl.claude_code.controls import (
+    askdialog,
+    confirmdialog,
+    plandialog,
+    rewindmenu,
+    screen_driver as screendrive,
+    tui,
+)
 from harness.impl.claude_code.probe import ClaudeCodeTerminalProbe
 
 
@@ -66,17 +80,12 @@ class _TerminalDriver:
 
     def get_text(self, window_id: WindowId, extent: str = "screen", ansi: bool = False) -> str | None:
         del extent
-        response = self.terminal.viewport.read_screen(
-            ScreenReadRequest(NativeWindowId(str(window_id)), ansi=ansi)
-        )
+        response = self.terminal.viewport.read_screen(ScreenReadRequest(NativeWindowId(str(window_id)), ansi=ansi))
         return response.text
 
     def send_key(self, window_id: WindowId, *keys: str) -> bool:
         native = NativeWindowId(str(window_id))
-        return all(
-            self.terminal.input.send_key(KeySendRequest(native, str(key))).succeeded
-            for key in keys
-        )
+        return all(self.terminal.input.send_key(KeySendRequest(native, str(key))).succeeded for key in keys)
 
     def send_text(self, window_id: WindowId, text: str) -> bool:
         return self.terminal.input.submit_text(
@@ -88,11 +97,26 @@ class _TerminalDriver:
             TextSubmitRequest(NativeWindowId(str(window_id)), str(text), TextSubmitMode.PASTE)
         ).succeeded
 
+    def lines(self, window_id: WindowId) -> int | None:
+        native = NativeWindowId(str(window_id))
+        return next(
+            (window.lines for window in self.terminal.metadata.windows() if window.window_id == native),
+            None,
+        )
+
+    def resize_lines(self, window_id: WindowId, cells: int) -> bool:
+        response = self.terminal.panes.resize_pane(
+            PaneResizeRequest(
+                NativeWindowId(str(window_id)),
+                SplitAxis.VERTICAL,
+                cells,
+            )
+        )
+        return response.succeeded
+
 
 def _screen_text(terminal_plugin: TerminalPlugin, window_id: WindowId) -> str | None:
-    return terminal_plugin.viewport.read_screen(
-        ScreenReadRequest(NativeWindowId(str(window_id)))
-    ).text
+    return terminal_plugin.viewport.read_screen(ScreenReadRequest(NativeWindowId(str(window_id)))).text
 
 
 def _transcript_has_interrupt(source_reference: str, after_position: int) -> bool:
@@ -105,12 +129,91 @@ def _transcript_has_interrupt(source_reference: str, after_position: int) -> boo
         return False
     for line in added.splitlines():
         record = transcript.parse_line(line.decode("utf-8", errors="replace"))
-        if isinstance(
-            record,
-            (transcript.PromptTranscriptRecord, transcript.ResultsTranscriptRecord),
-        ) and record.interrupted:
+        if (
+            isinstance(
+                record,
+                (transcript.PromptTranscriptRecord, transcript.ResultsTranscriptRecord),
+            )
+            and record.interrupted
+        ):
             return True
     return False
+
+
+NATIVE_TEXT_CONFIRM_TIMEOUT_SECONDS = 1.0
+NATIVE_TEXT_CONFIRM_POLL_SECONDS = 0.05
+NATIVE_TEXT_DELIVERY_ATTEMPTS = 2
+NATIVE_TEXT_QUEUED = "queued"
+NATIVE_TEXT_SENT = "sent"
+
+
+def _same_native_prompt(expected: str, observed: str) -> bool:
+    return bool(expected.strip()) and expected.strip() == observed.strip()
+
+
+def _native_text_state(
+    source_reference: str,
+    after_position: int,
+    expected: str,
+) -> str | None:
+    """Read Claude Code's own delivery record after one terminal submit.
+
+    A cleared composer is not proof that Claude Code accepted a message. During
+    an active turn, Claude Code writes an enqueue record at the point where it
+    accepts Enter. When the queue drains, it writes remove and then the prompt.
+    Use these native records as the acknowledgement instead of an inferred lead
+    state or a daemon log.
+    """
+    if after_position < 0:
+        return None
+    try:
+        with open(source_reference, "rb") as source:
+            source.seek(after_position)
+            added = source.read()
+    except OSError:
+        return None
+    state = None
+    for line in added.splitlines():
+        try:
+            header = records.TranscriptRecordHeader.model_validate_json(line)
+            if header.type == "queue-operation":
+                operation = records.QueueOperationRecord.model_validate_json(line)
+                if (
+                    isinstance(operation.content, str)
+                    and _same_native_prompt(expected, operation.content)
+                ):
+                    if operation.operation == "enqueue":
+                        state = NATIVE_TEXT_QUEUED
+                    elif operation.operation == "remove":
+                        state = NATIVE_TEXT_SENT
+                continue
+            parsed = transcript.parse_line(line.decode("utf-8", errors="replace"))
+        except (UnicodeError, ValidationError):
+            # The file can be read between two native writes. The next poll
+            # reads from the same position and sees the complete line.
+            continue
+        if (
+            isinstance(parsed, transcript.PromptTranscriptRecord)
+            and not parsed.meta
+            and _same_native_prompt(expected, parsed.text)
+        ):
+            state = NATIVE_TEXT_SENT
+    return state
+
+
+def _wait_for_native_text_state(
+    source_reference: str,
+    after_position: int,
+    expected: str,
+) -> str | None:
+    deadline = time.monotonic() + NATIVE_TEXT_CONFIRM_TIMEOUT_SECONDS
+    while True:
+        state = _native_text_state(source_reference, after_position, expected)
+        if state is not None:
+            return state
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(NATIVE_TEXT_CONFIRM_POLL_SECONDS)
 
 
 def _result(request: ControlRequest, succeeded: bool, reason: str) -> ControlResult:
@@ -149,11 +252,7 @@ def _command(
     return CommandResult(
         request.request_id,
         ControlAcknowledgement.ACKNOWLEDGED,
-        confirmation=(
-            ConfirmationOutcome.CONFIRMED
-            if confirmation.dialog
-            else ConfirmationOutcome.NOT_NEEDED
-        ),
+        confirmation=(ConfirmationOutcome.CONFIRMED if confirmation.dialog else ConfirmationOutcome.NOT_NEEDED),
     )
 
 
@@ -173,14 +272,66 @@ class SendTextHandler(ControlHandler):
         if request.replace_terminal_draft:
             input_state = ClaudeCodeTerminalProbe().input_state(terminal.viewport, window_id)
             tui.clear_input(driver, window_id, (input_state.typed_text or "") if input_state else "")
-        attachment_text = " ".join(f"@{attachment.local_path}" for attachment in request.attachments)
-        message = attachment_text + ("\n" if attachment_text and request.text else "") + request.text
-        succeeded, _cleared_image = tui.type_command(driver, window_id, message)
+        message = control_prompt_with_attachments(request.text, request.attachments)
+        if not control_context.lead_active:
+            succeeded, _cleared_image = tui.type_command(
+                driver,
+                window_id,
+                message,
+                ensure_submit=bool(request.attachments),
+            )
+            return DeliveryResult(
+                request.request_id,
+                ControlAcknowledgement.ACKNOWLEDGED if succeeded else ControlAcknowledgement.INDETERMINATE,
+                None if succeeded else "terminal message was not delivered",
+                queued=False,
+            )
+        try:
+            transcript_position = os.path.getsize(control_context.session.source_reference)
+        except OSError:
+            transcript_position = -1
+        for _attempt in range(NATIVE_TEXT_DELIVERY_ATTEMPTS):
+            # A late native record can arrive at the retry boundary. Read it
+            # once more before a second paste, so an accepted message is never
+            # submitted twice.
+            native_state = _native_text_state(
+                control_context.session.source_reference,
+                transcript_position,
+                message,
+            )
+            if native_state is not None:
+                return DeliveryResult(
+                    request.request_id,
+                    ControlAcknowledgement.ACKNOWLEDGED,
+                    queued=native_state == NATIVE_TEXT_QUEUED,
+                )
+            succeeded, _cleared_image = tui.type_command(
+                driver,
+                window_id,
+                message,
+                ensure_submit=bool(request.attachments),
+            )
+            if not succeeded:
+                return DeliveryResult(
+                    request.request_id,
+                    ControlAcknowledgement.INDETERMINATE,
+                    "terminal message was not delivered",
+                )
+            native_state = _wait_for_native_text_state(
+                control_context.session.source_reference,
+                transcript_position,
+                message,
+            )
+            if native_state is not None:
+                return DeliveryResult(
+                    request.request_id,
+                    ControlAcknowledgement.ACKNOWLEDGED,
+                    queued=native_state == NATIVE_TEXT_QUEUED,
+                )
         return DeliveryResult(
             request.request_id,
-            ControlAcknowledgement.ACKNOWLEDGED if succeeded else ControlAcknowledgement.INDETERMINATE,
-            None if succeeded else "terminal message was not delivered",
-            queued=False,
+            ControlAcknowledgement.INDETERMINATE,
+            "Claude Code did not confirm the queued message",
         )
 
 
@@ -221,26 +372,14 @@ class InterruptHandler(ControlHandler):
                     return DeliveryResult(
                         request.request_id,
                         ControlAcknowledgement.ACKNOWLEDGED,
-                        restored_text=(
-                            input_state.typed_text
-                            if input_state and input_state.typed_text
-                            else ""
-                        ),
+                        restored_text=(input_state.typed_text if input_state and input_state.typed_text else ""),
                         corroborated=True,
                     )
         input_state = ClaudeCodeTerminalProbe().input_state(terminal.viewport, window_id)
         return DeliveryResult(
             request.request_id,
-            (
-                ControlAcknowledgement.INDETERMINATE
-                if delivered
-                else ControlAcknowledgement.REJECTED
-            ),
-            (
-                "native interrupt marker was not observed"
-                if delivered
-                else "interrupt key was not delivered"
-            ),
+            (ControlAcknowledgement.INDETERMINATE if delivered else ControlAcknowledgement.REJECTED),
+            ("native interrupt marker was not observed" if delivered else "interrupt key was not delivered"),
             restored_text=input_state.typed_text if input_state and input_state.typed_text else "",
         )
 
@@ -295,9 +434,7 @@ class BackgroundHandler(ControlHandler):
                     "no command is offering to be backgrounded",
                 )
             time.sleep(BACKGROUND_POLL_SECONDS)
-        delivered = terminal.input.send_key(
-            KeySendRequest(NativeWindowId(str(window_id)), BACKGROUND_CHORD)
-        ).succeeded
+        delivered = terminal.input.send_key(KeySendRequest(NativeWindowId(str(window_id)), BACKGROUND_CHORD)).succeeded
         return DeliveryResult(
             request.request_id,
             ControlAcknowledgement.ACKNOWLEDGED if delivered else ControlAcknowledgement.INDETERMINATE,
@@ -314,8 +451,15 @@ class CloseSessionHandler(ControlHandler):
         window_id = control_context.terminal_window_id
         if window_id is None:
             return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
+        if control_context.lead_active:
+            InterruptHandler()(
+                Interrupt(request.session_id, request.request_id),
+                control_context,
+            )
         result = terminal.tabs.close_tab(TabCloseRequest(NativeWindowId(str(window_id))))
-        return _result(request, result.succeeded, result.reason or "terminal tab was not closed")
+        if not result.succeeded:
+            return _result(request, False, result.reason or "terminal tab was not closed")
+        return _result(request, True, "terminal tab was not closed")
 
 
 class RenameSessionHandler(ControlHandler):
@@ -333,7 +477,10 @@ class RenameSessionHandler(ControlHandler):
                 return ControlResult(
                     request.request_id, ControlAcknowledgement.INDETERMINATE, "native title store is unavailable"
                 )
-            return ControlResult(request.request_id, ControlAcknowledgement.ACKNOWLEDGED)
+            return DurableTitleResult(
+                request.request_id,
+                ControlAcknowledgement.ACKNOWLEDGED,
+            )
         return _command(request, control_context, f"/rename {request.name}")
 
 
@@ -368,7 +515,11 @@ class ApplyRewindHandler(ControlHandler):
                 ups=request.newer_prompt_count + 1,
             )
         except rewindmenu.MenuError as error:
-            return RewindResult(request.request_id, ControlAcknowledgement.INDETERMINATE, str(error))
+            return RewindResult(
+                request.request_id,
+                ControlAcknowledgement.INDETERMINATE,
+                screendrive.failure_detail(error),
+            )
         restored = request.target_text if request.mode in {"conversation", "both"} else ""
         return RewindResult(
             request.request_id,
@@ -476,10 +627,7 @@ class ReadPlanChoicesHandler(ControlHandler):
         return PlanChoicesResult(
             request.request_id,
             ControlAcknowledgement.ACKNOWLEDGED,
-            choices=tuple(
-                PlanChoice(row.digit, row.label, row.feedback)
-                for row in rows
-            ),
+            choices=tuple(PlanChoice(row.digit, row.label, row.feedback) for row in rows),
         )
 
 

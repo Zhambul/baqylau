@@ -32,6 +32,7 @@ class Session:
     terminal_window_id: WindowId | None = None
     harness_process_id: int | None = None
     plugin: HarnessPlugin | None = field(default=None, compare=False, repr=False)
+    project_directory: str | None = None
 
     @property
     def source_context(self) -> RawEventSourceContext:

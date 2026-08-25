@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Capture Claude Code's rate-limit windows, then run the real status line.
 
-Claude Code exposes per-account rate limits (`rate_limits.<window>.
+Claude Code exposes profile rate limits (`rate_limits.<window>.
 {used_percentage,resets_at}`) to ONE place: the status-line command's stdin JSON,
 after each API response. Not in any hook payload, not in the transcript, not in
 OTEL — so the only way to read it is to BE the status-line command. Claude Code
@@ -35,9 +35,8 @@ DELIVERY_TIMEOUT_SECONDS = 1.0
 def capture(raw: bytes) -> None:
     """Ship the stdin bytes to the daemon as a `statusline` telemetry delivery.
 
-    Two things are stamped on the way past, both raw: the account this process's
-    own environment selects, and the moment it was read. What the rate-limit
-    windows MEAN is decided daemon-side
+    The read time is stamped on the way past. What the rate-limit windows mean
+    is decided daemon-side
     (`harness/impl/claude_code/otel/gateway.py`).
     """
     try:
@@ -46,8 +45,6 @@ def capture(raw: bytes) -> None:
             return
         body = dict(
             document,
-            _account_id=os.environ.get(_http.ACCOUNT_SLUG_VARIABLE, ""),
-            _account_name=os.environ.get(_http.ACCOUNT_LABEL_VARIABLE, ""),
             _ts=document.get("_ts") or time.time(),
         )
         _daemon.post(

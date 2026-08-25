@@ -34,6 +34,7 @@ from repository.contract.preferences import (
     PushSubscriptionRepository,
 )
 from repository.contract.session_data import SessionDataRepository
+from repository.contract.sessions import SessionRepository
 from terminal.adapter import TerminalAdapter
 
 
@@ -113,6 +114,7 @@ class ApplicationPreferenceService:
     def __init__(
         self,
         session_data_repository: SessionDataRepository,
+        session_repository: SessionRepository,
         terminal_adapter: TerminalAdapter,
         repository_queries: RepositoryQueries,
         usage_reader: UsageReader,
@@ -125,6 +127,7 @@ class ApplicationPreferenceService:
         clock: Callable[[], float] = time.time,
     ) -> None:
         self.session_data_repository = session_data_repository
+        self.session_repository = session_repository
         self.terminal_adapter = terminal_adapter
         self.repository_queries = repository_queries
         self.usage_reader = usage_reader
@@ -211,13 +214,26 @@ class ApplicationPreferenceService:
         live = [
             data
             for data in self.session_data_repository.visible()
-            if self.repository_queries.project_directory(data.session.working_directory) == working_directory
+            if self._project_directory(
+                data.session.session_id,
+                data.session.working_directory,
+            ) == working_directory
             and self.terminal_adapter.window_for_session(data.session.session_id) is not None
         ]
         if live:
             raise ValueError("cannot hide a directory with an active session")
         self.hidden_directory_repository.hide(working_directory, self.clock())
         return {entry.working_directory: entry.hidden_at for entry in self.hidden_directory_repository.hidden()}
+
+    def _project_directory(
+        self,
+        session_id: SessionId,
+        working_directory: str,
+    ) -> str:
+        session = self.session_repository.find(session_id)
+        if session is not None and session.project_directory:
+            return session.project_directory
+        return self.repository_queries.project_directory(working_directory)
 
     def register_push_subscription(
         self,

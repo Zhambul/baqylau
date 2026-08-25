@@ -1,5 +1,30 @@
 Feature: session controls change live session state
 
+  Scenario Outline: closing a session stops its active work
+    Given session configuration "primary" uses <harness> with model <model> and low effort
+    When I launch session "primary" and assign work "work during close" to the <worker> with prompt
+      """
+      Run `python -c 'import time; time.sleep(30); print("unexpected-finish")'`
+      as a foreground shell command. Do not run it in the background. Wait for
+      it before you reply.
+      """
+    And I name the only running foreground command in work "work during close" containing 'time.sleep(30)' "command during close"
+    And I close session "primary" as control "close active session"
+    Then control "close active session" response is accepted
+    And control "close active session" outcome is acknowledged
+    And session "primary" and all its actors finish
+    And work "work during close" has state aborted
+    And command "command during close" has state cancelled
+    And command "command during close" belongs to worker of work "work during close"
+    And session "primary" has no running work
+
+    Examples:
+      | harness     | model        | worker   |
+      | codex       | gpt-5.6-luna | lead     |
+      | codex       | gpt-5.6-luna | subagent |
+      | claude_code | haiku        | lead     |
+      | claude_code | haiku        | subagent |
+
   Scenario Outline: a quiet session can be renamed, reconfigured, and closed
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" and assign work "open controls" to the <worker> with prompt
@@ -55,3 +80,28 @@ Feature: session controls change live session state
     Examples:
       | harness     | model |
       | claude_code | haiku |
+
+  Scenario Outline: a parked session keeps a durable custom name
+    Given session configuration "primary" uses <harness> with model <model> and low effort
+    When I launch session "primary" as turn "parked name sample" with prompt
+      """
+      Do not use tools. Reply only with PARKED_NAME_READY.
+      """
+    Then turn "parked name sample" completes
+    When I close session "primary" as control "park name session"
+    Then control "park name session" response is accepted
+    And control "park name session" outcome is acknowledged
+    And session "primary" finishes
+    When I rename session "primary" to '<parked_title>' as control "name parked session"
+    Then control "name parked session" response is accepted
+    And control "name parked session" outcome is acknowledged
+    And session "primary" has title '<parked_title>'
+    When I request an automatic name for session "primary" as control "auto-name parked session"
+    Then control "auto-name parked session" response is rejected
+    And control "auto-name parked session" outcome is rejected
+    And session "primary" has title '<parked_title>'
+
+    Examples:
+      | harness     | model        | parked_title                  |
+      | codex       | gpt-5.6-luna | Parked Codex title 82451      |
+      | claude_code | haiku        | Parked Claude Code title 82451 |

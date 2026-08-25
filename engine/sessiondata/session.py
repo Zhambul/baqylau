@@ -142,11 +142,7 @@ def _retitled(session_facts: SessionFacts) -> SessionFacts:
 
 
 class GoalWriter(SessionDataWriter):
-    """The session's objective, and whether it was reached.
-
-    Seven native goal states collapse to two fields here: a cleared goal is no
-    goal, and of the rest only `completed` changes what a reader does.
-    """
+    """The session objective with its complete native-independent state."""
 
     def write(
         self, canonical_event: CanonicalEvent[EventPayload], aggregate_state: AggregateState
@@ -160,7 +156,7 @@ class GoalWriter(SessionDataWriter):
             aggregate_state,
             session=replace(
                 aggregate_state.session,
-                goal=SessionGoal(payload.objective, payload.state == "completed"),
+                goal=SessionGoal(payload.objective, payload.state, payload.reason),
             ),
         )
 

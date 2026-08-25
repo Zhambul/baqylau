@@ -12,13 +12,15 @@ from api.common.models.values.account_reference import AccountReferenceResponse
 from api.common.models.values.repository_status import RepositoryStatusResponse
 from api.common.models.values.token_usage import TokenUsageResponse
 from domain.sessiondata import ActorStatus, LifecycleState
-from domain.values import ActorRole, TaskState
+from domain.values import ActorRole, GoalState, TaskState
 
 ActorStatusResponse: TypeAlias = ActorStatus
 
 
 class GoalResponse(BaseModel):
     objective: str | None
+    state: GoalState
+    reason: str | None
     completed: bool
 
 
@@ -143,6 +145,7 @@ class SessionDataResponse(BaseModel):
     # stored, and neither can ride a stream frame — so they belong to the
     # ANSWER, not to the session.
     live: bool
+    project_directory: str
     repository: RepositoryStatusResponse | None
 
 

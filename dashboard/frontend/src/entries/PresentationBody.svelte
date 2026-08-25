@@ -32,7 +32,7 @@
       {#each body.answers as answer (answer.questionId)}
         <div class="ansq">
           <div class="ansqh">
-            <span class="ansqt">{answer.questionId}</span>
+            <span class="ansqt">{answer.question}</span>
           </div>
           <div class="ansvs">
             {#if answer.labels.length === 0}

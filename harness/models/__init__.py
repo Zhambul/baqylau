@@ -34,6 +34,7 @@ from harness.models.controls import (
     ControlTarget,
     DecidePlan,
     DeliveryResult,
+    DurableTitleResult,
     Interrupt,
     OpenRewind,
     PlanChoice,
@@ -48,9 +49,12 @@ from harness.models.controls import (
 )
 from domain.records import RecordedTranslationDecision
 from harness.models.raw_events import (
+    CONTROL_SOURCE_TYPE,
     INTERRUPT_SOURCE_TYPE,
     LIVENESS_SOURCE_TYPE,
     OUTPUT_LOCATION_SOURCE_TYPE,
+    RESUME_LIVENESS_SOURCE_TYPE,
+    RESUME_SOURCE_TYPE,
     TITLE_SOURCE_TYPE,
     RawEvent,
     RawEventAudit,
@@ -60,6 +64,8 @@ from harness.models.raw_events import (
     UnknownRawEvent,
     canonical_event,
     output_location_raw_event,
+    session_run_finished_event,
+    session_run_started_events,
 )
 from harness.models.hooks import HarnessHookRequest, HarnessHookResponse
 from harness.models.telemetry import (
@@ -108,8 +114,10 @@ __all__ = [
     "ControlRequest",
     "ControlResult",
     "ControlTarget",
+    "CONTROL_SOURCE_TYPE",
     "DecidePlan",
     "DeliveryResult",
+    "DurableTitleResult",
     "EffortOption",
     "HarnessCatalogSnapshot",
     "HarnessHookRequest",
@@ -131,6 +139,8 @@ __all__ = [
     "LaunchStatus",
     "ModelOption",
     "OUTPUT_LOCATION_SOURCE_TYPE",
+    "RESUME_LIVENESS_SOURCE_TYPE",
+    "RESUME_SOURCE_TYPE",
     "TITLE_SOURCE_TYPE",
     "OpenRewind",
     "PlanChoice",
@@ -162,4 +172,6 @@ __all__ = [
     "UsageWindowScope",
     "canonical_event",
     "output_location_raw_event",
+    "session_run_finished_event",
+    "session_run_started_events",
 ]

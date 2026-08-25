@@ -30,6 +30,7 @@ class SessionRow:
     harness: HarnessName
     source_reference: str
     working_directory: str | None
+    project_directory: str | None
     terminal_window_id: WindowId | None
     harness_process_id: int | None
     created_at: float
@@ -50,6 +51,7 @@ class RawEventRow:
     observed_at: float
     encoding: str
     payload: bytes
+    payload_codec: str
     terminal_window_id: WindowId | None
     harness_process_id: int | None
     account_id: AccountId | None

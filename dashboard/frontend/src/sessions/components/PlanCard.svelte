@@ -40,7 +40,10 @@
       });
   });
 
-  async function decide(choice: PlanChoice): Promise<void> {
+  async function submit(
+    decision: string,
+    submittedFeedback: string | null,
+  ): Promise<void> {
     if (pending) return;
     pending = true;
     failure = null;
@@ -48,15 +51,15 @@
     view.showPendingAction(
       'plan',
       entry.body.attentionId,
-      choice.feedback ? feedback.length : null,
+      submittedFeedback === null ? null : submittedFeedback.length,
     );
     try {
       const result = await decidePlan(
         view.sessionId,
         requestId,
         entry.body.attentionId,
-        choice.digit,
-        choice.feedback ? feedback : null,
+        decision,
+        submittedFeedback,
       );
       if (result.status !== 'acknowledged') {
         view.dropPendingAction('plan', entry.body.attentionId, result.status);
@@ -69,18 +72,34 @@
         view.sessionId,
         'plan',
         error,
-        choice.feedback ? feedback.length : null,
+        submittedFeedback === null ? null : submittedFeedback.length,
       );
       failure = error instanceof Error ? error.message : String(error);
       pending = false;
     }
   }
+
+  function decide(choice: PlanChoice): void {
+    void submit(choice.digit, choice.feedback ? feedback : null);
+  }
+
+  function discuss(): void {
+    void submit('dismiss', null);
+  }
 </script>
 
 <div class="planwrap">
   <div class:pending class="plancard">
-    <div class="plantitle">
-      {view.harness?.displayName ?? 'the agent'} proposes a plan
+    <div class="planhead">
+      <div class="plantitle">
+        {view.harness?.displayName ?? 'the agent'} proposes a plan
+      </div>
+      <button
+        class="planchat"
+        type="button"
+        disabled={pending}
+        onclick={discuss}>chat about this</button
+      >
     </div>
     <div class="planbody md">
       <TrustedHtml html={markdownHtml(entry.body.plan.text)} />
@@ -94,7 +113,9 @@
             class="planopt"
             type="button"
             disabled={pending}
-            onclick={() => decide(choice)}>{choice.label}</button
+            onclick={() => {
+              decide(choice);
+            }}>{choice.label}</button
           >
         {/each}
       </div>

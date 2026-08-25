@@ -45,6 +45,7 @@ from terminal.models.values import (
     SESSION_WINDOW_TAG,
     TabAppearance,
     WindowInfo,
+    WindowProcess,
 )
 from terminal.models.viewport import (
     ScreenReadRequest,
@@ -89,6 +90,7 @@ __all__ = [
     "WindowFocusRequest",
     "WindowFocusResponse",
     "WindowInfo",
+    "WindowProcess",
     "WindowTagRequest",
     "WindowTagResponse",
 ]

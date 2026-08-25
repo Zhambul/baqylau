@@ -21,7 +21,6 @@ from api.controls.models.send_text_request import SendTextRequest
 from api.server import build_server
 from app import providers
 from canonical_runtime import ProviderGraph
-from conftest import REPOSITORY_ROOT
 from audit.recorder import AuditRecorder
 from audit.telemetry import BrowserTelemetryService
 from harness.models import RawEvent, Session, TranslationResult
@@ -34,6 +33,7 @@ from repository.impl.sqlite.raw_event_audits import SqliteRawEventAuditRepositor
 
 SESSION_ID = SessionId("session-one")
 ACTOR_ID = ActorId("actor-one")
+REPOSITORY_ROOT = str(pathlib.Path(__file__).resolve().parents[1])
 
 SERVER_START_TIMEOUT_SECONDS = 5.0
 
@@ -55,9 +55,7 @@ def _event(event_id: str, payload):
 
 def _record(application, raw_event, translator_version, translation):
     application.raw_events.record((raw_event,))
-    application.canonical_events.record_translation(
-        raw_event, translator_version, translation, 10.0
-    )
+    application.canonical_events.record_translation(raw_event, translator_version, translation, 10.0)
 
 
 def _raw_event_audits(application):
@@ -150,9 +148,7 @@ def _server(application, overrides=None):
         # FastAPI's own seam: one node substituted, the rest of the graph real.
         web.dependency_overrides[provider] = _fixed(value)
     server = build_server(web)
-    thread = threading.Thread(
-        target=server.run, kwargs={"sockets": [bound_socket]}, daemon=True
-    )
+    thread = threading.Thread(target=server.run, kwargs={"sockets": [bound_socket]}, daemon=True)
     thread.start()
     deadline = time.monotonic() + SERVER_START_TIMEOUT_SECONDS
     while not server.started:
@@ -298,14 +294,6 @@ def test_session_application_routes_publish_complete_composer_state(tmp_path):
         assert status == 200
         assert json.loads(body) == {"saved": False}
 
-        status, body = _post(
-            server,
-            "/api/sessions/session-one/application/composer-queue",
-            {"items": [{"text": "next message"}], "origin": "browser-one"},
-        )
-        assert status == 200
-        assert json.loads(body) == {"saved": True}
-
         # Read back from the route that serves the preferences store. Not
         # /sessionData: none of this is a fact a harness reported.
         status, _content_type, body = _get(server, "/api/sessions/session-one/application")
@@ -317,10 +305,7 @@ def test_session_application_routes_publish_complete_composer_state(tmp_path):
                 "origin": "browser-one",
                 "sequence": 20.0,
             },
-            "queue": {
-                "items": [{"text": "next message"}],
-                "origin": "browser-one",
-            },
+            "queue": None,
         }
         assert state["dialog"] == {"draft": None}
 
@@ -330,18 +315,14 @@ def test_session_application_routes_publish_complete_composer_state(tmp_path):
             {"hidden": True},
         )
         assert status == 409
-        assert json.loads(body) == {
-            "error": "every task must be completed before hiding the task card"
-        }
+        assert json.loads(body) == {"error": "every task must be completed before hiding the task card"}
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
 
 
-def test_global_application_routes_replace_field_specific_preferences_routes(
-    tmp_path, monkeypatch
-):
+def test_global_application_routes_replace_field_specific_preferences_routes(tmp_path, monkeypatch):
     presence_calls = []
 
     class RecordingPresence(Presence):
@@ -402,9 +383,7 @@ def test_global_application_routes_replace_field_specific_preferences_routes(
         assert (stored.model, stored.effort) == ("gpt-5", "high")
         drafts = application.new_sessions.drafts()
         assert (drafts[0].working_directory, drafts[0].text) == ("/project", "unfinished")
-        assert "/parked" in {
-            entry.working_directory for entry in application.hidden_directories.hidden()
-        }
+        assert "/parked" in {entry.working_directory for entry in application.hidden_directories.hidden()}
 
         status, body = _post(
             server,
@@ -422,12 +401,9 @@ def test_global_application_routes_replace_field_specific_preferences_routes(
         assert json.loads(body) == {"saved": True}
         stored = application.push_subscriptions.subscriptions()
         assert [
-            (item.endpoint, item.public_key, item.authentication_secret,
-             item.device_id, item.device_label)
+            (item.endpoint, item.public_key, item.authentication_secret, item.device_id, item.device_label)
             for item in stored
-        ] == [
-            ("https://push.example/subscription", "public", "secret", "browser-one", "Tablet")
-        ]
+        ] == [("https://push.example/subscription", "public", "secret", "browser-one", "Tablet")]
 
         status, body = _post(
             server,
@@ -513,9 +489,7 @@ def test_control_request_uses_complete_names_and_structured_attachments():
         {
             "request_id": "request-two",
             "text": "",
-            "attachments": [
-                {"local_path": "/tmp/image.png", "display_name": "image.png"}
-            ],
+            "attachments": [{"local_path": "/tmp/image.png", "display_name": "image.png"}],
         },
     ).request(SESSION_ID)
     assert attachment_only.text == ""
@@ -545,15 +519,11 @@ def test_browser_telemetry_uses_named_application_resources(tmp_path):
             self.records = []
 
         def record_state_file(self, state_file):
-            self.records.append(
-                (state_file.session_id, state_file.path, state_file.action, state_file.content)
-            )
+            self.records.append((state_file.session_id, state_file.path, state_file.action, state_file.content))
 
     audit = RecordingAudit()
     application = _application()
-    server, thread = _server(
-        application, {providers.browser_telemetry: BrowserTelemetryService(audit)}
-    )
+    server, thread = _server(application, {providers.browser_telemetry: BrowserTelemetryService(audit)})
     try:
         status, body = _post(
             server,
@@ -650,7 +620,7 @@ def _audited_control(monkeypatch, outcome):
     raised = None
     try:
         service.select_model(request)
-    except Exception as error:      # noqa: BLE001 — the raised-path assertion
+    except Exception as error:  # noqa: BLE001 — the raised-path assertion
         raised = error
     return rows, raised
 
@@ -679,9 +649,7 @@ def test_an_unconfirmed_control_is_audited_with_its_reason(monkeypatch):
 def test_an_acknowledged_control_is_audited_too(monkeypatch):
     from harness.models import ControlResult
 
-    rows, _ = _audited_control(
-        monkeypatch, ControlResult("request-one", "acknowledged")
-    )
+    rows, _ = _audited_control(monkeypatch, ControlResult("request-one", "acknowledged"))
     assert rows[0][2]["status"] == "acknowledged"
     assert rows[0][2]["reason"] == ""
 
@@ -706,9 +674,7 @@ def test_a_broken_audit_never_takes_down_the_gesture(monkeypatch):
 
     service = object.__new__(services.HarnessControlService)
     service.audit = BrokenAudit()
-    monkeypatch.setattr(
-        service, "_execute", lambda r: ControlResult(r.request_id, "acknowledged")
-    )
+    monkeypatch.setattr(service, "_execute", lambda r: ControlResult(r.request_id, "acknowledged"))
 
     outcome = service.select_model(SelectModel(SESSION_ID, "request-one", model="x"))
     assert outcome.status == "acknowledged"
@@ -753,12 +719,24 @@ def test_every_control_method_writes_exactly_one_audit_row_through_one_core(monk
         def mark(self, session_id):
             pass
 
+    class _NullControlEffects:
+        def work_before_close(self, session_id):
+            return ()
+
+        def session_closed(self, session, request, observations):
+            pass
+
+    class _NoSessions:
+        def find(self, session_id):
+            return None
+
     service = object.__new__(services.HarnessControlService)
     service.audit = RowRecorder()
     service.interrupts = _NullInterruptRegistry()
-    monkeypatch.setattr(
-        service, "_execute", lambda r: ControlResult(r.request_id, "acknowledged")
-    )
+    service.control_effects = _NullControlEffects()
+    service.sessions = _NoSessions()
+    monkeypatch.setattr(service, "_pending_attention_entry", lambda _request: None)
+    monkeypatch.setattr(service, "_execute", lambda r: ControlResult(r.request_id, "acknowledged"))
 
     calls = (
         (service.send_text, SendText(SESSION_ID, RequestId("r1"), text="hi")),
@@ -963,9 +941,7 @@ def test_the_background_gesture_is_a_control_and_declines_when_nothing_is_runnin
         assert status == 409, body
         assert json.loads(body)["status"] == "rejected"
 
-        status, _body = _post(
-            server, "/api/sessions/session-one/controls/background", {}
-        )
+        status, _body = _post(server, "/api/sessions/session-one/controls/background", {})
         assert status == 400, "a gesture with no request id is not addressable"
     finally:
         server.shutdown()
@@ -987,19 +963,23 @@ def _post_hook(server, harness: str, payload: bytes, observed: dict | None = Non
 def test_hook_delivery_records_exact_evidence_and_returns_the_reply(tmp_path):
     application = _application()
     server, thread = _server(application)
-    payload = json.dumps({
-        "session_id": "hook-session",
-        "transcript_path": str(tmp_path / "hook-session.jsonl"),
-        "cwd": str(tmp_path),
-        "hook_event_name": "PreToolUse",
-        "hook_event_id": "pre-one",
-        "tool_name": "Bash",
-        "tool_use_id": "tool-one",
-        "tool_input": {"command": "printf hello"},
-    }).encode()
+    payload = json.dumps(
+        {
+            "session_id": "hook-session",
+            "transcript_path": str(tmp_path / "hook-session.jsonl"),
+            "cwd": str(tmp_path),
+            "hook_event_name": "PreToolUse",
+            "hook_event_id": "pre-one",
+            "tool_name": "Bash",
+            "tool_use_id": "tool-one",
+            "tool_input": {"command": "printf hello"},
+        }
+    ).encode()
     try:
         status, body = _post_hook(
-            server, "claude_code", payload,
+            server,
+            "claude_code",
+            payload,
             {"X-Baqylau-Terminal-Window": "1114", "X-Baqylau-Harness-Process": "4242"},
         )
         assert status == 200
@@ -1014,23 +994,28 @@ def test_hook_delivery_records_exact_evidence_and_returns_the_reply(tmp_path):
         thread.join(timeout=2)
 
 
-def test_hook_delivery_ships_the_hooks_observations_not_the_daemons(tmp_path, monkeypatch):
+def test_hook_delivery_ignores_legacy_claude_account_headers(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_SUBSCRIPTION_SLUG", "daemon-account")
     application = _application()
     server, thread = _server(application)
-    payload = json.dumps({
-        "session_id": "hook-session",
-        "transcript_path": str(tmp_path / "hook-session.jsonl"),
-        "hook_event_name": "SessionStart",
-        "hook_event_id": "start-one",
-    }).encode()
+    payload = json.dumps(
+        {
+            "session_id": "hook-session",
+            "transcript_path": str(tmp_path / "hook-session.jsonl"),
+            "hook_event_name": "SessionStart",
+            "hook_event_id": "start-one",
+        }
+    ).encode()
     try:
         status, _body = _post_hook(
-            server, "claude_code", payload, {"X-Baqylau-Account-Id": "c2"}
+            server,
+            "claude_code",
+            payload,
+            {"X-Baqylau-Account-Id": "legacy-account"},
         )
         assert status == 200
         hook_row = _raw_event_audits(application).audits_for_session(SessionId("hook-session"))[0]
-        assert hook_row.raw_event.account_id == "c2"
+        assert hook_row.raw_event.account_id is None
     finally:
         server.shutdown()
         server.server_close()
@@ -1049,9 +1034,7 @@ def test_hook_delivery_rejections_leave_no_evidence(tmp_path):
         assert "error" in json.loads(body)
 
         # no transcript path: the gateway refuses, so nothing was recorded
-        status, _body = _post_hook(
-            server, "claude_code", json.dumps({"session_id": "hook-session"}).encode()
-        )
+        status, _body = _post_hook(server, "claude_code", json.dumps({"session_id": "hook-session"}).encode())
         assert status == 400
         assert _raw_event_audits(application).audits_for_session(SessionId("hook-session")) == ()
     finally:
@@ -1081,9 +1064,7 @@ def test_hook_identity_reuse_with_different_bytes_preserves_both_observations(tm
         assert status == 200
         hooks = tuple(
             item.raw_event
-            for item in _raw_event_audits(application).audits_for_session(
-                SessionId("hook-session")
-            )
+            for item in _raw_event_audits(application).audits_for_session(SessionId("hook-session"))
             if item.raw_event.source_type == "hook"
         )
         assert len(hooks) == 2
@@ -1124,6 +1105,7 @@ def test_a_stream_poll_never_runs_on_the_event_loop(tmp_path):
             except RuntimeError:
                 where.append("worker thread")
             return read(*arguments)
+
         return observe
 
     # The two reads the two streams poll on, and they are the same read model.
@@ -1313,9 +1295,11 @@ def test_the_published_schema_names_every_status_a_caller_must_handle(tmp_path):
         return entry["content"]["application/json"]["schema"]
 
     # Every route carries what the exception handlers can always produce...
-    for path, method in (("/sessionData", "get"),
-                         ("/sessionData/{session_id}/entries", "get"),
-                         ("/api/sessions/{session_id}/controls/background", "post")):
+    for path, method in (
+        ("/sessionData", "get"),
+        ("/sessionData/{session_id}/entries", "get"),
+        ("/api/sessions/{session_id}/controls/background", "post"),
+    ):
         assert {"400", "500"} <= set(answers(path, method)), (path, method)
         assert schema(answers(path, method)["400"]) == error_body
 
@@ -1355,10 +1339,12 @@ def test_every_plane_carries_the_security_headers(tmp_path):
     try:
         # The document, a JSON reply, a framework 404 and an event stream: four
         # different producers, one policy. The stream's body is never read.
-        for path, read_body in (("/", True),
-                                ("/api/sessions", True),
-                                ("/api/nothing-is-here", True),
-                                ("/api/stream", False)):
+        for path, read_body in (
+            ("/", True),
+            ("/api/sessions", True),
+            ("/api/nothing-is-here", True),
+            ("/api/stream", False),
+        ):
             _status, headers, _body = _get_response(server, path, read_body=read_body)
             assert headers["X-Content-Type-Options"] == "nosniff", path
             assert headers["X-Frame-Options"] == "DENY", path
@@ -1375,14 +1361,9 @@ def test_every_plane_carries_the_security_headers(tmp_path):
 
         # A content-addressed build route keeps its immutable Cache-Control:
         # the policy only fills in a header that is absent.
-        manifest_path = (
-            pathlib.Path(REPOSITORY_ROOT)
-            / "dashboard/static/build/.vite/manifest.json"
-        )
+        manifest_path = pathlib.Path(REPOSITORY_ROOT) / "dashboard/static/build/.vite/manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))["src/main.ts"]
-        _status, headers, _body = _get_response(
-            server, "/static/build/" + manifest["file"]
-        )
+        _status, headers, _body = _get_response(server, "/static/build/" + manifest["file"])
         assert headers["Cache-Control"] == "public, max-age=31536000, immutable"
         assert headers["X-Content-Type-Options"] == "nosniff"
     finally:
@@ -1402,8 +1383,12 @@ def test_every_asset_the_document_references_is_served_as_its_own_type():
         status, content_type, document = _get(server, "/")
         assert status == 200
         assert content_type == "text/html; charset=utf-8"
-        types = {".js": "text/javascript", ".css": "text/css", ".png": "image/png",
-                 ".webmanifest": "application/manifest+json"}
+        types = {
+            ".js": "text/javascript",
+            ".css": "text/css",
+            ".png": "image/png",
+            ".webmanifest": "application/manifest+json",
+        }
         references = re.findall(rb"(?:src|href)=\"(/static/[^\"]+)\"", document)
         # The Vite module and stylesheet, manifest, and touch icon. The normal
         # favicon is the original inline SVG data URI.
@@ -1422,10 +1407,7 @@ def test_every_asset_the_document_references_is_served_as_its_own_type():
             assert body, path
             suffix = "." + name.rsplit(".", 1)[1]
             assert content_type.startswith(types[suffix]), (path, content_type)
-        manifest_path = (
-            pathlib.Path(REPOSITORY_ROOT)
-            / "dashboard/static/build/.vite/manifest.json"
-        )
+        manifest_path = pathlib.Path(REPOSITORY_ROOT) / "dashboard/static/build/.vite/manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))["src/main.ts"]
         expected_build = {manifest["file"], *manifest.get("css", [])}
         assert build_references == expected_build

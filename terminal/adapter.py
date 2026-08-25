@@ -39,6 +39,7 @@ from terminal.models import (
     WindowInfo,
     WindowTagRequest,
 )
+
 # The terminal's own window id (`terminal/models/`), distinct from the domain
 # fact of the same name: `terminal/` may depend on nothing outside itself, so
 # this module — the one place a session's RAW EVENT (`WindowId` above) meets a
@@ -119,12 +120,28 @@ class TerminalAdapter:
         window_id = session.terminal_window_id if session is not None else None
         if not window_id:
             return None
+        return (
+            window_id
+            if self.window_is_live(
+                session_id,
+                window_id,
+                self._plugin.metadata.windows(),
+            )
+            else None
+        )
+
+    def window_is_live(
+        self,
+        session_id: SessionId,
+        window_id: WindowId,
+        windows: tuple[WindowInfo, ...],
+    ) -> bool:
         native = NativeWindowId(str(window_id))
-        window = self._window(native)
+        window = next((item for item in windows if item.window_id == native), None)
         if window is None:
-            return None
+            return False
         owner = window.tags.get(SESSION_WINDOW_TAG)
-        return window_id if not owner or owner == str(session_id) else None
+        return not owner or owner == str(session_id)
 
     def live_sessions(self, session_ids: Iterable[SessionId]) -> frozenset[SessionId]:
         """The subset whose window is still on screen — `window_for_session`
@@ -132,8 +149,7 @@ class TerminalAdapter:
         session. Listing the windows costs a subprocess in the real plugins,
         and the session-list route asks about every visible session at once."""
         on_screen = {
-            window.window_id: window.tags.get(SESSION_WINDOW_TAG)
-            for window in self._plugin.metadata.windows()
+            window.window_id: window.tags.get(SESSION_WINDOW_TAG) for window in self._plugin.metadata.windows()
         }
         live = set()
         for session_id in session_ids:
@@ -150,6 +166,10 @@ class TerminalAdapter:
     def current_window(self) -> WindowId | None:
         native = self._plugin.metadata.current_window_id()
         return WindowId(str(native)) if native else None
+
+    def windows(self) -> tuple[WindowInfo, ...]:
+        """Return the terminal windows for harness session discovery."""
+        return self._plugin.metadata.windows()
 
     def session_for_window(self, window_id: WindowId | None) -> SessionId | None:
         native = NativeWindowId(str(window_id)) if window_id else None
@@ -174,33 +194,41 @@ class TerminalAdapter:
         """
         session_id = str(session_pane_request.session_id)
         anchor_window_id = NativeWindowId(str(session_pane_request.anchor_window_id))
-        outcomes: list[TerminalOutcome] = [self._plugin.metadata.tag_window(
-            WindowTagRequest(anchor_window_id, {SESSION_WINDOW_TAG: session_id})
-        )]
+        outcomes: list[TerminalOutcome] = [
+            self._plugin.metadata.tag_window(WindowTagRequest(anchor_window_id, {SESSION_WINDOW_TAG: session_id}))
+        ]
         if self._tagged(ACTIVITY_PANE_TAG, session_pane_request.session_id) is None:
-            outcomes.append(self._plugin.panes.open_pane(PaneOpenRequest(
-                command=self._pane_command("mirror", session_pane_request.session_id),
-                working_directory="",
-                title=MIRROR_PANE_TITLE,
-                split=SplitAxis.VERTICAL,
-                size_percent=session_pane_request.activity_width_percent,
-                anchor=PaneAnchor(window_id=anchor_window_id),
-                same_tab_as=anchor_window_id,
-                tags={ACTIVITY_PANE_TAG: session_id},
-            )))
+            outcomes.append(
+                self._plugin.panes.open_pane(
+                    PaneOpenRequest(
+                        command=self._pane_command("mirror", session_pane_request.session_id),
+                        working_directory="",
+                        title=MIRROR_PANE_TITLE,
+                        split=SplitAxis.VERTICAL,
+                        size_percent=session_pane_request.activity_width_percent,
+                        anchor=PaneAnchor(window_id=anchor_window_id),
+                        same_tab_as=anchor_window_id,
+                        tags={ACTIVITY_PANE_TAG: session_id},
+                    )
+                )
+            )
         if self._tagged(SCOREBOARD_PANE_TAG, session_pane_request.session_id) is None:
-            outcomes.append(self._plugin.panes.open_pane(PaneOpenRequest(
-                command=self._pane_command("scoreboard", session_pane_request.session_id),
-                working_directory="",
-                title=SCOREBOARD_PANE_TITLE,
-                split=SplitAxis.HORIZONTAL,
-                size_percent=SCOREBOARD_SIZE_PERCENT,
-                # The scoreboard sits under the MIRROR, not under the session's
-                # own window — it shares the mirror's column.
-                anchor=PaneAnchor(tag=(ACTIVITY_PANE_TAG, session_id)),
-                same_tab_as=anchor_window_id,
-                tags={SCOREBOARD_PANE_TAG: session_id},
-            )))
+            outcomes.append(
+                self._plugin.panes.open_pane(
+                    PaneOpenRequest(
+                        command=self._pane_command("scoreboard", session_pane_request.session_id),
+                        working_directory="",
+                        title=SCOREBOARD_PANE_TITLE,
+                        split=SplitAxis.HORIZONTAL,
+                        size_percent=SCOREBOARD_SIZE_PERCENT,
+                        # The scoreboard sits under the MIRROR, not under the session's
+                        # own window — it shares the mirror's column.
+                        anchor=PaneAnchor(tag=(ACTIVITY_PANE_TAG, session_id)),
+                        same_tab_as=anchor_window_id,
+                        tags={SCOREBOARD_PANE_TAG: session_id},
+                    )
+                )
+            )
             outcomes.append(self._settle_scoreboard_height(session_pane_request.session_id))
         # Hand inner focus back to the host pane the splits took it from, which
         # restores the host's window title as the visible tab title.
@@ -226,22 +254,16 @@ class TerminalAdapter:
             # A toggle-off keeps the tab colour: the session is still running
             # in that tab, only its display panes are gone.
             return self._close_session_panes(session_id, clear_tab=False)
-        anchor_window_id = (
-            anchor_window_id or self.current_window() or self.window_for_session(session_id)
-        )
+        anchor_window_id = anchor_window_id or self.current_window() or self.window_for_session(session_id)
         if anchor_window_id is None:
             return SessionTerminalResult(False, "session has no terminal window")
-        return self.open_session_panes(
-            SessionPaneRequest(session_id, anchor_window_id, activity_width_percent)
-        )
+        return self.open_session_panes(SessionPaneRequest(session_id, anchor_window_id, activity_width_percent))
 
     def resize_activity_pane(self, session_id: SessionId, columns: int) -> SessionTerminalResult:
         activity = self._tagged(ACTIVITY_PANE_TAG, session_id)
         if activity is None:
             return SessionTerminalResult(False, "activity pane is not open")
-        response = self._plugin.panes.resize_pane(
-            PaneResizeRequest(activity.window_id, SplitAxis.HORIZONTAL, columns)
-        )
+        response = self._plugin.panes.resize_pane(PaneResizeRequest(activity.window_id, SplitAxis.HORIZONTAL, columns))
         return SessionTerminalResult(response.succeeded, response.reason)
 
     def activity_pane_geometry(self, session_id: SessionId) -> tuple[int, int] | None:
@@ -257,8 +279,14 @@ class TerminalAdapter:
         activity = self._tagged(ACTIVITY_PANE_TAG, session_id)
         if activity is None or not activity.columns:
             return None
-        host = next((window for window in self._plugin.metadata.windows()
-                     if window.tab_id == activity.tab_id and window.is_first_in_tab), None)
+        host = next(
+            (
+                window
+                for window in self._plugin.metadata.windows()
+                if window.tab_id == activity.tab_id and window.is_first_in_tab
+            ),
+            None,
+        )
         if host is None:
             return None
         return activity.columns, host.columns + activity.columns
@@ -331,12 +359,10 @@ class TerminalAdapter:
         session_window_id = self.window_for_session(session_id)
         if clear_tab and session_window_id is not None:
             native_session_window_id = NativeWindowId(str(session_window_id))
+            outcomes.append(self._plugin.tabs.clear_tab_color(TabColorClearRequest(native_session_window_id)))
             outcomes.append(
-                self._plugin.tabs.clear_tab_color(TabColorClearRequest(native_session_window_id))
+                self._plugin.metadata.tag_window(WindowTagRequest(native_session_window_id, {SESSION_WINDOW_TAG: ""}))
             )
-            outcomes.append(self._plugin.metadata.tag_window(
-                WindowTagRequest(native_session_window_id, {SESSION_WINDOW_TAG: ""})
-            ))
         return self._combined(outcomes, "terminal pane close failed")
 
     def _settle_scoreboard_height(self, session_id: SessionId) -> SessionTerminalResult:
@@ -359,12 +385,9 @@ class TerminalAdapter:
         return SessionTerminalResult(False, "scoreboard pane did not reach its height")
 
     def _tagged(self, tag: str, session_id: SessionId) -> WindowInfo | None:
-        return next((window for window in self._plugin.metadata.windows()
-                     if window.tags.get(tag) == str(session_id)), None)
-
-    def _window(self, window_id: NativeWindowId) -> WindowInfo | None:
-        return next((window for window in self._plugin.metadata.windows()
-                     if window.window_id == window_id), None)
+        return next(
+            (window for window in self._plugin.metadata.windows() if window.tags.get(tag) == str(session_id)), None
+        )
 
     def _tab_windows(self, window_id: NativeWindowId | None) -> tuple[WindowInfo, ...]:
         """The windows of one tab: the tab holding `window_id`, or — when no
@@ -373,8 +396,7 @@ class TerminalAdapter:
         windows = self._plugin.metadata.windows()
         named = window_id or self._plugin.metadata.current_window_id()
         if named:
-            tab_id = next((window.tab_id for window in windows
-                           if window.window_id == named), None)
+            tab_id = next((window.tab_id for window in windows if window.window_id == named), None)
             if tab_id is not None:
                 return tuple(window for window in windows if window.tab_id == tab_id)
         focused = tuple(window for window in windows if window.tab_is_focused)

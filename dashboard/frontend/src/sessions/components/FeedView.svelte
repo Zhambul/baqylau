@@ -46,6 +46,22 @@
   let rewindFailure = $state<string | null>(null);
   let handledDismissSequence = $state(0);
 
+  function observeOlder(node: HTMLDivElement): { destroy: () => void } {
+    const observer = new IntersectionObserver((entries) => {
+      if (
+        entries.some((entry) => entry.isIntersecting) &&
+        view.olderFailure === null
+      )
+        void view.loadOlder();
+    });
+    observer.observe(node);
+    return {
+      destroy: () => {
+        observer.disconnect();
+      },
+    };
+  }
+
   $effect(() => {
     if (priorMode === null) {
       priorMode = mode;
@@ -168,17 +184,23 @@
     {/each}
   {/if}
   {#if view.oldestCursor !== null}
-    <button
-      class="loadmore"
-      type="button"
-      disabled={view.loadingOlder}
-      onclick={() => view.loadOlder()}
-    >
-      {view.loadingOlder ? 'loading…' : 'load older · 40 more…'}
-    </button>
+    <div class="load-sentinel" use:observeOlder>
+      {#if view.loadingOlder}
+        <span
+          class="feed-loader"
+          role="status"
+          aria-label="loading older activity"
+        >
+          <span class="feed-spinner" aria-hidden="true"></span>
+        </span>
+      {/if}
+    </div>
   {/if}
   {#if view.olderFailure !== null}
-    <div class="empty">could not load older activity</div>
+    <div class="older-failure" role="alert">
+      <span>could not load older activity</span>
+      <button type="button" onclick={() => view.loadOlder()}>retry</button>
+    </div>
   {/if}
   {#if rewindFailure !== null}
     <div class="empty" role="alert">{rewindFailure}</div>

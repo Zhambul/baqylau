@@ -71,3 +71,9 @@ class TurnSemantics:
             None,
         )
         return self._open.pop(index).turn_id if index is not None else None
+
+    def release_session(self, session_id: SessionId) -> None:
+        """Release any turn that outlived a finished native session."""
+        self._open = [
+            opened for opened in self._open if opened.session_id != session_id
+        ]

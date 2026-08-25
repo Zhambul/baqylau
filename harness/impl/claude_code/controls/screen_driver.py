@@ -18,12 +18,12 @@ class ScreenDriver(Protocol):
 
     terminal: TerminalPlugin
 
-    def get_text(
-        self, window_id: WindowId, extent: str = "screen", ansi: bool = False
-    ) -> str | None: ...
+    def get_text(self, window_id: WindowId, extent: str = "screen", ansi: bool = False) -> str | None: ...
     def send_key(self, window_id: WindowId, *keys: str) -> bool: ...
     def send_text(self, window_id: WindowId, text: str) -> bool: ...
     def paste_text(self, window_id: WindowId, text: str) -> bool: ...
+    def lines(self, window_id: WindowId) -> int | None: ...
+    def resize_lines(self, window_id: WindowId, cells: int) -> bool: ...
 
 
 def poll_until(
@@ -49,3 +49,10 @@ class StepError(Exception):
         super().__init__(step + ((": " + detail) if detail else ""))
         self.step = step
         self.screen = screen
+
+
+def failure_detail(step_error: StepError) -> str:
+    """Keep a bounded native screen with a verified driver failure."""
+    if not step_error.screen:
+        return str(step_error)
+    return f"{step_error}; screen={step_error.screen[-SCREEN_LIMIT:]!r}"

@@ -4,7 +4,7 @@ import type {
   OptimisticAction,
   TelemetryFields,
 } from '../api/browser-telemetry';
-import { interrupt, openRewind } from '../api/controls';
+import { interrupt } from '../api/controls';
 import { readEntryPage } from '../api/entries';
 import { readHarnessCatalog } from '../api/harnesses';
 import { readSessionApplication } from '../api/session-application';
@@ -54,7 +54,7 @@ import {
 import type { Actor, Session, SessionSnapshot } from './model';
 import {
   deliveredPrompt,
-  mergeQueuedPromptTexts,
+  mergeQueuedPrompts,
   promptMatches,
 } from './optimistic-prompts';
 import { foldShellEntries, jobFolds, monitorFolds } from './shell-fold';
@@ -405,15 +405,8 @@ export class SessionViewState {
     }
   }
 
-  async beginRewind(): Promise<ControlOutcome> {
-    try {
-      const result = await openRewind(this.sessionId, newRequestId());
-      if (result.status === 'acknowledged') this.setRewindPicking(true);
-      return result;
-    } catch (error) {
-      reportClientFailure(this.sessionId, 'rewind', error);
-      throw error;
-    }
+  beginRewind(): void {
+    this.setRewindPicking(true);
   }
 
   showPendingPrompt(requestId: RequestId, text: string): void {
@@ -456,17 +449,18 @@ export class SessionViewState {
   }
 
   get queuedPromptTexts(): readonly string[] {
-    const persisted =
-      this.application?.composer.queue?.items.map((item) => item.text) ?? [];
-    const delivered = this.entries.flatMap((entry) => {
-      const text = deliveredPrompt(entry);
-      return text === null ? [] : [text];
-    });
-    return mergeQueuedPromptTexts(
+    const persisted = this.application?.composer.queue?.items ?? [];
+    const delivered = [...this.entries]
+      .sort((left, right) => left.cursor - right.cursor)
+      .flatMap((entry) => {
+        const text = deliveredPrompt(entry);
+        return text === null ? [] : [text];
+      });
+    return mergeQueuedPrompts(
       persisted,
-      this.pendingQueuedPrompts.map((item) => item.text),
+      this.pendingQueuedPrompts,
       delivered,
-    );
+    ).map((item) => item.text);
   }
 
   recordBrowserEvent(name: string, details: TelemetryFields = {}): void {

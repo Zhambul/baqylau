@@ -68,17 +68,12 @@ def _mode_label(mode: str) -> str | None:
         return None
 
 MENU_HEADER = "Rewind"                       # first-menu region anchor
-# First-menu open detector, matched CASE-INSENSITIVELY on the STABLE half of
-# the footer. Claude Code composes that footer at runtime from a chord + an
-# action — the component renders `[<chord label>, " to ", <action>]` — and the
-# chord label has three formats (`Enter` / `enter` / `⏎`, a key table in the
-# binary). So the literal never exists in the product; only the tail does. The
-# old marker was the whole phrase in title case (`Enter to continue`), measured
-# on v2.1.214, and by v2.1.220 it no longer matched: every web rewind failed
-# with `step: "open"` — "checkpoint menu never appeared" — while the menu was in
-# fact open on screen (2026-07-25). Matching the composed half is the bug; the
-# action word is hard-coded in the menu's own JSX and is what to key on.
-MENU_FOOT = "to continue"                    # first-menu open detector
+# The list introduction and its selected row are visible even when a small
+# terminal clips the footer. Claude Code 2.1.241 can omit the footer from
+# get_text while it keeps the list open. Keep the old footer marker for older
+# layouts, but do not require it.
+MENU_INTRO = "Restore the code and/or conversation to the point before"
+MENU_FOOT = "to continue"
 CONFIRM_HEADER = "Confirm you want to restore"   # second-menu open detector
 #                  (a JSX literal, unlike the footer — safe to match whole)
 CODE_UNCHANGED = "The code will be unchanged."   # confirm-menu line when the
@@ -89,7 +84,9 @@ POLL_S = 0.15          # screen re-read beat while waiting for a menu state
 OPEN_TIMEOUT_S = 4.0   # /rewind typed → menu visible (slash command latency)
 STEP_TIMEOUT_S = 2.0   # a key press → its screen effect visible
 SCAN_MAX = 100         # hard step bound — Claude Code caps checkpoints at 100
+CONFIRM_SCAN_MAX = 10  # restore menu has four rows; leave room for later rows
 KEY_GAP_S = 0.05       # beat between blind repeated `up` presses
+DIALOG_MIN_LINES = 40  # the full confirm card and its restore rows
 
 
 def first_line(text: str) -> str:
@@ -133,12 +130,15 @@ def menu_region(screen: str) -> str:
 
 
 def menu_open(screen: str) -> bool:
-    """True when the checkpoint list (first menu) is on screen. The footer
-    match is case-insensitive — see MENU_FOOT: its chord label is one of three
-    runtime formats and only the tail is stable."""
+    """True when the checkpoint list (first menu) is on screen."""
     region = menu_region(screen)
-    return (bool(region) and MENU_FOOT in region.lower()
-            and CONFIRM_HEADER not in region)
+    marker_visible = MENU_INTRO in region or MENU_FOOT in region.lower()
+    return (
+        bool(region)
+        and marker_visible
+        and bool(cursor_entry(screen))
+        and CONFIRM_HEADER not in region
+    )
 
 
 def confirm_open(screen: str) -> bool:
@@ -169,6 +169,41 @@ def confirm_options(screen: str) -> tuple[ConfirmOption, ...]:
         ConfirmOption(row.label.lower(), row.digit, row.cursor)
         for row in numberedmenu.rows(menu_region(screen))
     )
+
+
+def confirm_ready(screen: str, requested_label: str, mode: str) -> bool:
+    """True when the confirm menu has rendered enough to decide the request."""
+    if not confirm_open(screen):
+        return False
+    options = confirm_options(screen)
+    if any(option.label == requested_label for option in options):
+        return True
+    return (
+        mode in {ClaudeCodeRewindMode.BOTH, ClaudeCodeRewindMode.CODE}
+        and bool(options)
+        and CODE_UNCHANGED in menu_region(screen)
+    )
+
+
+def _scan_confirm(
+    screen_driver: ScreenDriver,
+    win: WindowId,
+    requested_label: str,
+    mode: str,
+    key: str,
+    sleep: Callable[[float], None],
+) -> tuple[str, bool]:
+    """Reveal a restore option that is below a small terminal's viewport."""
+    screen = screen_driver.get_text(win) or ""
+    for _ in range(CONFIRM_SCAN_MAX + 1):
+        if confirm_ready(screen, requested_label, mode):
+            return screen, True
+        if not confirm_open(screen):
+            return screen, False
+        screen_driver.send_key(win, key)
+        sleep(POLL_S)
+        screen = screen_driver.get_text(win) or ""
+    return screen, False
 
 
 class MenuError(screendrive.StepError):
@@ -244,7 +279,7 @@ def _scan(
     return False, steps
 
 
-def drive(
+def _drive_menu(
     screen_driver: ScreenDriver,
     win: WindowId,
     target: str,
@@ -298,14 +333,42 @@ def drive(
         found, down = _scan(screen_driver, win, target, "down", sleep)
         steps += down
         if not found:
+            failure_screen = screen_driver.get_text(win) or ""
             _bail(screen_driver, win, sleep)
-            raise MenuError("find", "checkpoint not found: %r" %
-                            first_line(target)[:80])
+            raise MenuError(
+                "find",
+                "checkpoint not found: %r" % first_line(target)[:80],
+                failure_screen,
+            )
     screen_driver.send_key(win, "enter")
-    screen, ok = screendrive.poll_until(screen_driver, win, confirm_open, STEP_TIMEOUT_S, sleep)
+    screen, ok = screendrive.poll_until(
+        screen_driver,
+        win,
+        confirm_open,
+        STEP_TIMEOUT_S,
+        sleep,
+    )
+    if ok:
+        screen, ok = _scan_confirm(
+            screen_driver,
+            win,
+            requested_label,
+            mode,
+            "down",
+            sleep,
+        )
+    if not ok and confirm_open(screen):
+        screen, ok = _scan_confirm(
+            screen_driver,
+            win,
+            requested_label,
+            mode,
+            "up",
+            sleep,
+        )
     if not ok:
         _bail(screen_driver, win, sleep)
-        raise MenuError("confirm", "confirm menu never appeared")
+        raise MenuError("confirm", "requested restore option never appeared", screen)
     opts = confirm_options(screen)
     unchanged = CODE_UNCHANGED in menu_region(screen)
     digit = next((option.digit for option in opts if option.label == requested_label), None)
@@ -324,14 +387,42 @@ def drive(
         degraded = bool(digit)
     if not digit:
         _bail(screen_driver, win, sleep)
-        raise MenuError("option", "%r not offered here%s" % (
-            requested_label,
-            " — no code changes to revert at that checkpoint"
-            if unchanged else ""))
+        raise MenuError(
+            "option",
+            "%r not offered here%s"
+            % (
+                requested_label,
+                " — no code changes to revert at that checkpoint"
+                if unchanged
+                else "",
+            ),
+            screen,
+        )
     select_confirm_option(screen_driver, win, digit, sleep)
     screen, ok = screendrive.poll_until(screen_driver, win, lambda s: not menu_region(s),
                        STEP_TIMEOUT_S, sleep)
     if not ok:
         _bail(screen_driver, win, sleep)
-        raise MenuError("close", "menu still open after selecting")
+        raise MenuError("close", "menu still open after selecting", screen)
     return RewindOutcome(steps, digit, degraded)
+
+
+def drive(
+    screen_driver: ScreenDriver,
+    win: WindowId,
+    target: str,
+    mode: str,
+    ups: int = 0,
+    sleep: Callable[[float], None] = time.sleep,
+) -> RewindOutcome:
+    """Drive one native rewind dialog inside a temporary usable viewport."""
+    current_lines = screen_driver.lines(win)
+    growth = max(0, DIALOG_MIN_LINES - current_lines) if current_lines is not None else 0
+    grown = growth > 0 and screen_driver.resize_lines(win, growth)
+    if grown:
+        sleep(POLL_S)
+    try:
+        return _drive_menu(screen_driver, win, target, mode, ups, sleep)
+    finally:
+        if grown:
+            screen_driver.resize_lines(win, -growth)

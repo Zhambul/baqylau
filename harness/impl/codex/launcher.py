@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from harness.contract import HarnessLauncher
 from harness.models import HarnessLaunchPlan, LaunchRejected, LaunchRequest
 
@@ -25,12 +27,22 @@ class CodexLauncher(HarnessLauncher):
             arguments.extend(("-m", launch_request.model))
         if launch_request.effort:
             arguments.extend(("-c", f"model_reasoning_effort={launch_request.effort}"))
+        # The rollout always stores encrypted reasoning, but its readable
+        # summary defaults to "none" in current Codex model metadata. Baqylau
+        # needs the native summary to present reasoning activity. It does not
+        # inspect or reconstruct encrypted model state.
+        arguments.extend(("-c", 'model_reasoning_summary="concise"'))
         if prompt.strip():
             arguments.append(prompt)
+        environment: tuple[tuple[str, str], ...] = ()
+        configured_home = os.environ.get("CODEX_HOME")
+        if configured_home:
+            environment = (("CODEX_HOME", configured_home),)
         # Launching is just running the CLI; the session announces itself
         # through its own hook raw events.
         return HarnessLaunchPlan(
             command="codex",
             arguments=tuple(arguments),
             title="Codex",
+            environment=environment,
         )

@@ -12,7 +12,14 @@ export function reduceGlobalDelta(
   current: readonly SessionSnapshot[],
   delta: GlobalStreamDelta,
 ): GlobalReduction {
-  const sessions = [...current];
+  const removed = new Set(
+    delta.sessions
+      .filter((changed) => changed.state !== 'running')
+      .map((changed) => changed.sessionId),
+  );
+  const sessions = current.filter(
+    (snapshot) => !removed.has(snapshot.session.sessionId),
+  );
   const positions = new Map(
     sessions.map((snapshot, position) => [
       snapshot.session.sessionId,
@@ -24,6 +31,7 @@ export function reduceGlobalDelta(
 
   for (const changed of delta.sessions) {
     frameSessions.add(changed.sessionId);
+    if (removed.has(changed.sessionId)) continue;
     const position = positions.get(changed.sessionId);
     if (position === undefined) {
       adopt.add(changed.sessionId);
@@ -41,6 +49,7 @@ export function reduceGlobalDelta(
 
   const unknownActorSessions = new Set<SessionId>();
   for (const changed of delta.actors) {
+    if (removed.has(changed.sessionId)) continue;
     const position = positions.get(changed.sessionId);
     if (position === undefined) {
       if (frameSessions.has(changed.sessionId)) {

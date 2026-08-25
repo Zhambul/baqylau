@@ -6,6 +6,7 @@ import base64
 from dataclasses import replace
 
 from domain.events import ShellProgressed, TaskListChanged
+from domain.ids import SessionId
 from domain.records import RecordedTranslationDecision
 from domain.values import OutputMode
 from repository.mapper.documents import StoredDocumentError, decode_document
@@ -44,6 +45,12 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
             return self._stamped(raw_event, self._translate(raw_event))
         except UnknownRawEvent as unknown:
             return TranslationResult((), RecordedTranslationDecision.IGNORED_UNKNOWN, unknown.reason)
+
+    def release_session(self, session_id: SessionId) -> None:
+        """Release all in-memory joins for one finished session."""
+        self._toolcalls.clear_session(session_id)
+        self._turns.release_session(session_id)
+        self._selections.release_session(session_id)
 
     def _stamped(self, raw_event: RawEvent, translation_result: TranslationResult) -> TranslationResult:
         """Every fact of an open turn carries it.

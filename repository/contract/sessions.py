@@ -23,11 +23,10 @@ class SessionRepository(Protocol):
     def find(self, session_id: SessionId) -> Session | None: ...
 
     def watchable(self) -> tuple[Session, ...]:
-        """Every session without a committed finish, most recently observed first.
+        """Every session without a committed finish, newest first.
 
         No count limit by design: liveness is a raw event question, never a
-        quota. Reads `canonical_events` and `raw_events` in correlated
-        subqueries — a deliberate cross-table read within one database, kept as
-        one statement because the interpreter asks for it four times a second.
+        quota. The session lifecycle is maintained by database triggers in the
+        same transaction as canonical start and finish facts.
         """
         ...

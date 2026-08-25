@@ -31,6 +31,7 @@ from domain.entries import (
 )
 from domain.events import (
     EffortChanged,
+    ActorAssignmentFinished,
     ActorAssignmentStarted,
     ActorFinished,
     ActorStarted,
@@ -171,11 +172,7 @@ def fold(*payloads: EventPayload | CanonicalEvent[EventPayload]) -> AggregateSta
     """Every writer over every fact, in order — the loop's fold, without the store."""
     state = AggregateState()
     for cursor, payload in enumerate(payloads, start=1):
-        event = (
-            payload
-            if isinstance(payload, CanonicalEvent)
-            else committed(payload, cursor=cursor)
-        )
+        event = payload if isinstance(payload, CanonicalEvent) else committed(payload, cursor=cursor)
         for writer in WRITERS:
             state = writer.write(event, state)
     return state
@@ -231,17 +228,23 @@ def test_a_title_a_person_chose_outranks_every_title_a_harness_derived():
         MessageId("m1"), MessageRole.USER, TextContent("Fix the reconnect bug"), MessagePhase.PROMPT, None
     )
     assert fold(*alive(), prompt).session.title == "Fix the reconnect bug"
-    assert fold(
-        *alive(),
-        prompt,
-        SessionTitleChanged("Summarised", TitleOrigin.SUMMARY),
-    ).session.title == "Summarised"
-    assert fold(
-        *alive(),
-        SessionTitleChanged("Chosen", TitleOrigin.CUSTOM),
-        SessionTitleChanged("Derived", TitleOrigin.AUTOMATIC),
-        prompt,
-    ).session.title == "Chosen"
+    assert (
+        fold(
+            *alive(),
+            prompt,
+            SessionTitleChanged("Summarised", TitleOrigin.SUMMARY),
+        ).session.title
+        == "Summarised"
+    )
+    assert (
+        fold(
+            *alive(),
+            SessionTitleChanged("Chosen", TitleOrigin.CUSTOM),
+            SessionTitleChanged("Derived", TitleOrigin.AUTOMATIC),
+            prompt,
+        ).session.title
+        == "Chosen"
+    )
 
 
 def test_only_the_first_prompt_titles_a_session():
@@ -292,14 +295,29 @@ def SessionAccountChangedFixture():
 # --- the goal and the tasks ---------------------------------------------------
 
 
-def test_a_cleared_goal_is_no_goal_and_a_complete_one_says_so():
-    assert fold(*alive(), GoalChanged("ship it", GoalState.ACTIVE, None)).session.goal.completed is False
-    assert fold(*alive(), GoalChanged("ship it", GoalState.COMPLETED, None)).session.goal.completed is True
-    assert fold(
+def test_a_goal_keeps_its_state_and_reason_and_a_cleared_goal_is_no_goal():
+    active = fold(*alive(), GoalChanged("ship it", GoalState.ACTIVE, None)).session.goal
+    assert active.state == GoalState.ACTIVE
+    assert active.reason is None
+    blocked = fold(
         *alive(),
-        GoalChanged("ship it", GoalState.ACTIVE, None),
-        GoalChanged(None, GoalState.CLEARED, None),
-    ).session.goal is None
+        GoalChanged("ship it", GoalState.BLOCKED, "waiting for access"),
+    ).session.goal
+    assert blocked.state == GoalState.BLOCKED
+    assert blocked.reason == "waiting for access"
+    completed = fold(
+        *alive(),
+        GoalChanged("ship it", GoalState.COMPLETED, None),
+    ).session.goal
+    assert completed.state == GoalState.COMPLETED
+    assert (
+        fold(
+            *alive(),
+            GoalChanged("ship it", GoalState.ACTIVE, None),
+            GoalChanged(None, GoalState.CLEARED, None),
+        ).session.goal
+        is None
+    )
 
 
 def test_the_list_fact_orders_the_tasks_and_decides_which_belong():
@@ -385,7 +403,10 @@ def test_the_claude_namer_speaks_one_vocabulary():
     assert display_model(ModelReference("claude-haiku-4-5-20251001", None)) == "haiku-4.5"
     # the PICKER offers the same strings, keyed by the alias the harness takes
     assert {option.value: option.display_name for option in MODELS} == {
-        "fable": "fable-5", "opus": "opus-5", "sonnet": "sonnet-5", "haiku": "haiku-4.5",
+        "fable": "fable-5",
+        "opus": "opus-5",
+        "sonnet": "sonnet-5",
+        "haiku": "haiku-4.5",
     }
 
 
@@ -414,16 +435,20 @@ def test_a_started_session_is_idle_and_a_finished_one_shows_no_state():
 
 def test_a_prompt_or_a_turn_start_is_thinking_and_reasoning_is_working():
     assert status_after(TurnStarted(None)) == "thinking"
-    assert status_after(
-        MessageCreated(MessageId("m1"), MessageRole.USER, TextContent("go"), MessagePhase.PROMPT, None)
-    ) == "thinking"
+    assert (
+        status_after(MessageCreated(MessageId("m1"), MessageRole.USER, TextContent("go"), MessagePhase.PROMPT, None))
+        == "thinking"
+    )
     assert status_after(ReasoningCreated("r1", TextContent("hmm"))) == "working"
 
 
 def test_an_assistant_message_is_not_a_prompt():
-    assert status_after(
-        MessageCreated(MessageId("m1"), MessageRole.ASSISTANT, TextContent("done"), MessagePhase.END_TURN, None)
-    ) == "idle"
+    assert (
+        status_after(
+            MessageCreated(MessageId("m1"), MessageRole.ASSISTANT, TextContent("done"), MessagePhase.END_TURN, None)
+        )
+        == "idle"
+    )
 
 
 @pytest.mark.parametrize(
@@ -451,33 +476,58 @@ def test_work_being_done_is_executing(payload):
     ),
 )
 def test_work_that_ended_is_working_again(payload):
-    assert status_after(
-        ShellStarted(ShellId("sh1"), TextContent("make test"), ExecutionMode.FOREGROUND, None),
-        payload,
-    ) == "working"
+    assert (
+        status_after(
+            TurnStarted(None),
+            ShellStarted(ShellId("sh1"), TextContent("make test"), ExecutionMode.FOREGROUND, None),
+            payload,
+        )
+        == "working"
+    )
+
+
+def test_a_late_command_finish_does_not_reopen_an_ended_turn():
+    assert (
+        status_after(
+            TurnStarted(None),
+            ShellStarted(ShellId("sh1"), TextContent("make test"), ExecutionMode.FOREGROUND, None),
+            TurnFinished(None, "succeeded"),
+            ShellFinished(ShellId("sh1"), Outcome.SUCCEEDED, None, 0),
+        )
+        == "awaiting_response"
+    )
 
 
 def test_an_unanswered_question_outlives_the_work_that_finished_after_it():
     """The pending set is why: a finish has to know whether anybody is still
     waiting, and no single fact can say so."""
     assert status_after(QuestionAsked(AttentionId("a1"), ())) == "awaiting_attention"
-    assert status_after(
-        QuestionAsked(AttentionId("a1"), ()),
-        ShellFinished(ShellId("sh1"), Outcome.SUCCEEDED, None, 0),
-    ) == "awaiting_attention"
-    assert status_after(
-        QuestionAsked(AttentionId("a1"), ()),
-        QuestionAnswered(AttentionId("a1"), (), None),
-        ShellFinished(ShellId("sh1"), Outcome.SUCCEEDED, None, 0),
-    ) == "working"
+    assert (
+        status_after(
+            QuestionAsked(AttentionId("a1"), ()),
+            ShellFinished(ShellId("sh1"), Outcome.SUCCEEDED, None, 0),
+        )
+        == "awaiting_attention"
+    )
+    assert (
+        status_after(
+            QuestionAsked(AttentionId("a1"), ()),
+            QuestionAnswered(AttentionId("a1"), (), None),
+            ShellFinished(ShellId("sh1"), Outcome.SUCCEEDED, None, 0),
+        )
+        == "working"
+    )
 
 
 def test_a_plan_waits_for_a_person_the_same_way_a_question_does():
     assert status_after(PlanProposed(AttentionId("a1"), TextContent("do it"))) == "awaiting_attention"
-    assert status_after(
-        PlanProposed(AttentionId("a1"), TextContent("do it")),
-        PlanResolved(AttentionId("a1"), PlanState.APPROVED, None, False),
-    ) == "working"
+    assert (
+        status_after(
+            PlanProposed(AttentionId("a1"), TextContent("do it")),
+            PlanResolved(AttentionId("a1"), PlanState.APPROVED, None, False),
+        )
+        == "working"
+    )
 
 
 def test_compaction_is_work():
@@ -494,20 +544,161 @@ def test_a_turn_that_ends_over_a_running_background_job_is_awaiting_it():
     finished immediately, while its output still flows — so ending it there
     emptied the set before a turn could ever end on it, and a session with a job
     still running read as idle."""
-    assert status_after(
-        ShellStarted(ShellId("bg1"), TextContent("tail -f log"), ExecutionMode.BACKGROUND, None),
-        ShellFinished(ShellId("bg1"), Outcome.SUCCEEDED, None, None),
+    assert (
+        status_after(
+            ShellStarted(ShellId("bg1"), TextContent("tail -f log"), ExecutionMode.BACKGROUND, None),
+            ShellFinished(ShellId("bg1"), Outcome.SUCCEEDED, None, None),
+            TurnFinished(None, "succeeded"),
+        )
+        == "awaiting_background"
+    )
+
+
+def test_a_lead_that_ends_its_turn_over_subagent_work_is_awaiting_it():
+    assignment_id = AssignmentId("assignment-one")
+
+    state = fold(
+        *alive(),
+        ActorAssignmentStarted(assignment_id, TextContent("Verify it")),
         TurnFinished(None, "succeeded"),
-    ) == "awaiting_background"
+    )
+
+    lead = state.actor(LEAD)
+    assert lead is not None
+    assert lead.status == "awaiting_background"
+    assert lead.running_assignment_ids_internal == (assignment_id,)
+
+
+def test_a_codex_child_assignment_start_is_owned_by_its_lead():
+    assignment_id = AssignmentId("assignment-one")
+
+    state = fold(
+        *alive(),
+        committed(
+            ActorStarted("Verifier", ActorRole.CHILD),
+            actor_id=CHILD,
+            parent_actor_id=LEAD,
+            cursor=10,
+        ),
+        committed(
+            ActorAssignmentStarted(assignment_id, TextContent("Verify it")),
+            actor_id=CHILD,
+            parent_actor_id=LEAD,
+            cursor=11,
+        ),
+        TurnFinished(None, "succeeded"),
+    )
+
+    lead = state.actor(LEAD)
+    assert lead is not None
+    assert lead.status == "awaiting_background"
+    assert lead.running_assignment_ids_internal == (assignment_id,)
+
+
+def test_a_child_assignment_result_releases_a_lead_whose_turn_ended():
+    assignment_id = AssignmentId("assignment-one")
+
+    state = fold(
+        *alive(),
+        ActorAssignmentStarted(assignment_id, TextContent("Verify it")),
+        TurnFinished(None, "succeeded"),
+        committed(
+            ActorStarted("Verifier", ActorRole.CHILD),
+            actor_id=CHILD,
+            parent_actor_id=LEAD,
+            cursor=10,
+        ),
+        committed(
+            ActorAssignmentFinished(
+                assignment_id,
+                Outcome.SUCCEEDED,
+                TextContent("verified"),
+                None,
+            ),
+            actor_id=CHILD,
+            parent_actor_id=LEAD,
+            cursor=11,
+        ),
+    )
+
+    lead = state.actor(LEAD)
+    child = state.actor(CHILD)
+    assert lead is not None
+    assert child is not None
+    assert lead.status == "awaiting_response"
+    assert lead.running_assignment_ids_internal == ()
+    assert child.state == "finished"
+
+
+def test_a_child_assignment_result_keeps_an_active_lead_working():
+    assignment_id = AssignmentId("assignment-one")
+
+    state = fold(
+        *alive(),
+        ActorAssignmentStarted(assignment_id, TextContent("Verify it")),
+        committed(
+            ActorStarted("Verifier", ActorRole.CHILD),
+            actor_id=CHILD,
+            parent_actor_id=LEAD,
+            cursor=10,
+        ),
+        committed(
+            ActorAssignmentFinished(
+                assignment_id,
+                Outcome.SUCCEEDED,
+                TextContent("verified"),
+                None,
+            ),
+            actor_id=CHILD,
+            parent_actor_id=LEAD,
+            cursor=11,
+        ),
+    )
+
+    lead = state.actor(LEAD)
+    assert lead is not None
+    assert lead.status == "working"
+    assert lead.running_assignment_ids_internal == ()
+
+
+def test_a_failed_assignment_launch_does_not_finish_the_lead():
+    assignment_id = AssignmentId("assignment-one")
+
+    state = fold(
+        *alive(),
+        ActorAssignmentStarted(assignment_id, TextContent("Verify it")),
+        ActorAssignmentFinished(assignment_id, Outcome.FAILED, None, "not found"),
+    )
+
+    lead = state.actor(LEAD)
+    assert lead is not None
+    assert lead.state == "running"
+    assert lead.status == "working"
+    assert lead.running_assignment_ids_internal == ()
 
 
 def test_a_background_job_ends_on_its_own_notification_not_on_its_launch():
-    assert status_after(
-        ShellStarted(ShellId("bg1"), TextContent("tail -f log"), ExecutionMode.BACKGROUND, None),
-        ShellFinished(ShellId("bg1"), Outcome.SUCCEEDED, None, None),
-        ShellOutputFinished(ShellId("bg1"), "succeeded"),
-        TurnFinished(None, "succeeded"),
-    ) == "awaiting_response"
+    assert (
+        status_after(
+            ShellStarted(ShellId("bg1"), TextContent("tail -f log"), ExecutionMode.BACKGROUND, None),
+            ShellFinished(ShellId("bg1"), Outcome.SUCCEEDED, None, None),
+            ShellOutputFinished(ShellId("bg1"), "succeeded"),
+            TurnFinished(None, "succeeded"),
+        )
+        == "awaiting_response"
+    )
+
+
+def test_background_output_that_ends_after_the_turn_releases_the_actor():
+    assert (
+        status_after(
+            ShellStarted(ShellId("bg1"), TextContent("tail -f log"), ExecutionMode.BACKGROUND, None),
+            ShellFinished(ShellId("bg1"), Outcome.SUCCEEDED, None, None),
+            TurnFinished(None, "succeeded"),
+            ShellOutputFinished(ShellId("bg1"), "succeeded"),
+        )
+        == "awaiting_response"
+    )
 
 
 def test_a_command_backgrounded_mid_run_becomes_background_work_and_counts_as_a_job():
@@ -742,9 +933,7 @@ def test_plumbing_and_aggregate_facts_produce_no_entry(payload):
 
 
 def test_a_shell_entry_carries_the_command_and_the_harness_description_as_its_summary():
-    entry = entry_of(
-        ShellStarted(ShellId("sh9"), TextContent("make test"), ExecutionMode.FOREGROUND, "Run the tests")
-    )
+    entry = entry_of(ShellStarted(ShellId("sh9"), TextContent("make test"), ExecutionMode.FOREGROUND, "Run the tests"))
     assert entry.summary == "Run the tests"
     assert entry.body == ShellStartedBody(ShellId("sh9"), TextContent("make test"), ExecutionMode.FOREGROUND)
 
@@ -850,13 +1039,12 @@ def test_only_a_real_switch_reaches_the_feed():
     assert state.actor(LEAD).model == resolved
 
     # A person switching models IS a change: a different selection.
-    assert body_of(
-        ModelChanged(resolved, ModelReference("claude-opus-5", "Opus 5"), "selected")
-    ) == ModelChangeBody("Opus 5", "sonnet-5", False)
+    assert body_of(ModelChanged(resolved, ModelReference("claude-opus-5", "Opus 5"), "selected")) == ModelChangeBody(
+        "Opus 5", "sonnet-5", False
+    )
     # So is a fallback the harness chose, and it says so.
     assert body_of(
-        ModelChanged(resolved, ModelReference("claude-haiku-4-5", "haiku"),
-                     "automatic_fallback")
+        ModelChanged(resolved, ModelReference("claude-haiku-4-5", "haiku"), "automatic_fallback")
     ) == ModelChangeBody("haiku", "sonnet-5", True)
     # And so is a real effort switch.
     assert body_of(EffortChanged("low", "high", "selected")) == EffortChangeBody("high", "low")
@@ -997,9 +1185,7 @@ def test_an_event_that_changes_nothing_moves_the_mark_without_burning_a_cursor(t
         tmp_path,
         (
             *alive(),
-            ShellOutputLocated(
-                ShellId("sh1"), "/tmp/o", "chunk", False, 0, 0, False, ShellFollowUntil.SHELL_FINISHED
-            ),
+            ShellOutputLocated(ShellId("sh1"), "/tmp/o", "chunk", False, 0, 0, False, ShellFollowUntil.SHELL_FINISHED),
         ),
     )
     loop.tick()
@@ -1027,9 +1213,7 @@ def test_the_read_model_is_rebuilt_from_the_log_without_replaying_a_side_effect(
     rebuilt = read_model.read(SESSION)
     assert rebuilt.session == live.session
     assert rebuilt.actors == live.actors
-    assert [entry.entry_type for entry in read_model.entries_page(SESSION, limit=10).items] == [
-        "message"
-    ]
+    assert [entry.entry_type for entry in read_model.entries_page(SESSION, limit=10).items] == ["message"]
     assert reaction.seen == seen_live
 
 
@@ -1057,9 +1241,7 @@ def test_a_writer_that_raises_is_audited_and_the_loop_carries_on(tmp_path):
     events = SqliteCanonicalEventRepository(database)
     read_model = SqliteSessionDataRepository(database)
     audit = RecordingAudit()
-    loop = ReactionLoop(
-        events, read_model, (), EntryWriter(), (BrokenWriter(),), (), NoReactors(), None, audit
-    )
+    loop = ReactionLoop(events, read_model, (), EntryWriter(), (BrokenWriter(),), (), NoReactors(), None, audit)
     _record(database, events, alive())
 
     assert loop.tick() == 2
@@ -1103,6 +1285,15 @@ def test_a_legitimately_empty_marker_writes_no_audit_row(tmp_path):
     assert audit.failures == []
 
 
+def test_a_successful_command_with_no_output_writes_no_audit_row(tmp_path):
+    loop, _read_model, audit = loop_over(
+        tmp_path,
+        (*alive(), ShellFinished(ShellId("quiet"), Outcome.SUCCEEDED, None, 0)),
+    )
+    loop.tick()
+    assert audit.failures == []
+
+
 def test_a_body_with_content_writes_no_audit_row(tmp_path):
     loop, _read_model, audit = loop_over(
         tmp_path,
@@ -1112,6 +1303,29 @@ def test_a_body_with_content_writes_no_audit_row(tmp_path):
         ),
     )
     loop.tick()
+    assert audit.failures == []
+
+
+def test_a_rename_and_a_failed_file_access_are_complete_without_content(tmp_path):
+    loop, _read_model, audit = loop_over(
+        tmp_path,
+        (
+            *alive(),
+            FileAccessed(
+                "/work/after.txt",
+                FileAction.RENAMED,
+                Outcome.SUCCEEDED,
+                previous_path="/work/before.txt",
+            ),
+            FileAccessed(
+                "/work/missing.txt",
+                FileAction.READ,
+                Outcome.FAILED,
+            ),
+        ),
+    )
+    loop.tick()
+
     assert audit.failures == []
 
 
@@ -1203,9 +1417,7 @@ def test_a_rebuild_repaints_nothing(tmp_path):
     from terminal.tabs import TabColorPainter
 
     tabs = RecordingTabs()
-    loop, _read_model, _audit = loop_over(
-        tmp_path, alive(), listener=TabColorPainter(tabs, FixedSessions(LEAD))
-    )
+    loop, _read_model, _audit = loop_over(tmp_path, alive(), listener=TabColorPainter(tabs, FixedSessions(LEAD)))
     loop.tick()
     painted_live = list(tabs.painted)
     assert painted_live

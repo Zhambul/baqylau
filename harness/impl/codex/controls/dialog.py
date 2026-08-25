@@ -140,7 +140,6 @@ class Answer:
 
 class DialogOutcome(StrEnum):
     SUBMITTED = "submitted"
-    SUBMITTED_WITH_UNANSWERED = "submitted_with_unanswered"
 
 
 class CodexAskError(Exception):
@@ -278,15 +277,17 @@ def _cursor_to(driver: Driver, win: WindowId, num: str, sleep: Callable[[float],
 
 
 def _note(driver: Driver, win: WindowId, text: str, sleep: Callable[[float], None]) -> None:
-    """`tab` into the notes field and type `text` (send_text presses Enter, which
-    submits the question). The tab is VERIFIED — an unopened field would take the
-    keystrokes as dialog navigation, and the Enter as a submit of whatever row the
-    cursor happens to sit on."""
+    """`tab` into the notes field and paste `text` as one input operation.
+
+    The field exists only after the tab state change. A fast typed write can lose
+    all text at that boundary. Bracketed paste delivers one atomic value, and its
+    separate Enter submits the question.
+    """
     driver.send_key(win, "tab")
     _, ok = _poll(driver, win, notes_open, STEP_TIMEOUT_S, sleep)
     if not ok:
         raise CodexAskError("notes", "notes field never opened")
-    if not driver.send_text(win, text):
+    if not driver.paste_text(win, text):
         raise CodexAskError("notes", "notes not delivered")
 
 
@@ -416,9 +417,9 @@ def decline(
     with codex's own least-committal row — `None of the above`. Every earlier
     question goes through unanswered.
 
-    `message` (the typed text the card carries along) rides as that row's note, so
-    the words reach the model INSIDE the tool result rather than as a follow-up
-    racing the resumed turn.
+    Codex requires a note to submit its forced `None of the above` answer.
+    `message` supplies that note. The controller sends the actual discussion
+    as a new prompt after this function confirms that the dialog closed.
 
     Raises CodexAskError with the dialog LEFT OPEN on any unverified step; returns
     {"submitted": True, "unanswered": <count>}."""
@@ -449,17 +450,9 @@ def decline(
     if not num:
         raise CodexAskError("noneof", "no %r row to decline with" % NONE_LABEL)
     _cursor_to(driver, win, num, sleep)
-    if (message or "").strip():
-        _note(driver, win, message.strip(), sleep)
-    else:
-        driver.send_key(win, "enter")
-    _, ok = _poll(driver, win, lambda s: confirm_open(s) or not dialog_open(s),
-                  STEP_TIMEOUT_S, sleep)
-    if not ok:
-        raise CodexAskError("advance", "dialog did not submit")
-    _confirm(driver, win, sleep)
-    _, ok = _poll(driver, win, lambda s: not dialog_open(s) and not confirm_open(s),
-                  STEP_TIMEOUT_S, sleep)
-    if not ok:
-        raise CodexAskError("close", "the question dialog stayed on screen")
-    return DialogOutcome.SUBMITTED_WITH_UNANSWERED
+    note = (message or "Continue in chat.").strip()
+    _note(driver, win, note, sleep)
+    _, closed = _poll(driver, win, lambda screen: not dialog_open(screen), STEP_TIMEOUT_S, sleep)
+    if not closed:
+        raise CodexAskError("submit", "question dialog stayed open after decline")
+    return DialogOutcome.SUBMITTED

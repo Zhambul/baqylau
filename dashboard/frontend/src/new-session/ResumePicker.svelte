@@ -62,6 +62,12 @@
     }, SEARCH_DELAY_MS);
   }
 
+  function retry(): void {
+    if (searchTimer !== null) clearTimeout(searchTimer);
+    searchTimer = null;
+    void load(workingDirectory, search);
+  }
+
   async function load(directory: string, query: string): Promise<void> {
     request?.abort();
     const controller = new AbortController();
@@ -222,7 +228,10 @@
   {#if loading}
     <div class="nsresempty">loading sessions…</div>
   {:else if failure !== null}
-    <div class="nsresempty">could not load sessions</div>
+    <div class="nsresempty" role="alert">
+      <span>could not load sessions</span>
+      <button type="button" onclick={retry}>retry resume sessions</button>
+    </div>
   {:else if rows.length === 0}
     <div class="nsresempty">no resumable sessions</div>
   {:else}
@@ -231,6 +240,7 @@
         class:live={row.active}
         class:sel={row.sessionId === value || index === activeIndex}
         class="nsresrow"
+        data-session-id={row.sessionId}
         role="option"
         aria-selected={row.sessionId === value}
         tabindex="0"

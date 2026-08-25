@@ -38,22 +38,17 @@ PANE_COMMAND_PATHS = {
 # everything the client observed AROUND itself rides beside it in headers.
 TERMINAL_WINDOW_HEADER = "X-Baqylau-Terminal-Window"
 CLIENT_PROCESS_HEADER = "X-Baqylau-Client-Process"
-ACCOUNT_ID_HEADER = "X-Baqylau-Account-Id"
-ACCOUNT_NAME_HEADER = "X-Baqylau-Account-Name"
 LAUNCH_MODEL_HEADER = "X-Baqylau-Launch-Model"
 LAUNCH_EFFORT_HEADER = "X-Baqylau-Launch-Effort"
 TELEMETRY_KIND_HEADER = "X-Baqylau-Telemetry-Kind"
 
 # The environment a client reads. Every name here is OWNED elsewhere — the
-# launcher sets the launch pair, the account switcher the account pair, the
-# terminal the window id — and only OBSERVED here. Forwarded raw: validating a
-# slug is the daemon's job (harness/impl/claude_code/account.py).
-ACCOUNT_SLUG_VARIABLE = "CLAUDE_SUBSCRIPTION_SLUG"
-ACCOUNT_LABEL_VARIABLE = "CLAUDE_SUBSCRIPTION_LABEL"
+# launcher sets the launch pair and the terminal sets the window id. The client
+# only observes these values.
 LAUNCH_MODEL_VARIABLE = "BAQYLAU_LAUNCH_MODEL"
 LAUNCH_EFFORT_VARIABLE = "BAQYLAU_LAUNCH_EFFORT"
 # The daemon spawns the harness itself to READ something out of it — today, an
-# account's plan windows (harness/impl/claude_code/usage/live.py). That process
+# plan windows (harness/impl/claude_code/usage/live.py). That process
 # runs hooks like any other, and a client that shipped them would put a session
 # in the store that nobody started. Seeing this, a client does nothing.
 PROBE_VARIABLE = "BAQYLAU_USAGE_PROBE"

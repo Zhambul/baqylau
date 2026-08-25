@@ -4,40 +4,80 @@
 # lives outside `repository/impl/` — because a shared package may not contain a
 # harness's name, and this one is entirely about codex's own store.
 #
-# WHERE the title lives: codex keeps it in a per-machine sqlite index,
-# `~/.codex/state_<N>.sqlite`, table `threads`, column `title`, keyed by the
-# thread uuid (== the rollout's uuid == the session id for a standalone host).
+# WHERE the title lives: codex keeps it in a per-home sqlite index,
+# `$CODEX_HOME/state_<N>.sqlite` (or `~/.codex/state_<N>.sqlite`), table
+# `threads`, columns `name` and `title`, keyed by the thread uuid (== the
+# rollout's uuid == the session id for a standalone host). Current Codex uses
+# `name` for an explicit `/rename` and `title` for its generated title. Older
+# indexes have only `title`.
 # The numbered filename is VERSION-FRAGILE (state_5 on the dev machine,
 # 2026-07), so it is resolved by globbing and taking the highest N. It is not
 # ours: we do not create it, version it, or set a pragma on it.
 #
-# RENAME: set_title writes threads.title — the PARKED path, the one the
-# dashboard's web rename uses for a codex session with nothing running to
-# overwrite it. A LIVE rename is the controller's business (codex's own
-# /rename, pasted into the window), the same live-vs-parked split Claude has;
-# this owns only the durable write.
+# RENAME: set_title writes `threads.name` on the current schema and falls back
+# to `threads.title` on the old schema. This is the PARKED path, the one the
+# dashboard's web rename uses for a Codex session with nothing running to
+# overwrite it. A LIVE rename is the controller's business (Codex's own
+# `/rename`, pasted into the window), the same live-vs-parked split Claude has.
 import glob
 import os
 import re
 import sqlite3
+from dataclasses import dataclass
 
 from repository.contract.titles import NativeSessionTitleRepository
 from harness.models import TitleWriteOutcome
 from harness.impl.codex.canonical import rollout as RO
+from domain.values import TitleOrigin
 
-_CODEX_DIR = os.path.join(os.path.expanduser("~"), ".codex")
-_UUID = re.compile(r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
-                   r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12})")
-TITLE_HEAD_LINES = 200   # rollout head lines the first-prompt fallback scans
+_UUID = re.compile(
+    r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
+)
+TITLE_HEAD_LINES = 200  # rollout head lines the first-prompt fallback scans
 # The index is another product's file, reached on a user-facing request path.
 # Fail fast rather than hold a request open behind codex's own writer.
 CONNECT_TIMEOUT_SECONDS = 2.0
 
 
-def _state_database() -> str:
+@dataclass(frozen=True)
+class CodexNativeTitle:
+    text: str
+    origin: TitleOrigin
+
+
+@dataclass(frozen=True)
+class CodexTitleStoreMarker:
+    """The native index files that can change a thread title."""
+
+    database: str
+    database_state: tuple[int, int, int]
+    write_ahead_state: tuple[int, int, int] | None
+
+
+def _codex_directory(source_reference: str) -> str:
+    """Find the Codex home that owns one rollout.
+
+    A daemon can observe sessions from more than one Codex home. The rollout
+    path is the session-specific authority. The process environment is only a
+    fallback for older or nonstandard source paths.
+    """
+    current = os.path.dirname(os.path.realpath(source_reference))
+    while current and current != os.path.dirname(current):
+        if os.path.basename(current) == "sessions":
+            return os.path.dirname(current)
+        current = os.path.dirname(current)
+    return os.environ.get("CODEX_HOME") or os.path.join(
+        os.path.expanduser("~"),
+        ".codex",
+    )
+
+
+def _state_database(source_reference: str) -> str:
     """The newest codex `state_<N>.sqlite` index (highest N), or "" — resolved
     defensively because the numbered name drifts across codex versions."""
-    candidates = glob.glob(os.path.join(_CODEX_DIR, "state_*.sqlite"))
+    codex_directory = _codex_directory(source_reference)
+    candidates = glob.glob(os.path.join(codex_directory, "state_*.sqlite"))
     best, best_number = "", -1
     for candidate in candidates:
         match = re.search(r"state_(\d+)\.sqlite$", os.path.basename(candidate))
@@ -46,8 +86,31 @@ def _state_database() -> str:
             best, best_number = candidate, number
     if best:
         return best
-    plain = os.path.join(_CODEX_DIR, "state.sqlite")
+    plain = os.path.join(codex_directory, "state.sqlite")
     return plain if os.path.isfile(plain) else ""
+
+
+def title_store_marker(source_reference: str) -> CodexTitleStoreMarker | None:
+    """Return the state needed to skip an unchanged native title read."""
+    database = _state_database(source_reference)
+    if not database:
+        return None
+    database_state = _file_marker(database)
+    if database_state is None:
+        return None
+    return CodexTitleStoreMarker(
+        database,
+        database_state,
+        _file_marker(f"{database}-wal"),
+    )
+
+
+def _file_marker(path: str) -> tuple[int, int, int] | None:
+    try:
+        status = os.stat(path)
+    except OSError:
+        return None
+    return status.st_ino, status.st_mtime_ns, status.st_size
 
 
 def _thread_uuid(path: str) -> str:
@@ -68,15 +131,17 @@ class CodexThreadTitleRepository(NativeSessionTitleRepository):
     def set_title(self, source_reference: str, title: str) -> TitleWriteOutcome:
         if not self.renameable(source_reference):
             return TitleWriteOutcome.UNSUPPORTED
-        database = _state_database()
+        database = _state_database(source_reference)
         thread_uuid = _thread_uuid(source_reference)
         if not database or not thread_uuid:
             return TitleWriteOutcome.UNAVAILABLE
         try:
             connection = sqlite3.connect(database, timeout=CONNECT_TIMEOUT_SECONDS)
             try:
+                column = "name" if _has_thread_name(connection) else "title"
                 cursor = connection.execute(
-                    "UPDATE threads SET title=? WHERE id=?", (title, thread_uuid)
+                    f"UPDATE threads SET {column}=? WHERE id=?",
+                    (title, thread_uuid),
                 )
                 connection.commit()
             finally:
@@ -88,27 +153,48 @@ class CodexThreadTitleRepository(NativeSessionTitleRepository):
             return TitleWriteOutcome.UNAVAILABLE
         return TitleWriteOutcome.RENAMED if cursor.rowcount else TitleWriteOutcome.UNAVAILABLE
 
-    def read_title(self, source_reference: str) -> str | None:
+    def read_title(self, source_reference: str) -> CodexNativeTitle | None:
         """Read the current title from the native thread index."""
         if not self.renameable(source_reference):
             return None
-        database = _state_database()
+        database = _state_database(source_reference)
         thread_uuid = _thread_uuid(source_reference)
         if not database or not thread_uuid:
             return None
         try:
             connection = sqlite3.connect(database, timeout=CONNECT_TIMEOUT_SECONDS)
             try:
+                current_schema = _has_thread_name(connection)
+                columns = "name, title" if current_schema else "title"
                 row = connection.execute(
-                    "SELECT title FROM threads WHERE id=?",
+                    f"SELECT {columns} FROM threads WHERE id=?",
                     (thread_uuid,),
                 ).fetchone()
             finally:
                 connection.close()
         except sqlite3.Error:
             return None
-        title = str(row[0]).strip() if row and row[0] is not None else ""
-        return title or None
+        if not row:
+            return None
+        if current_schema:
+            custom = str(row[0]).strip() if row[0] is not None else ""
+            if custom:
+                return CodexNativeTitle(custom, TitleOrigin.CUSTOM)
+            automatic = str(row[1]).strip() if row[1] is not None else ""
+        else:
+            automatic = str(row[0]).strip() if row[0] is not None else ""
+        return (
+            CodexNativeTitle(automatic, TitleOrigin.AUTOMATIC)
+            if automatic
+            else None
+        )
+
+
+def _has_thread_name(connection: sqlite3.Connection) -> bool:
+    return any(
+        str(row[1]) == "name"
+        for row in connection.execute("PRAGMA table_info(threads)")
+    )
 
 
 titles = CodexThreadTitleRepository()

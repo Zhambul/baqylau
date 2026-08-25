@@ -28,9 +28,11 @@ class UsageRowResponse(BaseModel):
     account_id: str | None
     display_name: str
     switchable: bool
+    default_for_launch: bool
     plan: str | None
     windows: tuple[UsageWindowResponse, ...]
     scheduling_score: Decimal | None
     scheduling_allowed: bool
     limit: UsageBlockResponse | None
     authentication_error: str | None
+    collection_error: str | None = None

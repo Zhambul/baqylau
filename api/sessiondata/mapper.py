@@ -72,6 +72,7 @@ def session_data(
     *,
     live: bool,
     repository_status: RepositoryStatus | None,
+    project_directory: str | None = None,
     now: float | None = None,
 ) -> SessionDataResponse:
     return SessionDataResponse(
@@ -79,6 +80,9 @@ def session_data(
         session=session(session_data.session),
         actors=tuple(actor(row, now=now) for row in session_data.actors),
         live=live,
+        project_directory=(
+            project_directory or session_data.session.working_directory
+        ),
         repository=values.maybe_repository_status(repository_status),
     )
 
@@ -100,7 +104,12 @@ def session(session_facts: SessionFacts) -> SessionResponse:
         goal=(
             None
             if session_facts.goal is None
-            else GoalResponse(objective=session_facts.goal.objective, completed=session_facts.goal.completed)
+            else GoalResponse(
+                objective=session_facts.goal.objective,
+                state=session_facts.goal.state,
+                reason=session_facts.goal.reason,
+                completed=session_facts.goal.state == "completed",
+            )
         ),
         tasks=tuple(
             TaskResponse(

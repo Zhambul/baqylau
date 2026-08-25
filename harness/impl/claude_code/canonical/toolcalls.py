@@ -38,6 +38,7 @@ from domain.events import (
     WorktreeChanged,
 )
 from domain.ids import (
+    SessionId,
     ShellId,
 )
 from harness.impl.claude_code.ids import (
@@ -69,7 +70,7 @@ from domain.values import (
     WorktreeAction,
     content_text as value_content_text,
 )
-from harness.impl.claude_code.canonical import records
+from harness.impl.claude_code.canonical import records, transcript
 from harness.impl.claude_code.canonical.support import content, event
 from harness.models import RawEvent, UnknownRawEvent
 
@@ -184,6 +185,10 @@ def result_content(
     """
     if not tool_response:
         return None
+    if isinstance(tool_response, records.ToolResponse):
+        native_result = tool_response.result or tool_response.content
+        if isinstance(native_result, str):
+            return content(native_result)
     return content(tool_response)
 
 
@@ -242,6 +247,7 @@ def plan_resolution(
 
 @dataclass(frozen=True)
 class RememberedCall:
+    session_id: SessionId
     call_id: ClaudeCodeCallId
     native_name: str
     arguments: records.ToolArguments
@@ -249,25 +255,32 @@ class RememberedCall:
 
 @dataclass
 class MonitorState:
+    session_id: SessionId
     task_id: ClaudeCodeShellId
     shell_id: ShellId
     event_count: int = 0
 
 
-class ToolCallSemantics:
-    """Cross-event state for one translator's lifetime.
+@dataclass(frozen=True)
+class AgentAssignmentState:
+    session_id: SessionId
+    actor_id: ClaudeCodeActorId
+    call_id: ClaudeCodeCallId
 
-    `calls` is the whole of it: a tool_use_id's name and input, remembered from
-    the request. Three things need it. A transcript tool_result names no tool
-    and carries no input, so the result-time facts (file, search, fetch,
-    worktree) could not be built from it alone. A REFUSED attention tool is
-    only ever seen there — Claude Code fires no PostToolUse for a call that
-    never ran, so the request would otherwise stay open forever. And a task
-    tool has to stay silent on both paths, not just the one that named it.
+
+class ToolCallSemantics:
+    """Session-scoped state that joins related native events.
+
+    A call's name and input stay here until all result channels can use them.
+    Assignment and monitor links stay only until their native finish record.
+    The interpreter clears all remaining state when the session finishes.
     """
 
     def __init__(self) -> None:
-        self.calls: list[RememberedCall] = []
+        self.calls: dict[tuple[SessionId, ClaudeCodeCallId], RememberedCall] = {}
+        self.agent_assignments: dict[
+            tuple[SessionId, ClaudeCodeActorId], AgentAssignmentState
+        ] = {}
         # An armed Monitor's TASK id -> the shell that armed it, and how many
         # of its events have been attributed so far. A monitor's per-event
         # notification names only the task id — never the tool_use_id (measured
@@ -275,21 +288,28 @@ class ToolCallSemantics:
         # to the command the monitors tab lists. Its stream-ENDED notification
         # does carry the tool_use_id, so the end needs no memory and survives a
         # daemon restart that loses this.
-        self.monitors: list[MonitorState] = []
+        self.monitors: dict[tuple[SessionId, ClaudeCodeShellId], MonitorState] = {}
 
     # --- what a call was, across the two raw event streams ------------------
 
     def remember(
         self,
+        raw_event: RawEvent,
         call_id: ClaudeCodeCallId,
         native_name: str,
         arguments: records.ToolArguments,
     ) -> None:
-        self.calls = [call for call in self.calls if call.call_id != call_id]
-        self.calls.append(RememberedCall(call_id, native_name, arguments))
+        key = raw_event.session_id, call_id
+        self.calls[key] = RememberedCall(
+            raw_event.session_id,
+            call_id,
+            native_name,
+            arguments,
+        )
 
     def recall(
         self,
+        raw_event: RawEvent,
         call_id: ClaudeCodeCallId,
         native_name: str | None,
         arguments: records.ToolArguments | None,
@@ -297,36 +317,123 @@ class ToolCallSemantics:
         """The call's name and input: what this record carries, else what the
         request said. A record that has neither is a call whose start we never
         saw — a daemon that restarted mid-call — and it cannot be classified."""
-        remembered = next((call for call in self.calls if call.call_id == call_id), None)
+        remembered = self.calls.get((raw_event.session_id, call_id))
         name = native_name or (remembered.native_name if remembered else "")
         if not name:
             raise UnknownRawEvent(f"Claude Code tool result names no call: {call_id or '<missing>'}")
         return name, arguments or (remembered.arguments if remembered else records.ToolArguments())
 
-    def known(self, call_id: ClaudeCodeCallId) -> bool:
-        return any(call.call_id == call_id for call in self.calls)
+    def known(self, raw_event: RawEvent, call_id: ClaudeCodeCallId) -> bool:
+        return (raw_event.session_id, call_id) in self.calls
 
-    def monitor_armed(self, task_id: ClaudeCodeShellId, shell_id: ShellId) -> None:
-        self.monitors = [monitor for monitor in self.monitors if monitor.task_id != task_id]
-        self.monitors.append(MonitorState(task_id, shell_id))
+    def forget(self, raw_event: RawEvent, call_id: ClaudeCodeCallId) -> None:
+        """Release a call after all result channels have used its input."""
+        self.calls.pop((raw_event.session_id, call_id), None)
 
-    def monitor_shell(self, task_id: ClaudeCodeShellId) -> ShellId | None:
-        monitor = next((monitor for monitor in self.monitors if monitor.task_id == task_id), None)
+    def clear_session(self, session_id: SessionId) -> None:
+        """Release all transient correlation after one native session ends."""
+        for call_key in tuple(self.calls):
+            if call_key[0] == session_id:
+                del self.calls[call_key]
+        for assignment_key in tuple(self.agent_assignments):
+            if assignment_key[0] == session_id:
+                del self.agent_assignments[assignment_key]
+        for monitor_key in tuple(self.monitors):
+            if monitor_key[0] == session_id:
+                del self.monitors[monitor_key]
+
+    def assignment_launched(
+        self,
+        raw_event: RawEvent,
+        actor_id: ClaudeCodeActorId,
+        call_id: ClaudeCodeCallId,
+    ) -> None:
+        key = raw_event.session_id, actor_id
+        self.agent_assignments[key] = AgentAssignmentState(
+            raw_event.session_id,
+            actor_id,
+            call_id,
+        )
+
+    def assignment_call(
+        self,
+        raw_event: RawEvent,
+        actor_id: ClaudeCodeActorId | None,
+        notification_call_id: ClaudeCodeCallId,
+    ) -> ClaudeCodeCallId:
+        """Return the Agent call that owns one child completion.
+
+        A resumed async child names the SendMessage call in its final task
+        notification. The Agent result is the durable child-to-assignment
+        relation. Keep the live relation in memory and recover it from the
+        parent transcript after an application restart.
+        """
+        if actor_id is None:
+            return notification_call_id
+        remembered = self.agent_assignments.get((raw_event.session_id, actor_id))
+        if remembered is not None:
+            return remembered.call_id
+        durable = transcript.assignment_call_before(
+            raw_event.source_name,
+            raw_event.source_position,
+            actor_id,
+        )
+        if durable is not None:
+            self.assignment_launched(raw_event, actor_id, durable)
+            return durable
+        return notification_call_id
+
+    def assignment_finished(
+        self,
+        raw_event: RawEvent,
+        actor_id: ClaudeCodeActorId | None,
+    ) -> None:
+        if actor_id is not None:
+            self.agent_assignments.pop((raw_event.session_id, actor_id), None)
+
+    def monitor_armed(
+        self,
+        raw_event: RawEvent,
+        task_id: ClaudeCodeShellId,
+        shell_id: ShellId,
+    ) -> None:
+        key = raw_event.session_id, task_id
+        self.monitors[key] = MonitorState(
+            raw_event.session_id,
+            task_id,
+            shell_id,
+        )
+
+    def monitor_shell(
+        self,
+        raw_event: RawEvent,
+        task_id: ClaudeCodeShellId,
+    ) -> ShellId | None:
+        monitor = self.monitors.get((raw_event.session_id, task_id))
         return monitor.shell_id if monitor else None
 
-    def next_monitor_ordinal(self, task_id: ClaudeCodeShellId) -> int:
+    def next_monitor_ordinal(
+        self,
+        raw_event: RawEvent,
+        task_id: ClaudeCodeShellId,
+    ) -> int:
         """The position of the next event of this monitor, counted from zero.
 
         Part of the event's identity, not decoration: `stable_event_id` is built
         from the subject and the phase, so two events of one monitor recorded
         under the same phase would collapse into one row (measured — six ticks
         became one canonical event that way)."""
-        monitor = next((monitor for monitor in self.monitors if monitor.task_id == task_id), None)
+        monitor = self.monitors.get((raw_event.session_id, task_id))
         if monitor is None:
             return 0
         ordinal = monitor.event_count
         monitor.event_count += 1
         return ordinal
+
+    def monitor_finished(self, raw_event: RawEvent, shell_id: ShellId) -> None:
+        for key, monitor in tuple(self.monitors.items()):
+            if key[0] == raw_event.session_id and monitor.shell_id == shell_id:
+                del self.monitors[key]
 
     # --- the request ---------------------------------------------------------
 
@@ -341,7 +448,7 @@ class ToolCallSemantics:
         kind = tool_kind(native_name)
         arguments = call.tool_input if call.tool_input is not None else call.input
         arguments = arguments if arguments is not None else records.ToolArguments()
-        self.remember(call_id, native_name, arguments)
+        self.remember(raw_event, call_id, native_name, arguments)
         if kind == ToolKind.SHELL:
             return [self._shell_started(raw_event, call_id, native_name, arguments)]
         if kind == ToolKind.SKILL:
@@ -427,8 +534,12 @@ class ToolCallSemantics:
         """A SendMessage: the actor speaking to a named peer, which is a message
         with a recipient — not a tool call with a text argument."""
         message = arguments
-        recipient = actor_id_from_claude_code(
-            ClaudeCodeActorId(str(message.recipient or message.to or "peer"))
+        recipient_text = str(message.recipient or message.to or "peer")
+        recipient = (
+            raw_event.parent_actor_id
+            if recipient_text == transcript.LEAD_TEAMMATE_ID
+            and raw_event.parent_actor_id is not None
+            else actor_id_from_claude_code(ClaudeCodeActorId(recipient_text))
         )
         message_id = message_id_from_claude_code_call(call_id)
         payload = MessageCreated(
@@ -462,6 +573,7 @@ class ToolCallSemantics:
         call = tool_call_native
         call_id = ClaudeCodeCallId(str(call.tool_use_id or call.id or raw_event.source_position))
         native_name, arguments = self.recall(
+            raw_event,
             call_id,
             call.tool_name if call.tool_name else None,
             call.tool_input,
@@ -545,9 +657,9 @@ class ToolCallSemantics:
         nothing rather than a fact with a guessed kind. The hook delivery of the
         same result stands on its own and converges on the same event ids.
         """
-        if not self.known(call_id):
+        if not self.known(raw_event, call_id):
             return []
-        native_name, _arguments = self.recall(call_id, None, None)
+        native_name, _arguments = self.recall(raw_event, call_id, None, None)
         kind = tool_kind(native_name)
         if kind not in TRANSCRIPT_RESULT_KINDS:
             return []
@@ -574,11 +686,15 @@ class ToolCallSemantics:
         )
         return events
 
-    def pending_attention(self, call_id: ClaudeCodeCallId) -> bool:
+    def pending_attention(
+        self,
+        raw_event: RawEvent,
+        call_id: ClaudeCodeCallId,
+    ) -> bool:
         """Whether this call was one that asks a person something."""
-        if not self.known(call_id):
+        if not self.known(raw_event, call_id):
             return False
-        native_name, _arguments = self.recall(call_id, None, None)
+        native_name, _arguments = self.recall(raw_event, call_id, None, None)
         return tool_kind(native_name) in (ToolKind.QUESTION, ToolKind.PLAN)
 
     def _shell_finished(
@@ -628,9 +744,11 @@ class ToolCallSemantics:
         if native_name == "Monitor":
             monitor_task_id = ClaudeCodeShellId(str(response.taskId or ""))
             if monitor_task_id:
-                self.monitor_armed(monitor_task_id, shell_id)
+                self.monitor_armed(raw_event, monitor_task_id, shell_id)
         exit_match = SHELL_EXIT_CODE.search(value_content_text(result))
         exit_code = int(exit_match.group(1)) if exit_match is not None else None
+        if outcome == Outcome.FAILED and exit_code in (130, 137, 143):
+            outcome = Outcome.CANCELLED
         events.append(event(
             raw_event,
             "shell",
@@ -658,9 +776,24 @@ class ToolCallSemantics:
         outcome: Outcome,
     ) -> list[CanonicalEvent[EventPayload]]:
         async_launched = (
-            tool_response.isAsync is True or tool_response.status == "async_launched"
+            tool_response.isAsync is True
+            or tool_response.status in ("async_launched", "teammate_spawned")
         )
         if async_launched:
+            native_actor_id = ClaudeCodeActorId(
+                str(tool_response.agentId or tool_response.agent_id or "")
+            )
+            if tool_response.status == "teammate_spawned" and tool_response.name:
+                native_actor_id = (
+                    transcript.teammate_actor_id(raw_event.source_name, tool_response.name)
+                    or ClaudeCodeActorId(tool_response.name)
+                )
+            if native_actor_id:
+                self.assignment_launched(
+                    raw_event,
+                    native_actor_id,
+                    call_id,
+                )
             return []
         # A successful Agent hook says that the tool call returned. It does not
         # carry the subagent result. Claude Code sends the semantic completion
@@ -673,6 +806,7 @@ class ToolCallSemantics:
         assignment_id = assignment_id_from_claude_code_call(call_id)
         payload = ActorAssignmentFinished(assignment_id, outcome, None, None)
         return [event(raw_event, "actor_assignment", str(assignment_id), "finished", payload)]
+
 
     def attention_declined(
         self,
@@ -687,7 +821,7 @@ class ToolCallSemantics:
         no answers, so nothing is lost if the hook path also reports the same fact:
         both derive the resolution from the same text and converge on one event."""
         attention_id = attention_id_from_claude_code_call(call_id)
-        native_name, _arguments = self.recall(call_id, None, None)
+        native_name, _arguments = self.recall(raw_event, call_id, None, None)
         if native_name == "AskUserQuestion":
             payload: EventPayload = QuestionAnswered(attention_id, (), None)
             return event(raw_event, "question", str(attention_id), "answered", payload)

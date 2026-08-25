@@ -44,7 +44,7 @@ describe('global session reducer', () => {
     expect(result.unknownActorSessions).toEqual(['session-orphan']);
   });
 
-  it('marks a session non-live when a terminal close finishes it', () => {
+  it('removes a session when a terminal close finishes it', () => {
     const current = translateSessionSnapshot(wireSnapshot());
     const finished = translateSession({
       ...wireSession(),
@@ -57,23 +57,36 @@ describe('global session reducer', () => {
       actors: [],
     });
 
-    expect(result.sessions[0]?.session.state).toBe('finished');
-    expect(result.sessions[0]?.live).toBe(false);
+    expect(result.sessions).toEqual([]);
+    expect(result.adopt).toEqual([]);
   });
 
-  it('marks a parked session live when it resumes', () => {
-    const parked = {
-      ...translateSessionSnapshot(wireSnapshot()),
-      live: false,
-    };
+  it('adopts a resumed session that is not in the live list', () => {
     const resumed = translateSession(wireSession());
 
-    const result = reduceGlobalDelta([parked], {
+    const result = reduceGlobalDelta([], {
       sessions: [resumed],
       actors: [],
     });
 
-    expect(result.sessions[0]?.session.state).toBe('running');
-    expect(result.sessions[0]?.live).toBe(true);
+    expect(result.sessions).toEqual([]);
+    expect(result.adopt).toEqual(['session-one']);
+  });
+
+  it('does not adopt actors from a finished session', () => {
+    const result = reduceGlobalDelta([], {
+      sessions: [
+        translateSession({
+          ...wireSession(),
+          state: 'finished',
+          finished_at: 1_700_000_100,
+        }),
+      ],
+      actors: [translateActor(wireActor())],
+    });
+
+    expect(result.sessions).toEqual([]);
+    expect(result.adopt).toEqual([]);
+    expect(result.unknownActorSessions).toEqual([]);
   });
 });

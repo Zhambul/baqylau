@@ -12,11 +12,13 @@ function snapshot(
   directory: string,
   live: boolean,
   startedAt: number,
+  projectDirectory = directory,
 ): SessionSnapshot {
   const translated = translateSessionSnapshot(wireSnapshot(id, directory));
   return {
     ...translated,
     live,
+    projectDirectory,
     session: {
       ...translated.session,
       startedAt,
@@ -38,7 +40,7 @@ describe('session grouping', () => {
       NOW,
     );
 
-    expect(groups.map((group) => group.workingDirectory)).toEqual([
+    expect(groups.map((group) => group.projectDirectory)).toEqual([
       '/work/new',
       '/work/old',
     ]);
@@ -51,6 +53,27 @@ describe('session grouping', () => {
     expect(groups[1]?.archived.map((item) => item.session.sessionId)).toEqual([
       'archived',
     ]);
+  });
+
+  it('groups a linked Git worktree with its main checkout', () => {
+    const groups = groupSessions(
+      [
+        snapshot('main', '/work/project', true, NOW - 20, '/work/project'),
+        snapshot(
+          'linked',
+          '/work/project-worktree',
+          true,
+          NOW - 10,
+          '/work/project',
+        ),
+      ],
+      new Map(),
+      NOW,
+    );
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.projectDirectory).toBe('/work/project');
+    expect(groups[0]?.active).toHaveLength(2);
   });
 
   it('restores a hidden directory when a newer session starts there', () => {

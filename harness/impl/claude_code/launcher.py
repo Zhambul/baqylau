@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from harness.contract import HarnessLauncher
 from harness.models import HarnessLaunchPlan, LaunchRejected, LaunchRequest
-from harness.impl.claude_code import account
+from harness.impl.claude_code.attachments import prompt_with_attachments
 
 # The launch-time selections, riding the CLI's environment the way the account
 # already does: Claude Code never echoes the effort in any raw event stream and
@@ -13,19 +13,17 @@ from harness.impl.claude_code import account
 # observed. Owned here (the one writer); the hook entry reads them back.
 LAUNCH_MODEL_VARIABLE = "BAQYLAU_LAUNCH_MODEL"
 LAUNCH_EFFORT_VARIABLE = "BAQYLAU_LAUNCH_EFFORT"
+COMMAND = "claude"
 
 
 class ClaudeCodeLauncher(HarnessLauncher):
     def prepare(self, launch_request: LaunchRequest) -> HarnessLaunchPlan:
-        account_alias = account.alias_for(launch_request.account_id)
-        if account_alias is None:
-            raise LaunchRejected("unknown Claude Code account")
-        attachment_text = " ".join(
-            f"@{attachment.local_path}"
-            for attachment in launch_request.attachments
+        if launch_request.account_id is not None:
+            raise LaunchRejected("Claude Code does not support account selection")
+        prompt = prompt_with_attachments(
+            launch_request.initial_text or "",
+            launch_request.attachments,
         )
-        initial_text = launch_request.initial_text or ""
-        prompt = attachment_text + ("\n" + initial_text if attachment_text and initial_text else initial_text)
         arguments: list[str] = []
         environment: list[tuple[str, str]] = []   # name/value pairs, not flat argv
         if launch_request.resume_session_id is not None:
@@ -42,7 +40,7 @@ class ClaudeCodeLauncher(HarnessLauncher):
         # the account alias resolves exactly as it does when typed by hand. The
         # session announces itself through its own hook raw event.
         return HarnessLaunchPlan(
-            command=account_alias or "claude",
+            command=COMMAND,
             arguments=tuple(arguments),
             title="Claude Code",
             environment=tuple(environment),

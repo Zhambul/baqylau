@@ -49,9 +49,9 @@ class HookGatewayService:
     ) -> HarnessHookRequest:
         """The CLI pid, from the client's own pid and the plugin's process name.
 
-        Walked HERE rather than in the hook process: it costs a `ps` per
-        ancestry level, and the harness is blocked on the delivery while it runs
-        — which is also what makes the chain safe to read this late.
+        Walked HERE rather than in the hook process. Direct process inspection
+        keeps this free of subprocesses, and the harness stays blocked on the
+        delivery while it runs, which makes the chain safe to read this late.
         """
         if harness_hook_request.harness_process_id is not None or harness_hook_request.client_process_id is None:
             return harness_hook_request

@@ -158,6 +158,24 @@ function taskState(value: unknown, name: string): Schemas['TaskState'] {
   }
 }
 
+function goalState(value: unknown, name: string): Schemas['GoalState'] {
+  const candidate = stringValue(value, name);
+  switch (candidate) {
+    case 'active':
+    case 'paused':
+    case 'blocked':
+    case 'usage_limited':
+    case 'budget_limited':
+    case 'completed':
+    case 'cleared':
+      return candidate;
+    default:
+      throw new StreamValidationFailure(
+        `event field has an unknown goal state: ${name}`,
+      );
+  }
+}
+
 function decodeSession(value: unknown): Schemas['SessionResponse'] {
   const accountValue = field(value, 'account');
   const goalValue = field(value, 'goal');
@@ -182,6 +200,8 @@ function decodeSession(value: unknown): Schemas['SessionResponse'] {
         ? null
         : {
             objective: nullableString(goalValue, 'objective'),
+            state: goalState(goalValue, 'state'),
+            reason: nullableString(goalValue, 'reason'),
             completed: booleanValue(goalValue, 'completed'),
           },
     tasks: arrayValue(value, 'tasks').map((task) => ({

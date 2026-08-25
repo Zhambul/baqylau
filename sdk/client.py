@@ -10,8 +10,9 @@ from dataclasses import dataclass
 from typing import TypeVar
 from urllib.parse import quote, urlencode
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
+from api.common.models.streams.error_frame import ErrorFrame
 from api.application.models.harnesses.harness_catalog_response import (
     HarnessCatalogResponse,
 )
@@ -42,6 +43,9 @@ from api.sessiondata.models.session_data import (
     SessionDataListResponse,
     SessionDataResponse,
 )
+from api.sessiondata.models.stream_frame import GlobalStreamFrame, SessionStreamFrame
+from api.terminal.models.panes.pane_command_response import PaneCommandResponse
+from sdk import sse
 from sdk.state import SessionSnapshot
 from sdk.transport import ApiFailure, HttpTransport
 
@@ -63,6 +67,10 @@ UPLOAD = TypeAdapter(UploadResponse)
 SAVED = TypeAdapter(SavedResponse)
 DIAGNOSTICS_CHECKPOINT = TypeAdapter(DiagnosticsCheckpointResponse)
 DIAGNOSTICS_REPORT = TypeAdapter(DiagnosticsReportResponse)
+ERROR_FRAME = TypeAdapter(ErrorFrame)
+SESSION_STREAM = TypeAdapter(SessionStreamFrame)
+GLOBAL_STREAM = TypeAdapter(GlobalStreamFrame)
+PANE_COMMAND = TypeAdapter(PaneCommandResponse)
 
 
 @dataclass(frozen=True)
@@ -84,6 +92,30 @@ class ActionReceipt:
     status_code: int
     outcome: ControlOutcomeResponse
     cursor_before: int
+
+
+@dataclass(frozen=True)
+class SessionSnapshotRead:
+    snapshot: SessionSnapshot
+    page_count: int
+
+
+@dataclass(frozen=True)
+class SessionStreamUpdate:
+    cursor: int
+    frame: SessionStreamFrame
+
+
+@dataclass(frozen=True)
+class GlobalStreamUpdate:
+    cursor: int
+    frame: GlobalStreamFrame
+
+
+@dataclass(frozen=True)
+class QuestionDraftAnswer:
+    selected: tuple[str, ...] = ()
+    other: str = ""
 
 
 class WaitTimeout(AssertionError):
@@ -181,6 +213,7 @@ class SessionsResource:
         effort: str | None,
         resume_session_id: str | None = None,
         attachments: tuple[AttachmentReferenceBody, ...] = (),
+        account_id: str | None = None,
     ) -> LaunchRef:
         known = frozenset(item.session.session_id for item in self.list().sessions)
         status, answer = self.transport.post(
@@ -191,6 +224,7 @@ class SessionsResource:
                 "initial_text": prompt,
                 "model_id": model,
                 "effort": effort,
+                "account_id": account_id,
                 "resume_session_id": resume_session_id,
                 "attachments": [item.model_dump() for item in attachments],
             },
@@ -279,13 +313,20 @@ class SessionsResource:
             timeout=timeout,
         )
 
-    def snapshot(self, session: SessionRef) -> SessionSnapshot:
+    def read_snapshot(
+        self,
+        session: SessionRef,
+        *,
+        page_size: int = 1000,
+    ) -> SessionSnapshotRead:
+        if page_size < 1:
+            raise ValueError("page size must be positive")
         session_id = quote(session.session_id, safe="")
         data = self.transport.get(f"/sessionData/{session_id}", SESSION_DATA)
         pages: list[tuple[EntryResponse, ...]] = []
         before: int | None = None
         while True:
-            parameters: dict[str, int] = {"limit": 1000, "at": data.cursor}
+            parameters: dict[str, int] = {"limit": page_size, "at": data.cursor}
             if before is not None:
                 parameters["before"] = before
             page = self.transport.get(
@@ -304,7 +345,23 @@ class SessionsResource:
                 )
             before = next_before
         entries = tuple(entry for page_items in reversed(pages) for entry in page_items)
-        return SessionSnapshot(data=data, entries=entries)
+        entry_ids = [entry.entry_id for entry in entries]
+        cursors = [entry.cursor for entry in entries]
+        if len(entry_ids) != len(set(entry_ids)):
+            raise ApiFailure("the entry feed returned a repeated entry id")
+        if cursors != sorted(cursors) or len(cursors) != len(set(cursors)):
+            raise ApiFailure("the entry feed did not return unique ascending cursors")
+        if any(cursor > data.cursor for cursor in cursors):
+            raise ApiFailure(
+                f"the entry feed returned an entry newer than snapshot cursor {data.cursor}"
+            )
+        return SessionSnapshotRead(
+            SessionSnapshot(data=data, entries=entries),
+            len(pages),
+        )
+
+    def snapshot(self, session: SessionRef) -> SessionSnapshot:
+        return self.read_snapshot(session).snapshot
 
     def watch(self, session: SessionRef) -> SessionWatch:
         return SessionWatch(self, session)
@@ -589,16 +646,21 @@ class PreferencesResource:
             "sequence": sequence,
         })
 
-    def save_composer_queue(
+    def save_question_draft(
         self,
         session: SessionRef,
         *,
-        messages: tuple[str, ...],
+        attention_id: str,
+        answers: tuple[QuestionDraftAnswer, ...],
         origin: str,
     ) -> SavedResponse:
         session_id = quote(session.session_id, safe="")
-        return self._save(f"/api/sessions/{session_id}/application/composer-queue", {
-            "items": [{"text": message} for message in messages],
+        return self._save(f"/api/sessions/{session_id}/application/dialog-draft", {
+            "attention_id": attention_id,
+            "answers": [
+                {"selected": list(answer.selected), "other": answer.other}
+                for answer in answers
+            ],
             "origin": origin,
         })
 
@@ -630,6 +692,161 @@ class UsageResource:
 
     def state(self) -> GlobalApplicationResponse:
         return self.application.state()
+
+
+class TerminalResource:
+    """Named terminal gestures with the complete typed command verdict."""
+
+    def __init__(self, transport: HttpTransport) -> None:
+        self.transport = transport
+
+    def _gesture(
+        self,
+        command: str,
+        *,
+        window_id: str,
+        workspace: str,
+        columns: int | None = None,
+        percent: int | None = None,
+    ) -> PaneCommandResponse:
+        document: dict[str, object] = {
+            "window_id": window_id,
+            "working_directory": workspace,
+        }
+        if columns is not None:
+            document["columns"] = columns
+        if percent is not None:
+            document["percent"] = percent
+        _status, response = self.transport.post(
+            f"/api/terminal/panes/{command}",
+            document,
+            PANE_COMMAND,
+            {200, 409},
+        )
+        return response
+
+    def toggle_panes(self, *, window_id: str, workspace: str) -> PaneCommandResponse:
+        return self._gesture("toggle", window_id=window_id, workspace=workspace)
+
+    def grow_activity_pane(
+        self,
+        *,
+        window_id: str,
+        workspace: str,
+        columns: int | None = None,
+    ) -> PaneCommandResponse:
+        return self._gesture(
+            "grow",
+            window_id=window_id,
+            workspace=workspace,
+            columns=columns,
+        )
+
+    def shrink_activity_pane(
+        self,
+        *,
+        window_id: str,
+        workspace: str,
+        columns: int | None = None,
+    ) -> PaneCommandResponse:
+        return self._gesture(
+            "shrink",
+            window_id=window_id,
+            workspace=workspace,
+            columns=columns,
+        )
+
+    def reset_activity_pane(self, *, window_id: str, workspace: str) -> PaneCommandResponse:
+        return self._gesture("reset", window_id=window_id, workspace=workspace)
+
+    def set_activity_pane_width(
+        self,
+        *,
+        window_id: str,
+        workspace: str,
+        percent: int,
+    ) -> PaneCommandResponse:
+        return self._gesture(
+            "set-percent",
+            window_id=window_id,
+            workspace=workspace,
+            percent=percent,
+        )
+
+
+class StreamsResource:
+    def __init__(self, transport: HttpTransport) -> None:
+        self.transport = transport
+
+    def next_session_update(
+        self,
+        session: SessionRef,
+        *,
+        after_cursor: int,
+        last_event_id: int | None = None,
+    ) -> SessionStreamUpdate:
+        session_id = quote(session.session_id, safe="")
+        raw = self._next(
+            f"/sessionData/{session_id}/stream?after_cursor={after_cursor}",
+            last_event_id=last_event_id,
+        )
+        try:
+            frame = SESSION_STREAM.validate_json(raw.data)
+        except ValidationError as error:
+            raise ApiFailure(f"session stream returned an invalid frame: {error}") from error
+        return SessionStreamUpdate(self._cursor(raw), frame)
+
+    def next_global_update(
+        self,
+        *,
+        after_cursor: int,
+        last_event_id: int | None = None,
+    ) -> GlobalStreamUpdate:
+        raw = self._next(
+            f"/sessionData/stream?after_cursor={after_cursor}",
+            last_event_id=last_event_id,
+        )
+        try:
+            frame = GLOBAL_STREAM.validate_json(raw.data)
+        except ValidationError as error:
+            raise ApiFailure(f"global stream returned an invalid frame: {error}") from error
+        return GlobalStreamUpdate(self._cursor(raw), frame)
+
+    def _next(
+        self,
+        path: str,
+        *,
+        last_event_id: int | None,
+    ) -> sse.SseEvent:
+        headers = (
+            {"Last-Event-ID": str(last_event_id)}
+            if last_event_id is not None
+            else None
+        )
+        with self.transport.event_stream(path, headers=headers) as lines:
+            for item in sse.events(lines):
+                if item.event == "error":
+                    try:
+                        reason = ERROR_FRAME.validate_json(item.data).error
+                    except ValidationError as error:
+                        raise ApiFailure(
+                            f"GET {path} returned an invalid error frame: {error}"
+                        ) from error
+                    raise ApiFailure(f"GET {path} stream failed: {reason}")
+                if item.event == "sessionData":
+                    return item
+        raise ApiFailure(f"GET {path} ended before a sessionData frame")
+
+    @staticmethod
+    def _cursor(item: sse.SseEvent) -> int:
+        if item.event_id is None:
+            raise ApiFailure("sessionData stream frame has no event id")
+        try:
+            return int(item.event_id)
+        except ValueError as error:
+            raise ApiFailure(
+                f"sessionData stream frame has invalid event id {item.event_id!r}"
+            ) from error
 
 
 class DiagnosticsResource:
@@ -681,6 +898,8 @@ class BaqylauClient:
         self.uploads = UploadsResource(self.transport)
         self.preferences = PreferencesResource(self.transport, self.application)
         self.usage = UsageResource(self.application)
+        self.terminal = TerminalResource(self.transport)
+        self.streams = StreamsResource(self.transport)
         self.diagnostics = DiagnosticsResource(self.transport)
 
     def close(self) -> None:

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from pytest_bdd import parsers, then, when
 
-from api.controls.models.control_outcome_response import RewindResultResponse
+from api.controls.models.control_outcome_response import (
+    DeliveryResultResponse,
+    RewindResultResponse,
+)
 from api.sessiondata.models.entry import MessageBodyResponse
 from sdk.client import BaqylauClient
 from tests.e2e.testkit.references import Controls, Sessions, Turns
@@ -34,6 +37,24 @@ def request_interruption(
     control_name: str,
 ) -> None:
     controls.bind(control_name, client.sessions.interrupt(sessions.get(session_name)))
+
+
+@when(parsers.parse(
+    'I send native command \'{command}\' to session "{session_name}" '
+    'as control "{control_name}"'
+))
+def send_native_command(
+    client: BaqylauClient,
+    sessions: Sessions,
+    controls: Controls,
+    command: str,
+    session_name: str,
+    control_name: str,
+) -> None:
+    controls.bind(
+        control_name,
+        client.sessions.send(sessions.get(session_name), command),
+    )
 
 
 @when(parsers.parse(
@@ -194,6 +215,48 @@ def control_outcome_is_acknowledged(controls: Controls, name: str) -> None:
 def control_outcome_is_rejected(controls: Controls, name: str) -> None:
     receipt = controls.get(name)
     assert receipt.outcome.status == "rejected"
+
+
+@then(parsers.parse('control "{name}" reports queued delivery'))
+def control_reports_queued_delivery(controls: Controls, name: str) -> None:
+    outcome = controls.get(name).outcome
+    assert isinstance(outcome, DeliveryResultResponse)
+    assert outcome.queued
+
+
+@then(parsers.parse(
+    'session "{session_name}" has control "{control_name}" queued as prompt '
+    "'{text}' after a fresh application read"
+))
+def session_has_durable_queued_prompt(
+    client: BaqylauClient,
+    sessions: Sessions,
+    controls: Controls,
+    session_name: str,
+    control_name: str,
+    text: str,
+) -> None:
+    queue = client.preferences.session_state(
+        sessions.get(session_name)
+    ).composer.queue
+    assert queue is not None
+    assert [
+        (item.request_id, item.text) for item in queue.items
+    ] == [(controls.get(control_name).request_id, text)]
+
+
+@then(parsers.parse(
+    'session "{session_name}" has no queued prompts after a fresh application read'
+))
+def session_has_no_durable_queued_prompts(
+    client: BaqylauClient,
+    sessions: Sessions,
+    session_name: str,
+) -> None:
+    queue = client.preferences.session_state(
+        sessions.get(session_name)
+    ).composer.queue
+    assert queue is None
 
 
 @then(parsers.parse('control "{control_name}" restores turn "{turn_name}"'))

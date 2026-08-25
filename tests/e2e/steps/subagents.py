@@ -11,12 +11,14 @@ from tests.e2e.testkit import selectors
 from tests.e2e.testkit.policy import WaitPolicy
 from tests.e2e.testkit.references import (
     ActorRef,
+    ActorMessages,
     Actors,
     AssignmentRef,
     Assignments,
     Sessions,
     Shells,
     Turns,
+    Works,
 )
 
 
@@ -62,6 +64,8 @@ def name_assigned_actor(
 
     def assigned_actor(snapshot: SessionSnapshot) -> ActorRef | None:
         actor_id = _assignment(snapshot, assignment).actor_id
+        if actor_id is None:
+            return None
         actor = snapshot.actor(actor_id)
         return (
             ActorRef(assignment.session, actor_id)
@@ -113,6 +117,98 @@ def name_actor_command(
         timeout=wait_policy.feed,
     )
     shells.bind(shell_name, found)
+
+
+@when(parsers.parse(
+    'I name the exact message \'{text}\' sent to worker of work "{work_name}" '
+    '"{message_name}"'
+))
+def name_message_to_work_worker(
+    client: BaqylauClient,
+    works: Works,
+    actor_messages: ActorMessages,
+    wait_policy: WaitPolicy,
+    text: str,
+    work_name: str,
+    message_name: str,
+) -> None:
+    work = works.get(work_name)
+    snapshot = client.sessions.snapshot(work.session)
+    actor_messages.bind(
+        message_name,
+        selectors.actor_message(
+            client.sessions.watch(work.session),
+            sender_actor_id=snapshot.lead().actor_id,
+            recipient_actor_id=work.worker.actor_id,
+            exact_text=text,
+            timeout=wait_policy.feed,
+        ),
+    )
+
+
+@when(parsers.parse(
+    'I name the exact message \'{text}\' sent by worker of work "{work_name}" '
+    '"{message_name}"'
+))
+def name_message_from_work_worker(
+    client: BaqylauClient,
+    works: Works,
+    actor_messages: ActorMessages,
+    wait_policy: WaitPolicy,
+    text: str,
+    work_name: str,
+    message_name: str,
+) -> None:
+    work = works.get(work_name)
+    lead_actor_id = client.sessions.snapshot(work.session).lead().actor_id
+    actor_messages.bind(
+        message_name,
+        selectors.actor_message(
+            client.sessions.watch(work.session),
+            sender_actor_id=work.worker.actor_id,
+            recipient_actor_id=lead_actor_id,
+            exact_text=text,
+            timeout=wait_policy.feed,
+        ),
+    )
+
+
+@then(parsers.parse(
+    'actor message "{message_name}" goes from the lead to worker of work '
+    '"{work_name}"'
+))
+def actor_message_goes_from_lead_to_work_worker(
+    client: BaqylauClient,
+    works: Works,
+    actor_messages: ActorMessages,
+    message_name: str,
+    work_name: str,
+) -> None:
+    work = works.get(work_name)
+    message = actor_messages.get(message_name)
+    snapshot = client.sessions.snapshot(work.session)
+    assert message.session == work.session
+    assert message.sender_actor_id == snapshot.lead().actor_id
+    assert message.recipient_actor_id == work.worker.actor_id
+
+
+@then(parsers.parse(
+    'actor message "{message_name}" goes from worker of work "{work_name}" '
+    "to the lead"
+))
+def actor_message_goes_from_work_worker_to_lead(
+    client: BaqylauClient,
+    works: Works,
+    actor_messages: ActorMessages,
+    message_name: str,
+    work_name: str,
+) -> None:
+    work = works.get(work_name)
+    message = actor_messages.get(message_name)
+    snapshot = client.sessions.snapshot(work.session)
+    assert message.session == work.session
+    assert message.sender_actor_id == work.worker.actor_id
+    assert message.recipient_actor_id == snapshot.lead().actor_id
 
 
 @then(parsers.parse('assignment "{name}" has state {state}'))

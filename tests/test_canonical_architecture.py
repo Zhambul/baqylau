@@ -15,8 +15,18 @@ ROOT = Path(__file__).resolve().parents[1]
 
 # Every package this repository owns — the universe each rule below draws from.
 OUR_PACKAGES = (
-    "api", "app", "core", "dashboard", "audit", "domain",
-    "engine", "harness", "notify", "repository", "sdk", "terminal",
+    "api",
+    "app",
+    "core",
+    "dashboard",
+    "audit",
+    "domain",
+    "engine",
+    "harness",
+    "notify",
+    "repository",
+    "sdk",
+    "terminal",
 )
 
 
@@ -70,10 +80,7 @@ def test_domain_imports_only_the_standard_library_and_its_one_dependency():
     )
     assert outside == []
     # ...and it is really used, so the allowance cannot outlive the reason for it.
-    assert any(
-        imported.split(".", 1)[0] in DOMAIN_DEPENDENCIES
-        for _path, imported in imports_under("domain")
-    )
+    assert any(imported.split(".", 1)[0] in DOMAIN_DEPENDENCIES for _path, imported in imports_under("domain"))
 
 
 def _code_only(path: Path) -> str:
@@ -157,10 +164,8 @@ def test_repository_contracts_expose_no_connection_or_transaction():
     layer exists to remove. The multi-table write is one coarse method now, and
     this is what stops the handle growing back.
     """
-    forbidden_names = {"connect", "connection", "cursor", "transaction",
-                       "unit_of_work", "begin", "commit", "rollback"}
-    forbidden_returns = ("Connection", "Cursor", "AbstractContextManager",
-                         "Iterator", "Generator")
+    forbidden_names = {"connect", "connection", "cursor", "transaction", "unit_of_work", "begin", "commit", "rollback"}
+    forbidden_returns = ("Connection", "Cursor", "AbstractContextManager", "Iterator", "Generator")
     violations = []
     for path in sorted((ROOT / "repository" / "contract").rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -191,8 +196,7 @@ def test_exactly_two_database_files_are_named():
         for path in sorted((ROOT / package).rglob("*.py")):
             if path.relative_to(ROOT).as_posix() == "harness/impl/codex/canonical/title.py":
                 continue  # the foreign index; its name is Codex's, not ours
-            named.update(re.findall(r'"([A-Za-z0-9_.-]+\.(?:db|sqlite))"',
-                                    path.read_text(encoding="utf-8")))
+            named.update(re.findall(r'"([A-Za-z0-9_.-]+\.(?:db|sqlite))"', path.read_text(encoding="utf-8")))
     assert named == {"main.db", "audit.db"}
 
 
@@ -235,7 +239,7 @@ def test_no_key_value_table_exists():
         if set(columns) in ({"key", "val"}, {"key", "value"}, {"name", "value"}):
             violations.append(f"{table} is a key-value table")
     assert violations == []
-    assert len(tables) > 25          # a schema that parsed to nothing would pass vacuously
+    assert len(tables) > 25  # a schema that parsed to nothing would pass vacuously
 
 
 def test_the_harness_contract_and_models_import_only_domain_and_the_terminal_contract():
@@ -275,7 +279,10 @@ def test_the_harness_implementations_never_import_the_application():
         allowed_modules={
             # the terminal a control context is handed, and the two session-level
             # services the application tier drives it through
-            "terminal.contract", "terminal.models", "terminal.adapter", "terminal.launch",
+            "terminal.contract",
+            "terminal.models",
+            "terminal.adapter",
+            "terminal.launch",
             # the hook client runs OUTSIDE the daemon and observes its own window
             "terminal.impl",
         },
@@ -332,8 +339,16 @@ def test_no_terminal_is_named_outside_its_own_implementation():
     """
     concrete_words = ("kitty", "kitten")
     scanned = [
-        ROOT / "api", ROOT / "app", ROOT / "core", ROOT / "dashboard", ROOT / "audit",
-        ROOT / "domain", ROOT / "harness", ROOT / "engine", ROOT / "notify", ROOT / "terminal",
+        ROOT / "api",
+        ROOT / "app",
+        ROOT / "core",
+        ROOT / "dashboard",
+        ROOT / "audit",
+        ROOT / "domain",
+        ROOT / "harness",
+        ROOT / "engine",
+        ROOT / "notify",
+        ROOT / "terminal",
     ]
     implementation = ROOT / "terminal" / "impl" / "kitty"
     # The detector registry is the one file above the implementation that may
@@ -499,9 +514,15 @@ def test_harness_hook_and_pane_entries_do_not_come_back_to_bin():
 # shape loses it. (`content` and `pane_stream` were here; the content route and
 # the daemon-side pane streams are both gone.)
 RAW_RESPONSE_ROUTES = {
-    "index", "build_asset", "static", "service_worker", "favicon", "openapi_yaml",
+    "index",
+    "build_asset",
+    "static",
+    "service_worker",
+    "favicon",
+    "openapi_yaml",
     "record_hook_delivery",
-    "global_stream", "session_stream",
+    "global_stream",
+    "session_stream",
 }
 
 
@@ -557,15 +578,15 @@ def test_every_route_answers_with_a_model_the_api_layer_owns():
             continue
         bindings = _binding_modules(path)
         declared = [ast.unparse(node.returns)]
-        declared += [item.split("response_model=", 1)[1].split(",")[0]
-                     for item in decorators if "response_model=" in item]
+        declared += [
+            item.split("response_model=", 1)[1].split(",")[0] for item in decorators if "response_model=" in item
+        ]
         for name in {token for text in declared for token in re.findall(r"[A-Za-z_][A-Za-z_0-9]*", text)}:
             module = bindings.get(name)
             if module is None or module.startswith("api."):
                 continue
             outside.append(
-                f"{path.relative_to(ROOT)}:{node.name} answers with {name}, "
-                f"which is {module}'s and not the api layer's"
+                f"{path.relative_to(ROOT)}:{node.name} answers with {name}, which is {module}'s and not the api layer's"
             )
     assert outside == []
 
@@ -590,15 +611,15 @@ def test_no_response_anywhere_is_a_hand_built_document():
         for node in ast.walk(tree):
             if isinstance(node, ast.Import) and any(a.name == "json" for a in node.names):
                 offenders.append(f"{path.relative_to(ROOT)} imports json")
-            if isinstance(node, ast.ImportFrom) and node.module in ("json", "fastapi.responses",
-                                                                   "starlette.responses"):
+            if isinstance(node, ast.ImportFrom) and node.module in ("json", "fastapi.responses", "starlette.responses"):
                 for alias in node.names:
                     if node.module == "json" or alias.name == "JSONResponse":
                         offenders.append(f"{path.relative_to(ROOT)} imports {alias.name}")
     assert offenders == []
     assert not (ROOT / "dashboard" / "render" / "serialize.py").exists()
     assert not [
-        path for package in OUR_PACKAGES
+        path
+        for package in OUR_PACKAGES
         for path in (ROOT / package).rglob("*.py")
         if "JSONResponse" in path.read_text(encoding="utf-8")
     ]
@@ -622,7 +643,8 @@ def test_nothing_below_the_api_layer_knows_it_exists():
     """
     reaching = [
         f"{path.relative_to(ROOT)} imports {imported}"
-        for package in OUR_PACKAGES if package != "api"
+        for package in OUR_PACKAGES
+        if package != "api"
         for path, imported in imports_under(package)
         if (imported == "api" or imported.startswith("api."))
         and package not in API_CONSUMER_PACKAGES
@@ -688,10 +710,12 @@ def _calls_json(path: Path) -> bool:
         if not isinstance(node, ast.Call):
             continue
         function = node.func
-        if (isinstance(function, ast.Attribute)
-                and function.attr in ("dumps", "loads")
-                and isinstance(function.value, ast.Name)
-                and function.value.id == "json"):
+        if (
+            isinstance(function, ast.Attribute)
+            and function.attr in ("dumps", "loads")
+            and isinstance(function.value, ast.Name)
+            and function.value.id == "json"
+        ):
             return True
     return False
 
@@ -732,25 +756,53 @@ def test_harness_adapters_never_use_raw_dictionaries_or_jsonvalue():
     typed_registry_allowlist = {
         "harness/impl/claude_code/catalog.py": {"COMMAND_PROMPT_FLOORS"},
         "harness/impl/claude_code/canonical/messages.py": {"BACKGROUND_OUTCOMES"},
-        "harness/impl/claude_code/canonical/toolcalls.py": {"TOOL_KINDS", "FILE_ACTIONS"},
+        "harness/impl/claude_code/canonical/toolcalls.py": {
+            "TOOL_KINDS",
+            "FILE_ACTIONS",
+            "calls",
+            "agent_assignments",
+            "monitors",
+        },
+        "harness/impl/claude_code/usage/live.py": {"samples"},
         "harness/impl/claude_code/controls/controller.py": {"HANDLERS"},
         "harness/impl/claude_code/controls/rewindmenu.py": {"MODE_LABELS"},
         "harness/impl/claude_code/model.py": {"ALIAS_DISPLAY"},
         "harness/impl/codex/canonical/events.py": {"EVENTS"},
         "harness/impl/codex/canonical/items.py": {"RESPONSES"},
-        "harness/impl/codex/canonical/records.py": {
-            "ITEM_COMPLETED_ITEMS", "COLLABORATION_ARGUMENTS",
-        },
-        "harness/impl/codex/canonical/rollout.py": {"_TOP"},
-        "harness/impl/codex/canonical/translator.py": {
-            "CODEX_TOOLS", "GOAL_STATES", "ACTIVITY_CALLS", "FILE_ACTIONS",
-            "_collaboration_calls", "_process_shells", "_continuation_shells",
-                "_call_records", "_plan_tasks", "current",
-                "_goals", "_working_directories",
+            "harness/impl/codex/canonical/records.py": {
+                "ITEM_COMPLETED_ITEMS",
+                "COLLABORATION_ARGUMENTS",
+            },
+            "harness/impl/codex/canonical/rollout.py": {"_TOP"},
+            "harness/impl/codex/canonical/sources.py": {
+                "_directories",
+                "_rollouts",
+                "_child_parent_by_path",
+                "_sessions",
+                "_child_sources",
+                "existing",
+                "grouped",
+            },
+            "harness/impl/codex/canonical/translator.py": {
+            "CODEX_TOOLS",
+            "GOAL_STATES",
+            "ACTIVITY_CALLS",
+            "FILE_ACTIONS",
+            "_collaboration_calls",
+            "_process_shells",
+            "_continuation_shells",
+            "_call_records",
+            "_plan_tasks",
+            "current",
+            "_goals",
+            "_working_directories",
+            "_mcp_tool_outcomes",
+            "_sources_by_session",
         },
         "harness/impl/codex/controls/controller.py": {"HANDLERS"},
         "harness/impl/codex/continuity.py": {
-            "_pending_by_window", "_resolved_by_session",
+            "_pending_by_window",
+            "_resolved_by_session",
         },
         "harness/impl/codex/controls/modeldialog.py": {"EFFORT_LABEL"},
         "harness/impl/codex/usage_rows.py": {"WINDOW_LABELS"},
@@ -782,16 +834,9 @@ def test_harness_adapters_never_use_raw_dictionaries_or_jsonvalue():
             where = f"{path.relative_to(ROOT)}:{getattr(node, 'lineno', 1)}"
             relative_path = str(path.relative_to(ROOT))
             allowed_registries = typed_registry_allowlist.get(relative_path, set())
-            if (
-                isinstance(node, (ast.Dict, ast.DictComp))
-                and assigned_name(node, parents) not in allowed_registries
-            ):
+            if isinstance(node, (ast.Dict, ast.DictComp)) and assigned_name(node, parents) not in allowed_registries:
                 violations.append(f"{where} contains a dictionary literal")
-            elif (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "model_dump"
-            ):
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "model_dump":
                 violations.append(f"{where} materializes model_dump() as a dictionary")
             elif (
                 isinstance(node, ast.Name)
@@ -833,10 +878,21 @@ def test_no_canonical_payload_carries_a_presentation_field():
     process is running. It belongs in the suite that reads the tree, and this
     is that suite.
     """
-    forbidden = frozenset({
-        "ansi", "bubbled", "chrome", "css", "glyph", "gutter",
-        "html", "note", "rgb", "web", "wrap",
-    })
+    forbidden = frozenset(
+        {
+            "ansi",
+            "bubbled",
+            "chrome",
+            "css",
+            "glyph",
+            "gutter",
+            "html",
+            "note",
+            "rgb",
+            "web",
+            "wrap",
+        }
+    )
     carrying = [
         f"{payload_type.__name__} carries {sorted(found)!r}"
         for payload_type in EVENT_TYPES
@@ -959,9 +1015,7 @@ def test_dashboard_browser_code_has_no_concrete_harness_or_old_names():
                 violations.append(f"{path.relative_to(ROOT)} contains {word}")
         for abbreviation in ("sid", "ses", "op", "ops"):
             if re.search(rf"\b{abbreviation}\b", source):
-                violations.append(
-                    f"{path.relative_to(ROOT)} contains abbreviated {abbreviation}"
-                )
+                violations.append(f"{path.relative_to(ROOT)} contains abbreviated {abbreviation}")
     assert violations == []
 
 
@@ -986,40 +1040,39 @@ def test_the_launch_wrappers_are_gone():
 
 FILE_ACCESS_ALLOWLIST = {
     # --- credentials: user-installed secrets we trade, never own ---------------
-    "dashboard/dictate.py":                     "the Deepgram API key and keyterms",
-    "notify/channels/telegram.py":              "the bot token and chat id",
-    "harness/impl/claude_code/account.py":      "the subscription registry, which indexes credential directories",
+    "dashboard/dictate.py": "the Deepgram API key and keyterms",
+    "notify/channels/telegram.py": "the bot token and chat id",
     # --- source files: written by a harness, or authored by you ---------------
-    "harness/impl/claude_code/canonical/transcript.py":
-        "the transcript — read as evidence, appended to for a parked rename",
-    "harness/impl/claude_code/canonical/sources.py":     "transcripts and task files, read as evidence",
-    "harness/impl/claude_code/canonical/messages.py":    "a child actor's meta.json sidecar, read as evidence",
-    "harness/impl/claude_code/controls/controller.py":
-        "reads the transcript tail to confirm an interrupt landed",
-    "harness/impl/claude_code/model.py":                 "the agent meta.json sidecar beside a transcript",
-    "harness/impl/claude_code/slashcmds.py":             "your .claude/commands and skills",
-    "harness/impl/claude_code/hooks/foreground.py":      "creates the tee file a command writes its output into",
-    "harness/impl/claude_code/shell.py":                 "the tee file's directory",
-    "harness/impl/codex/canonical/rollout.py":
-        "a subagent rollout's replayed-parent prefix, measured on the file",
-    "harness/impl/codex/canonical/sources.py":           "rollouts, read as evidence",
-    "harness/impl/codex/canonical/translator.py":
-        "backscans a rollout for the collaboration call an activity resolves",
-    "harness/impl/codex/canonical/title.py":             "globs codex's own state index",
-    "harness/impl/codex/commands.py":                    "your $CODEX_HOME/prompts",
-    "harness/impl/codex/controls/controller.py":         "reads the rollout tail to confirm an interrupt landed",
-    "harness/impl/__init__.py":                          "plugin discovery globs its own directory",
+    "harness/impl/claude_code/canonical/transcript.py": (
+        "the transcript — read as evidence, appended to for a parked rename"
+    ),
+    "harness/impl/claude_code/canonical/sources.py": "transcripts and task files, read as evidence",
+    "harness/impl/claude_code/canonical/messages.py": "a child actor's meta.json sidecar, read as evidence",
+    "harness/impl/claude_code/controls/controller.py": "reads the transcript tail to confirm an interrupt landed",
+    "harness/impl/claude_code/model.py": "the agent meta.json sidecar beside a transcript",
+    "harness/impl/claude_code/usage/live.py": "Claude's native profile usage cache",
+    "harness/impl/claude_code/slashcmds.py": "your .claude/commands and skills",
+    "harness/impl/claude_code/hooks/foreground.py": "creates the tee file a command writes its output into",
+    "harness/impl/claude_code/shell.py": "the tee file's directory",
+    "harness/file_tail.py": "the common append-only harness source reader",
+    "harness/impl/codex/canonical/rollout.py": "a subagent rollout's replayed-parent prefix, measured on the file",
+    "harness/impl/codex/canonical/sources.py": "rollouts, read as evidence",
+    "harness/impl/codex/canonical/translator.py": "backscans a rollout for the collaboration call an activity resolves",
+    "harness/impl/codex/canonical/title.py": "globs codex's own state index",
+    "harness/impl/codex/commands.py": "your $CODEX_HOME/prompts",
+    "harness/impl/codex/controls/controller.py": "reads the rollout tail to confirm an interrupt landed",
+    "harness/impl/__init__.py": "plugin discovery globs its own directory",
     # --- ours, and the one place we write bytes rather than rows ---------------
-    "api/application/files.py":                 "stages an attachment; the harness is handed an @path",
-    "engine/interpret/output_source.py":        "reads a followed output file, and unlinks the tee we made",
-    "core/clipboard.py":                        "the host pasteboard",
-    "core/repository.py":                       "reads a .git file to resolve a worktree",
-    "core/process.py":                          "/proc-style process inspection",
-    "terminal/impl/kitty/remote.py":            "finds the terminal's control SOCKET, not a file",
-    "dashboard/paths.py":                       "resolves the uploads directory",
-    "dashboard/cli.py":                         "--log sends the daemon's own output to a file",
-    "api/application/static.py":                "serves the SPA's own files",
-    "dashboard/frontend_build.py":              "validates Vite's generated manifest and source stamp",
+    "api/application/files.py": "stages an attachment; the harness is handed an @path",
+    "engine/interpret/output_source.py": "reads a followed output file, and unlinks the tee we made",
+    "core/clipboard.py": "the host pasteboard",
+    "core/repository.py": "reads a .git file to resolve a worktree",
+    "core/process.py": "/proc-style process inspection",
+    "terminal/impl/kitty/remote.py": "finds the terminal's control SOCKET, not a file",
+    "dashboard/paths.py": "resolves the uploads directory",
+    "dashboard/cli.py": "--log sends the daemon's own output to a file",
+    "api/application/static.py": "serves the SPA's own files",
+    "dashboard/frontend_build.py": "validates Vite's generated manifest and source stamp",
 }
 
 
@@ -1035,9 +1088,16 @@ def test_no_module_outside_the_allowlist_reads_or_writes_a_file():
     """
     # Word-boundary matched, so `urlopen(` — which is a socket, not a file —
     # does not read as one.
-    markers = (r"\bopen\(", r"\bos\.makedirs\b", r"\bos\.listdir\b",
-               r"\bos\.scandir\b", r"\bglob\.glob\b",
-               r"\.write_text\(", r"\.write_bytes\(", r"\.read_text\(")
+    markers = (
+        r"\bopen\(",
+        r"\bos\.makedirs\b",
+        r"\bos\.listdir\b",
+        r"\bos\.scandir\b",
+        r"\bglob\.glob\b",
+        r"\.write_text\(",
+        r"\.write_bytes\(",
+        r"\.read_text\(",
+    )
     violations = []
     for package in OUR_PACKAGES:
         for path in sorted((ROOT / package).rglob("*.py")):
@@ -1045,7 +1105,7 @@ def test_no_module_outside_the_allowlist_reads_or_writes_a_file():
             if relative in FILE_ACCESS_ALLOWLIST:
                 continue
             if relative.startswith("repository/impl/sqlite/"):
-                continue          # makedirs for the database's own directory
+                continue  # makedirs for the database's own directory
             code = _code_only(path)
             found = [marker for marker in markers if re.search(marker, code)]
             if found:
@@ -1055,11 +1115,7 @@ def test_no_module_outside_the_allowlist_reads_or_writes_a_file():
 
 def test_the_file_access_allowlist_has_no_stale_entries():
     """An allowlist may not outlive its reason — the same rule the type ratchet has."""
-    stale = [
-        relative
-        for relative in FILE_ACCESS_ALLOWLIST
-        if not (ROOT / relative).is_file()
-    ]
+    stale = [relative for relative in FILE_ACCESS_ALLOWLIST if not (ROOT / relative).is_file()]
     assert stale == []
 
 
@@ -1114,8 +1170,7 @@ def test_terminal_storage_is_reached_through_a_service():
     used it for is a fact in the read model or a control gesture of its own, so
     api/terminal/ is the pane keybindings and nothing else.
     """
-    for name in ("api/terminal/panes.py",
-                 "terminal/panes/commands.py", "terminal/panes/reaction.py"):
+    for name in ("api/terminal/panes.py", "terminal/panes/commands.py", "terminal/panes/reaction.py"):
         source = (ROOT / name).read_text(encoding="utf-8")
         # Not "names no repository": the pane reaction legitimately reads the
         # SESSION its panes anchor to. What it may not reach is the TERMINAL's
@@ -1174,11 +1229,11 @@ def test_the_audit_floor_is_only_for_writers_with_no_graph():
     that should have taken the recorder, or a reason stated here.
     """
     floor = {
-        "dashboard/cli.py",                          # audits the spawn; the daemon is not up yet
-        "core/clipboard.py",                         # a free function on the host pasteboard
+        "dashboard/cli.py",  # audits the spawn; the daemon is not up yet
+        "core/clipboard.py",  # a free function on the host pasteboard
         "harness/impl/claude_code/controls/tui.py",  # a screen driver, below every service
-        "notify/channels/__init__.py",               # channel dispatch: free functions
-        "notify/channels/telegram.py",               # ...and the two channels behind it
+        "notify/channels/__init__.py",  # channel dispatch: free functions
+        "notify/channels/telegram.py",  # ...and the two channels behind it
         "notify/channels/webpush.py",
     }
     importers = set()
@@ -1231,10 +1286,7 @@ def test_every_declared_node_resolves_and_resolves_once():
     from app.injection import registry, resolve
 
     instances = registry()
-    nodes = [
-        name for name in dir(declared)
-        if not name.startswith("_") and hasattr(getattr(declared, name), "build")
-    ]
+    nodes = [name for name in dir(declared) if not name.startswith("_") and hasattr(getattr(declared, name), "build")]
     assert len(nodes) > 40, nodes
     for name in nodes:
         provider = getattr(declared, name)
@@ -1290,7 +1342,7 @@ def test_canonical_consumers_cannot_observe_or_checkpoint_native_sources():
     )
     violations = []
     for consumer in consumers:
-        for path in (sorted(consumer.rglob("*.py")) if consumer.is_dir() else (consumer,)):
+        for path in sorted(consumer.rglob("*.py")) if consumer.is_dir() else (consumer,):
             source = path.read_text(encoding="utf-8")
             found = [fragment for fragment in forbidden_fragments if fragment in source]
             if found:
@@ -1320,13 +1372,11 @@ def test_resume_and_sse_have_one_authoritative_path():
         ROOT / "harness" / "impl" / "codex" / "launcher.py",
     )
     assert not [
-        path.relative_to(ROOT)
-        for path in launch_files
-        if "continue_latest" in path.read_text(encoding="utf-8")
+        path.relative_to(ROOT) for path in launch_files if "continue_latest" in path.read_text(encoding="utf-8")
     ]
-    session_browser = (
-        ROOT / "dashboard" / "frontend" / "src" / "api" / "session-stream.ts"
-    ).read_text(encoding="utf-8")
+    session_browser = (ROOT / "dashboard" / "frontend" / "src" / "api" / "session-stream.ts").read_text(
+        encoding="utf-8"
+    )
     assert "stream.onerror" not in session_browser
     assert "SES_RECONNECT" not in session_browser
 
@@ -1405,8 +1455,7 @@ if loaded:
 # `recognized_session` where HarnessLifecycle.apply says `session`, so a keyword
 # call would have worked on one harness and raised on the other.
 
-SOURCE_PACKAGES = ("app", "core", "dashboard", "audit", "domain", "harness",
-                   "engine", "notify", "terminal")
+SOURCE_PACKAGES = ("app", "core", "dashboard", "audit", "domain", "harness", "engine", "notify", "terminal")
 
 # Structural implementers that must NOT declare their Protocol, with the reason.
 # Both are the same shape: the Protocol is declared in a layer that sits BELOW
@@ -1415,16 +1464,13 @@ SOURCE_PACKAGES = ("app", "core", "dashboard", "audit", "domain", "harness",
 # application must not import the dashboard to say "yes, that is me". Moving
 # these two Protocols into `harness/models/` would retire both rows.
 PROTOCOL_DECLARATION_EXEMPTIONS = {
-    ("TerminalInputService", "TerminalSessionReader"):
-        "the Protocol lives in dashboard/, which app/ may not import",
-    ("ApplicationUsageState", "UsageReader"):
-        "the Protocol lives in dashboard/, which harness/ may not import",
-    ("_TerminalDriver", "ScreenDriver"):
-        "the Protocol lives in claude_code/, which codex/ may not import "
-        "(one harness may not name another)",
-    ("_TerminalDriver", "Driver"):
-        "the Protocol lives in codex/, which claude_code/ may not import "
-        "(one harness may not name another)",
+    ("TerminalAdapter", "SessionTerminalState"): "the Protocol lives in harness/, which terminal/ may not import",
+    ("TerminalInputService", "TerminalSessionReader"): "the Protocol lives in dashboard/, which app/ may not import",
+    ("ApplicationUsageState", "UsageReader"): "the Protocol lives in dashboard/, which harness/ may not import",
+    ("_TerminalDriver", "ScreenDriver"): "the Protocol lives in claude_code/, which codex/ may not import "
+    "(one harness may not name another)",
+    ("_TerminalDriver", "Driver"): "the Protocol lives in codex/, which claude_code/ may not import "
+    "(one harness may not name another)",
 }
 
 
@@ -1448,9 +1494,7 @@ def _protocols_and_classes():
                 if not isinstance(node, ast.ClassDef):
                     continue
                 bases = [ast.unparse(base) for base in node.bases]
-                is_protocol = any(
-                    base == "Protocol" or base.startswith("Protocol[") for base in bases
-                )
+                is_protocol = any(base == "Protocol" or base.startswith("Protocol[") for base in bases)
                 where = f"{path.relative_to(ROOT)}:{node.lineno}"
                 if is_protocol:
                     protocols[node.name] = _method_signatures(node)
@@ -1512,8 +1556,7 @@ def test_a_declared_protocol_implementation_matches_the_protocol_exactly():
                     divergent.append(f"{where} {name} declares {protocol} but never defines {member}()")
                 elif members[member] != arguments:
                     divergent.append(
-                        f"{where} {name}.{member}{members[member]} does not match "
-                        f"{protocol}.{member}{arguments}"
+                        f"{where} {name}.{member}{members[member]} does not match {protocol}.{member}{arguments}"
                     )
     assert divergent == []
 
@@ -1650,8 +1693,14 @@ def test_shared_models_do_not_expose_adapter_identity_fields():
     from harness.models import Session
 
     assert set(Session.__dataclass_fields__) == {
-        "session_id", "lead_actor_id", "source_reference", "working_directory",
-        "terminal_window_id", "harness_process_id", "plugin",
+        "session_id",
+        "lead_actor_id",
+        "source_reference",
+        "working_directory",
+        "terminal_window_id",
+        "harness_process_id",
+        "plugin",
+        "project_directory",
     }
     assert set(ModelReference.__dataclass_fields__) == {"name", "display_name"}
 
@@ -1713,7 +1762,5 @@ def test_adapters_map_native_entity_ids_only_in_their_ids_module():
                 if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
                     continue
                 if node.func.id in canonical_entity_ids:
-                    violations.append(
-                        f"{path.relative_to(ROOT)}:{node.lineno} constructs {node.func.id}"
-                    )
+                    violations.append(f"{path.relative_to(ROOT)}:{node.lineno} constructs {node.func.id}")
     assert violations == []

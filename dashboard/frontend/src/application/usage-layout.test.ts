@@ -25,12 +25,14 @@ function row(harness: string, windows: readonly UsageWindow[]): UsageRow {
     accountId: null,
     displayName: harness,
     switchable: false,
+    defaultForLaunch: false,
     plan: null,
     windows,
     schedulingScore: null,
     schedulingAllowed: true,
     limit: null,
     authenticationError: null,
+    collectionError: null,
   };
 }
 

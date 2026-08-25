@@ -34,6 +34,7 @@ from harness.impl.codex.canonical.records import (
     ITEM_COMPLETED_ITEMS,
     ItemCompletedType,
     ItemCompletedPayload,
+    McpToolCallItem,
     SubAgentActivityItem,
     TaskCompletePayload,
     TaskStartedPayload,
@@ -51,6 +52,7 @@ from harness.impl.codex.canonical.records import (
     CoveredItemRecord,
     GoalRecord,
     MessageRecord,
+    McpToolCompletedRecord,
     PatchFile,
     PatchRecord,
     PlanRecord,
@@ -78,20 +80,22 @@ PHASE_FINAL = "final_answer"
 # register and is therefore read there, not here (measured against codex-cli
 # 0.147.0: `UserMessage` and `AgentMessage` items are completed for the same prose
 # the `response_item/message` records already carry, `Reasoning` for the think the
-# `reasoning` records carry, `McpToolCall` for the tool records, and
-# `ContextCompaction` for the compaction lifecycle records. A CLOSED list on
+# `reasoning` records carry, and
+# `ContextCompaction` for the compaction lifecycle records, and `Extension` for
+# the structured copy of a web result that the custom tool call and output
+# already deliver. A CLOSED list on
 # purpose: records.CoveredItem's Literal and records.ITEM_COMPLETED_ITEMS are the
 # one dispatch contract that declares these measured mirrors.
 
 
-def _ev_token_count(token_count_payload: TokenCountPayload) -> UsageRecord | None:
+def _ev_token_count(token_count_payload: TokenCountPayload) -> RolloutRecord:
     p = token_count_payload
     # Cumulative usage snapshot (info is null on rate-limit-only events).
     # `last_token_usage` + `model_context_window` ride along: the CUMULATIVE
     # total never resets across a compaction, so only the last turn's total
     # over the window measures ctx saturation.
     if p.info is None or p.info.total_token_usage is None:
-        return None
+        return empty_record()
     return UsageRecord(
         usage=p.info.total_token_usage,
         last=p.info.last_token_usage,
@@ -239,6 +243,18 @@ def _ev_item_completed(item_completed_payload: ItemCompletedPayload) -> RolloutR
         return _command_execution(item)
     if isinstance(item, SubAgentActivityItem):
         return _subagent_activity(item, p)
+    if isinstance(item, McpToolCallItem):
+        # Older MCP mirror items carry only an id. They remain a known covered
+        # copy. Current items carry all three fields and can provide the native
+        # outcome for the outer custom-tool result.
+        if not item.server or not item.tool or not item.status:
+            return CoveredItemRecord()
+        return McpToolCompletedRecord(
+            server=item.server,
+            tool=item.tool,
+            status=item.status,
+            item_id=item.id or "",
+        )
     # item: PlanItem — the only member left in records.ItemCompletedItem.
     text = (item.text or "").strip()
     return PlanRecord(text=text, id=item.id or "") if text else empty_record()
@@ -253,8 +269,11 @@ def _command_execution(command_execution_item: CommandExecutionItem) -> CommandC
     if output is None:
         output = (command_execution_item.stdout or "") + (command_execution_item.stderr or "")
     return CommandCompletedRecord(
-        process_id=CodexShellId(str(command_execution_item.process_id)), output=output,
-        exit=command_execution_item.exit_code, item_id=command_execution_item.id or "",
+        process_id=CodexShellId(str(command_execution_item.process_id)),
+        command=tuple(command_execution_item.command or ()),
+        output=output,
+        exit=command_execution_item.exit_code,
+        item_id=command_execution_item.id or "",
     )
 
 

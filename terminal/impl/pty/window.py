@@ -31,7 +31,7 @@ import pyte
 from terminal.models.values import WindowId
 
 COLUMNS = 200
-LINES = 50
+LINES = 24
 CLOSE_TIMEOUT_SECONDS = 10.0
 READ_SIZE = 65536
 
@@ -45,6 +45,7 @@ class PtyWindow:
     descriptor: int
     screen: pyte.Screen
     stream: pyte.ByteStream
+    command: tuple[str, ...]
     tags: dict[str, str] = field(default_factory=dict)
     # The emulator is fed from the drain thread and read from the caller's, and
     # pyte keeps a mutable grid: a read mid-feed would see half a repaint.
@@ -127,6 +128,7 @@ def open_window(
         descriptor=controller,
         screen=screen,
         stream=pyte.ByteStream(screen),
+        command=command,
     )
     threading.Thread(target=_drain, args=(window,), daemon=True).start()
     return window
@@ -136,7 +138,7 @@ def _drain(pty_window: PtyWindow) -> None:
     while True:
         try:
             chunk = os.read(pty_window.descriptor, READ_SIZE)
-        except OSError:                      # the pty closed with the process
+        except OSError:  # the pty closed with the process
             return
         if not chunk:
             return

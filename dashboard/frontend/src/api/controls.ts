@@ -105,18 +105,6 @@ export async function autoNameSession(
   );
 }
 
-export async function openRewind(
-  sessionId: SessionId,
-  id: RequestId,
-): Promise<ControlOutcome> {
-  return outcome(() =>
-    apiClient.POST('/api/sessions/{session_id}/controls/open-rewind', {
-      params: { path: { session_id: sessionId } },
-      body: { request_id: id },
-    }),
-  );
-}
-
 export async function applyRewind(
   sessionId: SessionId,
   id: RequestId,

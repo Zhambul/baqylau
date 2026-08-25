@@ -114,6 +114,12 @@ class ProgressStream(StrEnum):
     STATUS = "status"
 
 
+class OpenWorkKind(StrEnum):
+    TURN = "turn"
+    SHELL = "shell"
+    ASSIGNMENT = "assignment"
+
+
 class TitleOrigin(StrEnum):
     CUSTOM = "custom"
     AUTOMATIC = "automatic"

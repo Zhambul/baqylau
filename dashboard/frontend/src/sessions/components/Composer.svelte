@@ -23,13 +23,6 @@
 
   const DRAFT_DELAY_MS = 350;
   const GROW_FRACTION = 0.4;
-  const BUSY = new Set([
-    'thinking',
-    'working',
-    'executing',
-    'awaiting_background',
-  ]);
-
   let { view }: { view: SessionViewState } = $props();
 
   const appState = getAppState();
@@ -41,6 +34,7 @@
   let dictation = $state<{ stop: () => void }>();
   let draft = $state('');
   let seeded = $state(false);
+  let edited = false;
   let sending = $state(false);
   let failure = $state<string | null>(null);
   let dropping = $state(false);
@@ -57,7 +51,6 @@
       (view.session?.workingDirectory.trim().length ?? 0) > 0,
   );
   const usable = $derived(canSend || canResume);
-  const queued = $derived(BUSY.has(view.scopedActor?.status ?? ''));
   const suggestion = $derived(
     view.application?.terminal.inputState?.suggestion ?? '',
   );
@@ -86,7 +79,7 @@
     const application = view.application;
     if (seeded || application === null) return;
     const saved = application.composer.draft;
-    if (saved !== null && saved.origin !== view.clientId) draft = saved.text;
+    if (!edited && saved !== null) draft = saved.text;
     seeded = true;
     requestAnimationFrame(resize);
   });
@@ -94,6 +87,7 @@
   $effect(() => {
     const override = view.composerOverride;
     if (override === null) return;
+    edited = true;
     draft = override.text;
     view.consumeComposerOverride(override.sequence);
     requestAnimationFrame(() => {
@@ -104,12 +98,16 @@
 
   onDestroy(() => {
     mounted = false;
-    if (timer !== null) clearTimeout(timer);
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+      dispatchDraft(draft);
+    }
     attachmentTray.clear();
   });
 
   function resize(): void {
-    if (textarea === undefined) return;
+    if (!mounted || textarea == null) return;
     textarea.style.height = 'auto';
     textarea.style.height = `${String(Math.min(textarea.scrollHeight, Math.round(innerHeight * GROW_FRACTION)))}px`;
   }
@@ -134,6 +132,7 @@
   }
 
   function input(): void {
+    edited = true;
     failure = null;
     historyIndex = null;
     resize();
@@ -479,9 +478,7 @@
         : 'sending…'
       : canResume
         ? 'resume & send'
-        : queued
-          ? 'queue'
-          : 'send'}
+        : 'send'}
   </button>
   {#if failure !== null || attachmentTray.failure !== null}
     <div class="composer-error" role="alert">

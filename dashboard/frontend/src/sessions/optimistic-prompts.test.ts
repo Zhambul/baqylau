@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { mergeQueuedPromptTexts, promptMatches } from './optimistic-prompts';
+import { mergeQueuedPrompts, promptMatches } from './optimistic-prompts';
 
 describe('promptMatches', () => {
   it('allows attachment and restored-draft prefixes', () => {
@@ -14,23 +14,51 @@ describe('promptMatches', () => {
   });
 });
 
-describe('mergeQueuedPromptTexts', () => {
+describe('mergeQueuedPrompts', () => {
   it('does not duplicate an optimistic queue item persisted by the server', () => {
     expect(
-      mergeQueuedPromptTexts(
-        ['@/tmp/file queued message'],
-        ['queued message', 'another'],
+      mergeQueuedPrompts(
+        [{ requestId: 'one', text: '@/tmp/file queued message' }],
+        [
+          { requestId: 'one', text: 'queued message' },
+          { requestId: 'two', text: 'another' },
+        ],
       ),
-    ).toEqual(['@/tmp/file queued message', 'another']);
+    ).toEqual([
+      { requestId: 'one', text: '@/tmp/file queued message' },
+      { requestId: 'two', text: 'another' },
+    ]);
   });
 
   it('drops persisted and optimistic queue items after live delivery', () => {
     expect(
-      mergeQueuedPromptTexts(
-        ['persisted message', 'keep persisted'],
-        ['optimistic message', 'keep optimistic'],
+      mergeQueuedPrompts(
+        [
+          { requestId: 'one', text: 'persisted message' },
+          { requestId: 'two', text: 'keep persisted' },
+        ],
+        [
+          { requestId: 'three', text: 'optimistic message' },
+          { requestId: 'four', text: 'keep optimistic' },
+        ],
         ['@/tmp/file persisted message', 'restored draft optimistic message'],
       ),
-    ).toEqual(['keep persisted', 'keep optimistic']);
+    ).toEqual([
+      { requestId: 'two', text: 'keep persisted' },
+      { requestId: 'four', text: 'keep optimistic' },
+    ]);
+  });
+
+  it('consumes only one of two equal queued sends per delivered prompt', () => {
+    expect(
+      mergeQueuedPrompts(
+        [
+          { requestId: 'one', text: 'same' },
+          { requestId: 'two', text: 'same' },
+        ],
+        [],
+        ['same'],
+      ),
+    ).toEqual([{ requestId: 'two', text: 'same' }]);
   });
 });

@@ -15,7 +15,9 @@
 from __future__ import annotations
 
 import os
+import time
 from itertools import count
+from uuid import uuid4
 
 from terminal.models.values import TabId, WindowId
 from terminal.contract import (
@@ -59,7 +61,7 @@ from terminal.models.tabs import (
     TabRenameRequest,
     TabRenameResponse,
 )
-from terminal.models.values import WindowInfo
+from terminal.models.values import WindowInfo, WindowProcess
 from terminal.models.viewport import ScreenReadRequest, ScreenReadResponse
 
 NO_CHROME = "a pty has no tabs to show"
@@ -86,6 +88,7 @@ NO_ANSI = "the pty terminal reads plain screens only"
 # for free; a pseudo-terminal has no window manager and no such convention, so
 # this establishes one.
 WINDOW_ID_VARIABLE = "BAQYLAU_PTY_WINDOW_ID"
+SUBMIT_ENTER_DELAY_SECONDS = 0.15
 
 
 class PtyWindows:
@@ -100,6 +103,11 @@ class PtyWindows:
     def __init__(self, environment: dict[str, str] | None = None) -> None:
         self.environment = dict(os.environ if environment is None else environment)
         self.windows: dict[WindowId, PtyWindow] = {}
+        # Session facts are durable, but this in-memory terminal is not. Keep
+        # its window identities unique after an application restart so a new
+        # native run cannot deduplicate against a finished run that used the
+        # same local counter value.
+        self._namespace = uuid4().hex
         self._ids = count(1)
 
     def launch(
@@ -108,7 +116,7 @@ class PtyWindows:
         working_directory: str,
         environment: tuple[tuple[str, str], ...],
     ) -> PtyWindow | None:
-        window_id = WindowId(str(next(self._ids)))
+        window_id = WindowId(f"{self._namespace}:{next(self._ids)}")
         child_environment = dict(self.environment)
         child_environment.update({str(name): str(value) for name, value in environment})
         # Last, so the window's own identity cannot be overridden by a caller's
@@ -213,6 +221,8 @@ class PtyMetadata(TerminalMetadata):
                 # user. Reporting focus would make the mirror believe a window
                 # the user is looking at is on screen.
                 tab_is_focused=False,
+                is_active_in_tab=True,
+                processes=(WindowProcess(window.process.pid, window.command),),
             )
             for window in self.pty_windows.windows.values()
             if window.process.poll() is None
@@ -244,8 +254,13 @@ class PtyInput(TerminalInput):
         if text_submit_request.mode == TextSubmitMode.PASTE:
             payload = keys.BRACKETED_PASTE_START + payload + keys.BRACKETED_PASTE_END
         # The Enter stays a separate keystroke, so it submits rather than
-        # becoming a newline in the draft (TextSubmitRequest).
-        delivered = window.write(payload) and window.write(keys.NAMED_KEYS["enter"])
+        # becoming a newline in the draft (TextSubmitRequest). The delay also
+        # keeps the operating system from coalescing both writes into one read,
+        # which a chunk-based TUI can interpret as one paste with a newline.
+        delivered = window.write(payload)
+        if delivered:
+            time.sleep(SUBMIT_ENTER_DELAY_SECONDS)
+            delivered = window.write(keys.NAMED_KEYS["enter"])
         return TextSubmitResponse(delivered, None if delivered else "pty input failed")
 
     def send_key(self, key_send_request: KeySendRequest) -> KeySendResponse:

@@ -19,7 +19,7 @@ import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
-from threading import Event, Lock
+from threading import Event, Lock, local
 
 from repository.errors import SchemaVersionMismatch
 
@@ -51,8 +51,11 @@ READ_ONLY_PRAGMAS = SqlitePragmas(read_only=True, file_mode=None)
 class SqliteDatabase:
     """One file, one schema, one policy. Initialised once per process.
 
-    Every call opens a fresh short-lived connection: the daemon serves requests
-    on many threads and sqlite connections are thread-bound.
+    Each thread keeps one connection: SQLite connections are thread-bound, and
+    the daemon's interpreter and reaction loops call several repository methods
+    every 0.25 seconds. Opening a connection for each method made every idle
+    tick reopen the files and parse the full schema. Transactions stay scoped
+    to one repository method; only the connection is reused.
     """
 
     def __init__(
@@ -73,6 +76,7 @@ class SqliteDatabase:
         # between the two checks below, and that is the point of them.
         self._initialized = Event()
         self._initialize_lock = Lock()
+        self._thread = local()
 
     # --- opening ---------------------------------------------------------------
 
@@ -89,6 +93,13 @@ class SqliteDatabase:
         if self.sqlite_pragmas.foreign_keys:
             connection.execute("PRAGMA foreign_keys=ON")
         connection.execute(f"PRAGMA busy_timeout={self.sqlite_pragmas.busy_timeout_milliseconds}")
+        return connection
+
+    def _thread_connection(self) -> sqlite3.Connection:
+        connection: sqlite3.Connection | None = getattr(self._thread, "connection", None)
+        if connection is None:
+            connection = self._connect()
+            self._thread.connection = connection
         return connection
 
     def exists(self) -> bool:
@@ -175,13 +186,16 @@ class SqliteDatabase:
     def read(self) -> Iterator[sqlite3.Connection]:
         """A deferred transaction: several statements see one consistent snapshot."""
         self.initialize()
-        connection = self._connect()
+        connection = self._thread_connection()
+        if connection.in_transaction:
+            raise RuntimeError("nested SQLite repository transaction")
         try:
             connection.execute("BEGIN")
             yield connection
             connection.rollback()
-        finally:
-            connection.close()
+        except BaseException:
+            connection.rollback()
+            raise
 
     @contextmanager
     def write(self) -> Iterator[sqlite3.Connection]:
@@ -192,14 +206,13 @@ class SqliteDatabase:
         first write, leaving room for a racing peer to land in between.
         """
         self.initialize()
-        connection = self._connect()
+        connection = self._thread_connection()
+        if connection.in_transaction:
+            raise RuntimeError("nested SQLite repository transaction")
+        connection.execute("BEGIN IMMEDIATE")
         try:
-            connection.execute("BEGIN IMMEDIATE")
-            try:
-                yield connection
-            except BaseException:
-                connection.rollback()
-                raise
-            connection.commit()
-        finally:
-            connection.close()
+            yield connection
+        except BaseException:
+            connection.rollback()
+            raise
+        connection.commit()

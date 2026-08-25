@@ -12,14 +12,10 @@ from repository.impl.sqlite import rows
 from repository.impl.sqlite.connection import SqliteDatabase
 from repository.mapper import facts as mapper
 
-_IDENTITY_COLUMNS = (
-    "session_id, harness, source_type, source_name, source_position, "
-    "actor_id, parent_actor_id, encoding, payload"
-)
 _INSERT_COLUMNS = (
     "raw_event_id, session_id, harness, source_type, source_identity, "
     "source_name, source_position, actor_id, parent_actor_id, "
-    "observed_at, encoding, payload, terminal_window_id, "
+    "observed_at, encoding, payload, payload_codec, terminal_window_id, "
     "harness_process_id, account_id, account_display_name"
 )
 
@@ -34,19 +30,25 @@ class SqliteRawEventRepository(RawEventRepository):
         with self.sqlite_database.write() as connection:
             for raw_event in raw_events:
                 existing = connection.execute(
-                    f"SELECT {_IDENTITY_COLUMNS} FROM raw_events WHERE raw_event_id=?",
+                    "SELECT * FROM raw_events WHERE raw_event_id=?",
                     (str(raw_event.raw_event_id),),
                 ).fetchone()
                 if existing is not None:
-                    if tuple(existing) != mapper.raw_identity(raw_event):
+                    stored_event = mapper.raw_event(rows.raw_event(existing))
+                    if mapper.raw_identity(stored_event) != mapper.raw_identity(raw_event):
                         raise EventIdentityConflict(
                             f"raw event identity reused: {raw_event.raw_event_id}"
                         )
                     continue
-                connection.execute(
+                inserted = connection.execute(
                     f"INSERT INTO raw_events({_INSERT_COLUMNS}) "
-                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     mapper.raw_event_values(raw_event),
+                )
+                connection.execute(
+                    "INSERT INTO pending_raw_events(raw_event_row_id, raw_event_id) "
+                    "VALUES(?, ?)",
+                    (inserted.lastrowid, str(raw_event.raw_event_id)),
                 )
 
     def find(self, raw_event_id: RawEventId) -> RawEvent | None:
@@ -61,10 +63,9 @@ class SqliteRawEventRepository(RawEventRepository):
             raise ValueError("backlog limit must be positive")
         with self.sqlite_database.read() as connection:
             found = connection.execute(
-                "SELECT raw_events.* FROM raw_events "
-                "LEFT JOIN interpretations USING(raw_event_id) "
-                "WHERE interpretations.raw_event_id IS NULL "
-                "ORDER BY raw_events.id LIMIT ?",
+                "SELECT raw_events.* FROM pending_raw_events "
+                "JOIN raw_events ON raw_events.id = pending_raw_events.raw_event_row_id "
+                "ORDER BY pending_raw_events.raw_event_row_id LIMIT ?",
                 (limit,),
             ).fetchall()
         return tuple(mapper.raw_event(rows.raw_event(row)) for row in found)

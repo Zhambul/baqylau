@@ -10,6 +10,7 @@ from repository.contract.diagnostics import (
     InterpretationProblem,
 )
 from repository.impl.sqlite.connection import SqliteDatabase
+from repository.mapper.raw_payloads import restored
 
 
 class SqliteDiagnosticsRepository:
@@ -24,9 +25,10 @@ class SqliteDiagnosticsRepository:
     def checkpoint(self) -> DiagnosticsCheckpoint:
         with self.main_database.read() as connection:
             raw = connection.execute(
-                "SELECT COALESCE(MAX(raw_events.id), 0) AS cursor, "
-                "SUM(CASE WHEN interpretations.raw_event_id IS NULL THEN 1 ELSE 0 END) AS pending "
-                "FROM raw_events LEFT JOIN interpretations USING(raw_event_id)"
+                "SELECT COALESCE(MAX(id), 0) AS cursor FROM raw_events"
+            ).fetchone()
+            pending = connection.execute(
+                "SELECT COUNT(*) AS count FROM pending_raw_events"
             ).fetchone()
             canonical = connection.execute(
                 "SELECT COALESCE(MAX(cursor), 0) AS cursor FROM canonical_events"
@@ -46,7 +48,7 @@ class SqliteDiagnosticsRepository:
             audit_error_cursor=audit_cursor,
             canonical_cursor=int(canonical["cursor"]),
             reaction_cursor=int(reaction["canonical_cursor"]) if reaction is not None else 0,
-            pending_raw_event_count=int(raw["pending"] or 0),
+            pending_raw_event_count=int(pending["count"]),
         )
 
     def report(
@@ -60,7 +62,8 @@ class SqliteDiagnosticsRepository:
         with self.main_database.read() as connection:
             raw_rows = connection.execute(
                 "SELECT raw_events.id, raw_events.source_type, raw_events.source_position, "
-                "raw_events.payload, interpretations.decision, interpretations.reason "
+                "raw_events.payload, raw_events.payload_codec, "
+                "interpretations.decision, interpretations.reason "
                 "FROM raw_events LEFT JOIN interpretations USING(raw_event_id) "
                 "WHERE raw_events.id>? AND raw_events.id<=? ORDER BY raw_events.id",
                 (after_raw_event, through_raw_event),
@@ -72,7 +75,9 @@ class SqliteDiagnosticsRepository:
                 source_position=str(row["source_position"]),
                 decision=None if row["decision"] is None else str(row["decision"]),
                 reason=None if row["reason"] is None else str(row["reason"]),
-                payload=bytes(row["payload"])[:300].decode("utf-8", "replace"),
+                payload=restored(bytes(row["payload"]), str(row["payload_codec"]))[:300].decode(
+                    "utf-8", "replace"
+                ),
             )
             for row in raw_rows
             if row["decision"] not in ("translated", "ignored_nonsemantic")

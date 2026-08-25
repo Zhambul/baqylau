@@ -3,6 +3,28 @@
 
   let { session }: { session: Session } = $props();
 
+  function goalMark(state: NonNullable<Session['goal']>['state']): string {
+    switch (state) {
+      case 'completed':
+        return '✓';
+      case 'blocked':
+      case 'usage_limited':
+      case 'budget_limited':
+        return '!';
+      case 'paused':
+        return 'Ⅱ';
+      case 'cleared':
+        return '−';
+      case 'active':
+        return '◎';
+    }
+  }
+
+  function goalLabel(state: NonNullable<Session['goal']>['state']): string {
+    if (state === 'completed') return 'achieved';
+    return state.replace('_', ' ');
+  }
+
   function taskClass(state: Session['tasks'][number]['state']): string {
     switch (state) {
       case 'pending':
@@ -34,13 +56,14 @@
   <div class="goalwrap">
     <div class:met={session.goal.completed} class="goalcard">
       <div class="goalhead">
-        <span class="goalmark">{session.goal.completed ? '✓' : '◎'}</span>
+        <span class="goalmark">{goalMark(session.goal.state)}</span>
         <span class="goaltitle">goal</span>
-        <span class="goalstate"
-          >{session.goal.completed ? 'achieved' : 'active'}</span
-        >
+        <span class="goalstate">{goalLabel(session.goal.state)}</span>
       </div>
       <div class="goalcond">{session.goal.objective}</div>
+      {#if session.goal.reason}
+        <div class="goalreason">{session.goal.reason}</div>
+      {/if}
     </div>
   </div>
 {/if}

@@ -8,20 +8,29 @@ from typing import TypeVar
 from api.sessiondata.models.entry import (
     FileBodyResponse,
     MessageBodyResponse,
+    ReasoningBodyResponse,
+    SearchBodyResponse,
+    WebBodyResponse,
+    WorktreeBodyResponse,
 )
 from sdk.client import SessionWatch
 from sdk.state import AssignmentState, SessionSnapshot, ShellState
 from tests.e2e.testkit.references import (
     ActorRef,
+    ActorMessageRef,
     AssignmentRef,
     CompactionRef,
     FileOperationRef,
     PlanRef,
     QuestionRef,
+    ReasoningTraceRef,
+    SearchRef,
     ShellRef,
     SkillRef,
     TaskRef,
     TurnRef,
+    WebFetchRef,
+    WorktreeChangeRef,
 )
 
 T = TypeVar("T")
@@ -94,12 +103,11 @@ def turn(watch: SessionWatch, reference: TurnRef, timeout: float) -> TurnRef:
             and isinstance(entry.body, MessageBodyResponse)
             and entry.body.role == "user"
             and entry.body.phase == "prompt"
-            and entry.body.content.text.strip() == reference.prompt
+            and _prompt_matches(reference, entry.body.content.text)
         ]
         prompt = _one(prompts, f"prompt {reference.prompt!r}")
         if (
             prompt is None
-            or prompt.turn_id is None
             or not isinstance(prompt.body, MessageBodyResponse)
         ):
             return None
@@ -115,6 +123,8 @@ def turn(watch: SessionWatch, reference: TurnRef, timeout: float) -> TurnRef:
             prompt_message_id=body.message_id,
             completion_after_cursor=reference.completion_after_cursor,
             start_cursor=prompt.cursor,
+            attachment_paths=reference.attachment_paths,
+            native_attachment_names=reference.native_attachment_names,
         )
 
     return watch.wait(
@@ -122,6 +132,18 @@ def turn(watch: SessionWatch, reference: TurnRef, timeout: float) -> TurnRef:
         found,
         timeout=timeout,
     )
+
+
+def _prompt_matches(reference: TurnRef, delivered: str) -> bool:
+    expected = reference.prompt.strip()
+    actual = delivered.strip()
+    if not reference.attachment_paths and not reference.native_attachment_names:
+        return actual == expected
+    if any(path not in actual for path in reference.attachment_paths):
+        return False
+    if any(name not in actual for name in reference.native_attachment_names):
+        return False
+    return not expected or actual.endswith(expected)
 
 
 def launched_turn(watch: SessionWatch, timeout: float) -> TurnRef:
@@ -191,7 +213,11 @@ def shell(
             and (predicate is None or predicate(item))
         ]
         item = _one(candidates, f"shell command containing {command_contains!r}")
-        return None if item is None else ShellRef(SessionRef(snapshot.session_id), item.shell_id)
+        return (
+            None
+            if item is None
+            else ShellRef(SessionRef(snapshot.session_id), item.shell_id, item.actor_id)
+        )
 
     # The local import avoids a cycle in the type-only reference module.
     from sdk.client import SessionRef  # noqa: PLC0415
@@ -217,6 +243,49 @@ def actor(watch: SessionWatch, *, exact_name: str, timeout: float) -> ActorRef:
     return watch.wait(f"one subagent named {exact_name!r}", found, timeout=timeout)
 
 
+def actor_message(
+    watch: SessionWatch,
+    *,
+    sender_actor_id: str,
+    recipient_actor_id: str,
+    exact_text: str,
+    timeout: float,
+) -> ActorMessageRef:
+    def found(snapshot: SessionSnapshot) -> ActorMessageRef | None:
+        candidates = [
+            entry
+            for entry in snapshot.entries
+            if entry.actor_id == sender_actor_id
+            and isinstance(entry.body, MessageBodyResponse)
+            and entry.body.recipient_actor_id == recipient_actor_id
+            and entry.body.content.text == exact_text
+        ]
+        item = _one(
+            candidates,
+            f"actor message from {sender_actor_id!r} to {recipient_actor_id!r} "
+            f"with text {exact_text!r}",
+        )
+        return (
+            None
+            if item is None or not isinstance(item.body, MessageBodyResponse)
+            else ActorMessageRef(
+                SessionRef(snapshot.session_id),
+                item.entry_id,
+                item.actor_id,
+                item.body.recipient_actor_id or "",
+                item.body.content.text,
+            )
+        )
+
+    from sdk.client import SessionRef  # noqa: PLC0415
+
+    return watch.wait(
+        f"one actor message from {sender_actor_id!r} to {recipient_actor_id!r}",
+        found,
+        timeout=timeout,
+    )
+
+
 def actor_from_assignment(
     watch: SessionWatch,
     *,
@@ -230,7 +299,7 @@ def actor_from_assignment(
             if item.assignment_id == assignment_reference.assignment_id
         ]
         item = _one(assignments, f"assignment {assignment_reference.assignment_id!r}")
-        if item is None:
+        if item is None or item.actor_id is None:
             return None
         candidate = snapshot.actor(item.actor_id)
         if candidate.parent_actor_id is None:
@@ -266,6 +335,8 @@ def actor_assignment_turn(
         )
         if assignment is None:
             return None
+        if assignment.actor_id is None:
+            return None
         if assignment.actor_id != actor_reference.actor_id:
             raise AssertionError(
                 f"assignment {assignment.assignment_id!r} belongs to actor "
@@ -273,6 +344,7 @@ def actor_assignment_turn(
             )
         actor = snapshot.actor(actor_reference.actor_id)
         if snapshot.data.session.harness == "claude_code":
+            delivered_prompt = assignment.requested_prompt or requested_prompt
             prompts = [
                 entry
                 for entry in snapshot.entries
@@ -281,14 +353,14 @@ def actor_assignment_turn(
                 and isinstance(entry.body, MessageBodyResponse)
                 and entry.body.role in ("user", "parent")
                 and entry.body.phase == "prompt"
-                and entry.body.content.text.strip() == requested_prompt
+                and entry.body.content.text.strip() == delivered_prompt.strip()
             ]
             prompt = _one(prompts, f"prompt for actor {actor_reference.actor_id!r}")
             if prompt is None or not isinstance(prompt.body, MessageBodyResponse):
                 return None
             return TurnRef(
                 session=actor_reference.session,
-                prompt=requested_prompt,
+                prompt=delivered_prompt,
                 cursor_before=assignment.started_cursor,
                 expected_prompt_count=actor.statistics.prompt_count,
                 actor_id=actor_reference.actor_id,
@@ -381,7 +453,11 @@ def file_operation(
         return (
             None
             if item is None
-            else FileOperationRef(SessionRef(snapshot.session_id), item.entry_id)
+            else FileOperationRef(
+                SessionRef(snapshot.session_id),
+                item.entry_id,
+                item.actor_id,
+            )
         )
 
     from sdk.client import SessionRef  # noqa: PLC0415
@@ -454,6 +530,145 @@ def question(
 
     return watch.wait(
         f"one pending question containing {prompt_contains!r}",
+        found,
+        timeout=timeout,
+    )
+
+
+def search(
+    watch: SessionWatch,
+    *,
+    turn_reference: TurnRef,
+    query_contains: str,
+    timeout: float,
+) -> SearchRef:
+    def found(snapshot: SessionSnapshot) -> SearchRef | None:
+        candidates = [
+            entry
+            for entry in snapshot.entries
+            if isinstance(entry.body, SearchBodyResponse)
+            and query_contains in entry.body.query.text
+            and belongs_to_turn(
+                snapshot,
+                turn_reference,
+                turn_id=entry.turn_id,
+                cursor=entry.cursor,
+            )
+        ]
+        entry = _one(candidates, f"search with query containing {query_contains!r}")
+        return (
+            None
+            if entry is None
+            else SearchRef(SessionRef(snapshot.session_id), entry.entry_id)
+        )
+
+    from sdk.client import SessionRef  # noqa: PLC0415
+
+    return watch.wait(
+        f"one search with query containing {query_contains!r}",
+        found,
+        timeout=timeout,
+    )
+
+
+def web_fetch(
+    watch: SessionWatch,
+    *,
+    turn_reference: TurnRef,
+    url: str,
+    timeout: float,
+) -> WebFetchRef:
+    def found(snapshot: SessionSnapshot) -> WebFetchRef | None:
+        candidates = [
+            entry
+            for entry in snapshot.entries
+            if isinstance(entry.body, WebBodyResponse)
+            and entry.body.url == url
+            and belongs_to_turn(
+                snapshot,
+                turn_reference,
+                turn_id=entry.turn_id,
+                cursor=entry.cursor,
+            )
+        ]
+        entry = _one(candidates, f"web fetch for {url!r}")
+        return (
+            None
+            if entry is None
+            else WebFetchRef(SessionRef(snapshot.session_id), entry.entry_id)
+        )
+
+    from sdk.client import SessionRef  # noqa: PLC0415
+
+    return watch.wait(f"one web fetch for {url!r}", found, timeout=timeout)
+
+
+def reasoning_trace(
+    watch: SessionWatch,
+    *,
+    turn_reference: TurnRef,
+    timeout: float,
+) -> ReasoningTraceRef:
+    if turn_reference.actor_id is None:
+        raise AssertionError("reasoning trace requires a resolved actor")
+
+    def found(snapshot: SessionSnapshot) -> ReasoningTraceRef | None:
+        entries = tuple(
+            entry
+            for entry in snapshot.entries
+            if isinstance(entry.body, ReasoningBodyResponse)
+            and entry.actor_id == turn_reference.actor_id
+            and belongs_to_turn(
+                snapshot,
+                turn_reference,
+                turn_id=entry.turn_id,
+                cursor=entry.cursor,
+            )
+        )
+        if not entries:
+            return None
+        return ReasoningTraceRef(
+            SessionRef(snapshot.session_id),
+            turn_reference.actor_id or "",
+            tuple(entry.entry_id for entry in entries),
+        )
+
+    from sdk.client import SessionRef  # noqa: PLC0415
+
+    return watch.wait("at least one reasoning entry", found, timeout=timeout)
+
+
+def worktree_change(
+    watch: SessionWatch,
+    *,
+    turn_reference: TurnRef,
+    action: str,
+    timeout: float,
+) -> WorktreeChangeRef:
+    def found(snapshot: SessionSnapshot) -> WorktreeChangeRef | None:
+        candidates = [
+            entry
+            for entry in snapshot.entries
+            if isinstance(entry.body, WorktreeBodyResponse)
+            and entry.body.action == action
+            and belongs_to_turn(
+                snapshot,
+                turn_reference,
+                turn_id=entry.turn_id,
+                cursor=entry.cursor,
+            )
+        ]
+        entry = _one(candidates, f"worktree change with action {action!r}")
+        return (
+            None
+            if entry is None
+            else WorktreeChangeRef(SessionRef(snapshot.session_id), entry.entry_id)
+        )
+
+    from sdk.client import SessionRef  # noqa: PLC0415
+
+    return watch.wait(
+        f"one worktree change with action {action!r}",
         found,
         timeout=timeout,
     )

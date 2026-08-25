@@ -15,7 +15,10 @@ export type SessionApplication = {
       readonly sequence: number;
     } | null;
     readonly queue: {
-      readonly items: readonly { readonly text: string }[];
+      readonly items: readonly {
+        readonly requestId: string;
+        readonly text: string;
+      }[];
       readonly origin: ClientId;
     } | null;
   };

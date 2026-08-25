@@ -3,80 +3,75 @@
 from __future__ import annotations
 
 import os
+import json
+import shutil
+import subprocess
+import tempfile
+import tomllib
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from api.runtime import ApplicationConfig
-from api.diagnostics.models import DiagnosticsReportResponse
 from sdk.client import BaqylauClient
 from tests.e2e.testkit.policy import WaitPolicy
-from tests.e2e.testkit.process import ApplicationProcess
+from tests.e2e.testkit.planning import PlanWorkDriver
+from tests.e2e.testkit.questions import QuestionWorkDriver
+from tests.e2e.testkit.process import (
+    HARNESS_PARENT_ENVIRONMENT_VARIABLES,
+    ApplicationProcess,
+    assert_clean_diagnostics,
+)
+from tests.e2e.testkit.repository import RepositoryWorkspace
 from tests.e2e.testkit.references import (
+    AccountSelections,
+    ApplicationRestarts,
     Actors,
+    ActorMessages,
     Assignments,
+    AttachmentBundles,
+    BrowserActions,
+    BrowserSessionForms,
     Compactions,
     Controls,
+    FeedSnapshots,
     FileOperations,
+    GlobalStreamUpdates,
     HarnessCatalogs,
     HarnessLists,
     InsightsSnapshots,
     Plans,
     Questions,
+    ReasoningTraces,
     References,
     ResumableLists,
+    Searches,
     SessionContinuations,
+    SessionJourneys,
     SessionSpecs,
+    SessionStreamUpdates,
     Sessions,
     Shells,
     StagedAttachments,
+    StreamCheckpoints,
     Skills,
     Tasks,
     Turns,
+    WebFetches,
+    WorkerControls,
+    WorktreeChanges,
     Works,
 )
 from tests.e2e.testkit.skill_fixtures import SkillFixtures, SkillWorkDriver
 from tests.e2e.testkit.work import WorkDriver
 
-pytest_plugins = (
-    "tests.e2e.steps.catalog",
-    "tests.e2e.steps.attachments",
-    "tests.e2e.steps.compactions",
-    "tests.e2e.steps.controls",
-    "tests.e2e.steps.files",
-    "tests.e2e.steps.insights",
-    "tests.e2e.steps.planning",
-    "tests.e2e.steps.preferences",
-    "tests.e2e.steps.questions",
-    "tests.e2e.steps.scoreboard",
-    "tests.e2e.steps.sessions",
-    "tests.e2e.steps.shells",
-    "tests.e2e.steps.skills",
-    "tests.e2e.steps.subagents",
-    "tests.e2e.steps.usage",
-    "tests.e2e.steps.work",
-)
-
 DEFAULT_WORKSPACE = os.path.expanduser("~/code/personal/baqylau-tests")
 FILE_OPERATION_FIXTURE = "baqylau-e2e-file.txt"
-PARENT_SESSION_VARIABLES = (
-    "CLAUDECODE",
-    "CLAUDE_CODE_CHILD_SESSION",
-    "CLAUDE_CODE_SESSION_ID",
-    "CLAUDE_CODE_ENTRYPOINT",
-    "CLAUDE_CODE_EXECPATH",
-    "CLAUDE_CODE_MESSAGING_SOCKET",
-    "CLAUDE_CODE_MESSAGING_TOKEN",
-    "CLAUDE_CODE_SSE_PORT",
-    "CLAUDE_PID",
-    "CLAUDE_EFFORT",
-    "CLAUDE_OTEL_PORT",
-    "CODEX_COMPANION_SESSION_ID",
-    "BAQYLAU_LAUNCH_MODEL",
-    "BAQYLAU_LAUNCH_EFFORT",
-    "KITTY_WINDOW_ID",
-)
+FILE_RENAME_SOURCE = "baqylau-e2e-rename-source.txt"
+FILE_RENAME_TARGET = "baqylau-e2e-rename-target.txt"
+MISSING_FILE_FIXTURE = "baqylau-e2e-missing-file-963.txt"
+REWIND_FILE_FIXTURE = "baqylau-e2e-rewind.txt"
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -96,48 +91,115 @@ def workspace(pytestconfig: pytest.Config) -> str:
 
 
 @pytest.fixture(scope="session")
+def isolated_codex_home(
+    tmp_path_factory: pytest.TempPathFactory,
+    workspace: str,
+) -> Path:
+    source = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
+    destination = tmp_path_factory.mktemp("baqylau-e2e-codex-home")
+    shutil.copy2(source / "auth.json", destination / "auth.json")
+    shutil.copy2(source / "hooks.json", destination / "hooks.json")
+    source_config = tomllib.loads((source / "config.toml").read_text(encoding="utf-8"))
+    source_hook_states = source_config.get("hooks", {}).get("state", {})
+    hook_state_lines = ["[hooks.state]"]
+    for source_identity, state in source_hook_states.items():
+        _source_path, separator, suffix = source_identity.partition(":")
+        trusted_hash = state.get("trusted_hash")
+        if not separator or not isinstance(trusted_hash, str):
+            continue
+        isolated_identity = f"{destination / 'hooks.json'}:{suffix}"
+        hook_state_lines.extend(
+            (
+                "",
+                f"[hooks.state.{json.dumps(isolated_identity)}]",
+                f"trusted_hash = {json.dumps(trusted_hash)}",
+            )
+        )
+    if len(hook_state_lines) == 1:
+        raise AssertionError("Codex E2E hooks have no trusted source entries")
+    (destination / "config.toml").write_text(
+        "\n".join(
+            (
+                'approval_policy = "never"',
+                'sandbox_mode = "danger-full-access"',
+                'service_tier = "default"',
+                "",
+                f"[projects.{json.dumps(workspace)}]",
+                'trust_level = "trusted"',
+                "",
+                "[features]",
+                "default_mode_request_user_input = true",
+                "hooks = true",
+                "multi_agent_v2 = true",
+                "",
+                *hook_state_lines,
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    return destination
+
+
+@pytest.fixture
+def versioned_workspace() -> str:
+    directory = Path(__file__).resolve().parents[2]
+    subprocess.run(
+        ("git", "-C", str(directory), "rev-parse", "--verify", "HEAD"),
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+    return str(directory)
+
+
+@pytest.fixture
+def repository_workspace(
+    workspace: str,
+    isolated_codex_home: Path,
+) -> Iterator[RepositoryWorkspace]:
+    with tempfile.TemporaryDirectory(
+        prefix="baqylau-repository-",
+        dir=workspace,
+    ) as temporary_directory:
+        repository = RepositoryWorkspace.create(Path(temporary_directory))
+        repository.trust_for_codex(isolated_codex_home)
+        claude_code_trust = repository.trust_for_claude_code()
+        try:
+            yield repository
+        finally:
+            for trust in reversed(claude_code_trust):
+                trust.close()
+
+
+@pytest.fixture(scope="session")
 def application_process(
     pytestconfig: pytest.Config,
     tmp_path_factory: pytest.TempPathFactory,
+    isolated_codex_home: Path,
 ) -> Iterator[ApplicationProcess]:
     configured = pytestconfig.getoption("--e2e-data-dir")
     data_directory = (
-        Path(str(configured)).expanduser().resolve()
-        if configured
-        else tmp_path_factory.mktemp("baqylau-live-data")
+        Path(str(configured)).expanduser().resolve() if configured else tmp_path_factory.mktemp("baqylau-live-data")
     )
-    process = ApplicationProcess.start(ApplicationConfig(
-        data_directory=Path(data_directory),
-        port=0,
-        terminal="pty",
-        notify_telegram=False,
-        notify_webpush=False,
-        environment_removals=PARENT_SESSION_VARIABLES,
-        base_environment=dict(os.environ),
-    ))
+    process = ApplicationProcess.start(
+        ApplicationConfig(
+            data_directory=Path(data_directory),
+            port=0,
+            terminal="pty",
+            notify_telegram=False,
+            notify_webpush=False,
+            environment_removals=HARNESS_PARENT_ENVIRONMENT_VARIABLES,
+            base_environment={
+                **os.environ,
+                "CODEX_HOME": str(isolated_codex_home),
+            },
+        )
+    )
     try:
         yield process
     finally:
         exit_code = process.stop()
         assert exit_code == 0, f"application process exited with {exit_code}"
-
-
-def _assert_report_is_clean(label: str, report: DiagnosticsReportResponse) -> None:
-    findings = []
-    if report.raw_event_count != report.verdict_count:
-        findings.append(
-            f"{report.raw_event_count - report.verdict_count} raw events have no verdict"
-        )
-    findings.extend(
-        f"raw event {item.raw_event_cursor} {item.source_type}:{item.source_position} "
-        f"has decision {item.decision!r}: {item.reason or 'no reason'}; {item.payload}"
-        for item in report.interpretation_problems
-    )
-    findings.extend(
-        f"audit error {item.error_cursor} {item.component} {item.action}: {item.context}"
-        for item in report.audit_problems
-    )
-    assert not findings, label + ":\n" + "\n".join(findings)
 
 
 @pytest.fixture(scope="session")
@@ -148,7 +210,7 @@ def client(application_process: ApplicationProcess) -> Iterator[BaqylauClient]:
     try:
         yield running
         end = running.diagnostics.wait_until_drained()
-        _assert_report_is_clean(
+        assert_clean_diagnostics(
             "the complete E2E run has pipeline findings",
             running.diagnostics.report(start, end),
         )
@@ -167,6 +229,11 @@ def session_specs() -> SessionSpecs:
 
 
 @pytest.fixture
+def account_selections() -> AccountSelections:
+    return References("account selection")
+
+
+@pytest.fixture
 def sessions() -> Sessions:
     return References("session")
 
@@ -177,13 +244,53 @@ def session_continuations() -> SessionContinuations:
 
 
 @pytest.fixture
+def application_restarts() -> ApplicationRestarts:
+    return References("application restart")
+
+
+@pytest.fixture
+def session_journeys() -> SessionJourneys:
+    return References("session journey")
+
+
+@pytest.fixture
 def turns() -> Turns:
     return References("turn")
 
 
 @pytest.fixture
+def browser_actions() -> BrowserActions:
+    return References("browser action")
+
+
+@pytest.fixture
 def works() -> Works:
     return References("work")
+
+
+@pytest.fixture
+def worker_controls() -> WorkerControls:
+    return References("worker control")
+
+
+@pytest.fixture
+def feed_snapshots() -> FeedSnapshots:
+    return References("feed snapshot")
+
+
+@pytest.fixture
+def stream_checkpoints() -> StreamCheckpoints:
+    return References("stream checkpoint")
+
+
+@pytest.fixture
+def session_stream_updates() -> SessionStreamUpdates:
+    return References("session stream update")
+
+
+@pytest.fixture
+def global_stream_updates() -> GlobalStreamUpdates:
+    return References("global stream update")
 
 
 @pytest.fixture
@@ -193,6 +300,16 @@ def work_driver(
     wait_policy: WaitPolicy,
 ) -> WorkDriver:
     return WorkDriver(client, workspace, wait_policy)
+
+
+@pytest.fixture
+def plan_work_driver(client: BaqylauClient) -> PlanWorkDriver:
+    return PlanWorkDriver(client)
+
+
+@pytest.fixture
+def question_work_driver(work_driver: WorkDriver) -> QuestionWorkDriver:
+    return QuestionWorkDriver(work_driver)
 
 
 @pytest.fixture
@@ -223,6 +340,11 @@ def actors() -> Actors:
 
 
 @pytest.fixture
+def actor_messages() -> ActorMessages:
+    return References("actor message")
+
+
+@pytest.fixture
 def assignments() -> Assignments:
     return References("assignment")
 
@@ -233,8 +355,33 @@ def file_operations() -> FileOperations:
 
 
 @pytest.fixture
+def searches() -> Searches:
+    return References("web search")
+
+
+@pytest.fixture
+def web_fetches() -> WebFetches:
+    return References("web fetch")
+
+
+@pytest.fixture
+def reasoning_traces() -> ReasoningTraces:
+    return References("reasoning trace")
+
+
+@pytest.fixture
+def worktree_changes() -> WorktreeChanges:
+    return References("worktree change")
+
+
+@pytest.fixture
 def staged_attachments() -> StagedAttachments:
     return References("staged attachment")
+
+
+@pytest.fixture
+def attachment_bundles() -> AttachmentBundles:
+    return References("attachment bundle")
 
 
 @pytest.fixture
@@ -288,12 +435,72 @@ def resumable_lists() -> ResumableLists:
 
 
 @pytest.fixture
+def browser_session_forms() -> BrowserSessionForms:
+    return References("browser session form")
+
+
+@pytest.fixture
 def file_operation_path(workspace: str) -> Iterator[str]:
     path = os.path.join(workspace, FILE_OPERATION_FIXTURE)
     try:
         os.unlink(path)
     except FileNotFoundError:
         pass
+    try:
+        yield path
+    finally:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+
+
+@pytest.fixture
+def file_rename_paths(workspace: str) -> Iterator[tuple[str, str]]:
+    paths = (
+        os.path.join(workspace, FILE_RENAME_SOURCE),
+        os.path.join(workspace, FILE_RENAME_TARGET),
+    )
+    for path in paths:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+    try:
+        yield paths
+    finally:
+        for path in paths:
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+
+
+@pytest.fixture
+def missing_file_path(workspace: str) -> Iterator[str]:
+    path = os.path.join(workspace, MISSING_FILE_FIXTURE)
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+    try:
+        yield path
+    finally:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+
+
+@pytest.fixture
+def rewind_file_path(workspace: str) -> Iterator[str]:
+    path = os.path.join(workspace, REWIND_FILE_FIXTURE)
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+    with open(path, "w", encoding="utf-8") as fixture:
+        fixture.write("rewind-baseline-194\n")
     try:
         yield path
     finally:
@@ -313,14 +520,14 @@ def scenario_signoff(
     yield
     for session in sessions.values():
         snapshot = client.sessions.snapshot(session)
-        if snapshot.data.session.state != "finished":
+        if snapshot.data.session.state != "finished" and snapshot.data.live:
             receipt = client.sessions.close(session)
             assert receipt.status_code in (200, 202), (
                 f"cleanup action {receipt.request_id!r} was not accepted: {receipt.outcome}"
             )
         client.sessions.wait_until_finished(session, wait_policy.cleanup)
     end = client.diagnostics.wait_until_drained(wait_policy.pipeline)
-    _assert_report_is_clean(
+    assert_clean_diagnostics(
         "the scenario has pipeline findings",
         client.diagnostics.report(start, end),
     )

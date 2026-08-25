@@ -15,6 +15,7 @@ from tests.e2e.testkit.references import (
     SessionSpec,
     TurnRef,
     WorkerKind,
+    WorkerControlRef,
     WorkerRef,
     WorkRef,
 )
@@ -54,6 +55,8 @@ def _delegation_prompt(
     work_name: str,
     work_prompt: str,
     attachments: tuple[AttachmentReferenceBody, ...],
+    *,
+    named: bool = False,
 ) -> str:
     attachment_note = ""
     if attachments:
@@ -73,11 +76,16 @@ def _delegation_prompt(
             "with the word delegated."
         )
     elif harness == "claude_code":
+        name_instruction = (
+            f"Set name to {name!r}. "
+            if named
+            else "Do not set name. "
+        )
         instruction = (
             "Use the Agent tool exactly once. "
             f"Use description {name!r}. Give the subagent the exact work text "
             "between WORK START and WORK END. Do not do the work yourself. "
-            "Do not use another tool. After the Agent tool returns, reply only "
+            f"{name_instruction}Do not use another tool. After the Agent tool returns, reply only "
             "with the word delegated."
         )
     else:
@@ -129,6 +137,59 @@ def _parallel_delegation_prompt(
     return f"{instruction}\n\n{blocks}"
 
 
+def _delegation_with_followup_prompt(
+    harness: str,
+    work_name: str,
+    work_prompt: str,
+    followup: str,
+) -> str:
+    name = _worker_name(work_name)
+    if harness == "codex":
+        work_json = json.dumps(work_prompt).replace("$", "\\u0024")
+        followup_json = json.dumps(followup).replace("$", "\\u0024")
+        return (
+            "Use multi_agent_v2__spawn_agent exactly once. "
+            f"Set task_name to {name!r}. Decode WORK MESSAGE JSON as JSON and "
+            "set message to the decoded string exactly. After the subagent "
+            "starts, use followup_task exactly once. Set target to "
+            f"'/root/{name}'. Decode FOLLOW-UP JSON as JSON and set message "
+            "to the decoded string exactly. Do not do the work yourself. "
+            "After the follow-up request returns, reply only with FOLLOWUP_SENT."
+            f"\n\nWORK MESSAGE JSON\n{work_json}"
+            f"\n\nFOLLOW-UP JSON\n{followup_json}"
+        )
+    if harness == "claude_code":
+        return (
+            "Use the Agent tool exactly once. "
+            f"Use description {name!r}. Give the subagent the exact work text "
+            "between WORK START and WORK END. After the asynchronous Agent "
+            "launch returns, use SendMessage exactly once. Set `to` to the "
+            "agentId returned by Agent. Set `message` to the exact text between "
+            "FOLLOW-UP START and FOLLOW-UP END. Use summary 'E2E follow-up'. "
+            "Do not do the work yourself. After SendMessage returns, reply only "
+            "with FOLLOWUP_SENT."
+            f"\n\nWORK START\n{work_prompt}\nWORK END"
+            f"\n\nFOLLOW-UP START\n{followup}\nFOLLOW-UP END"
+        )
+    raise AssertionError(f"harness {harness!r} has no subagent follow-up adapter")
+
+
+def _child_to_lead_message_prompt(
+    harness: str,
+    message: str,
+    result: str,
+) -> str:
+    if harness == "claude_code":
+        return (
+            "Use SendMessage exactly once. Set `to` to 'team-lead'. Set `message` "
+            "to the exact text between PARENT MESSAGE START and PARENT MESSAGE "
+            "END. Do not use another tool. After the message request returns, "
+            f"reply only with {result}."
+            f"\n\nPARENT MESSAGE START\n{message}\nPARENT MESSAGE END"
+        )
+    raise AssertionError(f"harness {harness!r} has no actor message adapter")
+
+
 class WorkDriver:
     def __init__(
         self,
@@ -158,11 +219,12 @@ class WorkDriver:
         )
         launch = self._client.sessions.launch(
             spec.harness,
-            workspace=self._workspace,
+            workspace=spec.workspace or self._workspace,
             prompt=request_prompt,
             model=spec.model,
             effort=spec.effort,
             attachments=attachments,
+            account_id=spec.account_id,
         )
         session = self._client.sessions.wait_for_session(
             launch,
@@ -176,6 +238,8 @@ class WorkDriver:
             session,
             self._resolve(
                 request_turn,
+                harness=spec.harness,
+                work_name=work_name,
                 prompt=prompt,
                 worker_kind=worker_kind,
             ),
@@ -189,6 +253,8 @@ class WorkDriver:
         work_name: str,
         worker_kind: WorkerKind,
         prompt: str,
+        attachments: tuple[AttachmentReferenceBody, ...] = (),
+        named: bool = False,
     ) -> WorkRef:
         before = self._client.sessions.snapshot(session)
         lead = before.lead()
@@ -197,9 +263,14 @@ class WorkDriver:
             work_name,
             worker_kind,
             prompt,
-            (),
+            attachments,
+            named=named,
         )
-        receipt = self._client.sessions.send(session, request_prompt)
+        receipt = self._client.sessions.send(
+            session,
+            request_prompt,
+            attachments=attachments,
+        )
         if receipt.status_code != 200 or receipt.outcome.status != "acknowledged":
             raise AssertionError(
                 f"send action {receipt.request_id!r} was not accepted: {receipt.outcome}"
@@ -210,11 +281,32 @@ class WorkDriver:
             receipt.cursor_before,
             lead.statistics.prompt_count + 1,
             actor_id=lead.actor_id,
+            attachment_paths=tuple(
+                item.local_path
+                for item in attachments
+                if not (
+                    spec.harness == "claude_code"
+                    and (item.media_type or "").startswith("image/")
+                )
+            ),
+            native_attachment_names=tuple(
+                item.display_name
+                for item in attachments
+                if spec.harness == "claude_code"
+                and (item.media_type or "").startswith("image/")
+            ),
         )
         return self._resolve(
             request_turn,
+            harness=spec.harness,
+            work_name=work_name,
             prompt=prompt,
             worker_kind=worker_kind,
+            exact_actor_name=(
+                _assignment_actor_name(spec.harness, work_name)
+                if named and worker_kind == WorkerKind.SUBAGENT
+                else None
+            ),
         )
 
     def launch_parallel(
@@ -225,10 +317,11 @@ class WorkDriver:
         request_prompt = _parallel_delegation_prompt(spec.harness, requests)
         launch = self._client.sessions.launch(
             spec.harness,
-            workspace=self._workspace,
+            workspace=spec.workspace or self._workspace,
             prompt=request_prompt,
             model=spec.model,
             effort=spec.effort,
+            account_id=spec.account_id,
         )
         session = self._client.sessions.wait_for_session(
             launch,
@@ -243,6 +336,8 @@ class WorkDriver:
                 request.name,
                 self._resolve(
                     request_turn,
+                    harness=spec.harness,
+                    work_name=request.name,
                     prompt=request.prompt,
                     worker_kind=WorkerKind.SUBAGENT,
                     exact_actor_name=(
@@ -257,6 +352,91 @@ class WorkDriver:
         )
         return StartedParallelWork(session, request_turn, works)
 
+    def launch_with_followup(
+        self,
+        spec: SessionSpec,
+        *,
+        work_name: str,
+        prompt: str,
+        followup: str,
+    ) -> StartedWork:
+        request_prompt = _delegation_with_followup_prompt(
+            spec.harness,
+            work_name,
+            prompt,
+            followup,
+        )
+        launch = self._client.sessions.launch(
+            spec.harness,
+            workspace=spec.workspace or self._workspace,
+            prompt=request_prompt,
+            model=spec.model,
+            effort=spec.effort,
+            account_id=spec.account_id,
+        )
+        session = self._client.sessions.wait_for_session(
+            launch,
+            self._wait_policy.session_announcement,
+        )
+        request_turn = selectors.launched_turn(
+            self._client.sessions.watch(session),
+            self._wait_policy.feed,
+        )
+        return StartedWork(
+            session,
+            self._resolve(
+                request_turn,
+                harness=spec.harness,
+                work_name=work_name,
+                prompt=prompt,
+                worker_kind=WorkerKind.SUBAGENT,
+                exact_prompt=prompt if spec.harness == "claude_code" else None,
+            ),
+        )
+
+    def launch_with_parent_message(
+        self,
+        spec: SessionSpec,
+        *,
+        work_name: str,
+        message: str,
+        result: str,
+    ) -> StartedWork:
+        child_prompt = _child_to_lead_message_prompt(spec.harness, message, result)
+        request_prompt = _delegation_prompt(
+            spec.harness,
+            work_name,
+            child_prompt,
+            (),
+        )
+        launch = self._client.sessions.launch(
+            spec.harness,
+            workspace=spec.workspace or self._workspace,
+            prompt=request_prompt,
+            model=spec.model,
+            effort=spec.effort,
+            account_id=spec.account_id,
+        )
+        session = self._client.sessions.wait_for_session(
+            launch,
+            self._wait_policy.session_announcement,
+        )
+        request_turn = selectors.launched_turn(
+            self._client.sessions.watch(session),
+            self._wait_policy.feed,
+        )
+        return StartedWork(
+            session,
+            self._resolve(
+                request_turn,
+                harness=spec.harness,
+                work_name=work_name,
+                prompt=child_prompt,
+                worker_kind=WorkerKind.SUBAGENT,
+                exact_prompt=child_prompt if spec.harness == "claude_code" else None,
+            ),
+        )
+
     @staticmethod
     def _request_prompt(
         spec: SessionSpec,
@@ -264,6 +444,8 @@ class WorkDriver:
         worker_kind: WorkerKind,
         prompt: str,
         attachments: tuple[AttachmentReferenceBody, ...],
+        *,
+        named: bool = False,
     ) -> str:
         if worker_kind == WorkerKind.LEAD:
             return prompt
@@ -272,12 +454,15 @@ class WorkDriver:
             work_name,
             prompt,
             attachments,
+            named=named,
         )
 
     def _resolve(
         self,
         request_turn: TurnRef,
         *,
+        harness: str,
+        work_name: str,
         prompt: str,
         worker_kind: WorkerKind,
         exact_actor_name: str | None = None,
@@ -328,7 +513,45 @@ class WorkDriver:
             request_turn.session,
             prompt,
             request_turn,
-            WorkerRef(request_turn.session, WorkerKind.SUBAGENT, actor.actor_id),
+            WorkerRef(
+                request_turn.session,
+                WorkerKind.SUBAGENT,
+                actor.actor_id,
+                (
+                    f"/root/{_worker_name(work_name)}"
+                    if harness == "codex"
+                    else actor.actor_id
+                ),
+                request_turn.actor_id,
+            ),
             child_turn,
             AssignmentRef(request_turn.session, assignment.assignment_id),
+        )
+
+    def interrupt(self, spec: SessionSpec, work: WorkRef) -> WorkerControlRef:
+        if work.worker.kind != WorkerKind.SUBAGENT or work.worker.address is None:
+            raise AssertionError("worker interruption requires a named subagent")
+        if spec.harness == "codex":
+            prompt = (
+                "Use interrupt_agent exactly once. Set target to "
+                f"{work.worker.address!r}. Do not use another tool. After the "
+                "interrupt request returns, reply only with INTERRUPT_SENT."
+            )
+            return WorkerControlRef(work, turn=self._send_lead_turn(work.session, prompt))
+        raise AssertionError(f"harness {spec.harness!r} has no worker interrupt adapter")
+
+    def _send_lead_turn(self, session: SessionRef, prompt: str) -> TurnRef:
+        before = self._client.sessions.snapshot(session)
+        lead = before.lead()
+        receipt = self._client.sessions.send(session, prompt)
+        if receipt.status_code != 200 or receipt.outcome.status != "acknowledged":
+            raise AssertionError(
+                f"send action {receipt.request_id!r} was not accepted: {receipt.outcome}"
+            )
+        return TurnRef(
+            session,
+            prompt,
+            receipt.cursor_before,
+            lead.statistics.prompt_count + 1,
+            actor_id=lead.actor_id,
         )

@@ -14,7 +14,6 @@ from typing import cast
 import pytest
 from pydantic import TypeAdapter
 
-from conftest import REPOSITORY_ROOT  # noqa: F401  (path setup for the imports below)
 from fake_terminal import FakeTerminal, window
 from terminal.contract import (
     TerminalInput,
@@ -26,7 +25,7 @@ from terminal.contract import (
 )
 from terminal.impl import resolve
 from terminal.impl.kitty.plugin import kitty_plugin
-from terminal.impl.kitty.remote import KittyOSWindow, KittyRemote
+from terminal.impl.kitty.remote import KittyOSWindow, KittyRcResponse, KittyRemote
 from terminal.impl.null import null_plugin
 from terminal.impl.pty.plugin import pty_plugin
 from terminal.models import (
@@ -209,8 +208,20 @@ def test_the_window_tree_is_flattened_into_terminal_agnostic_rows():
             "is_active": True,
             "is_focused": True,
             "windows": [
-                {"id": 7, "columns": 75, "lines": 40, "user_vars": {"baqylau_session": "session-one"}},
-                {"id": 8, "columns": 25, "lines": 35, "user_vars": {ACTIVITY_PANE_TAG: "session-one"}},
+                {
+                    "id": 7,
+                    "columns": 75,
+                    "lines": 40,
+                    "is_active": True,
+                    "user_vars": {"baqylau_session": "session-one"},
+                },
+                {
+                    "id": 8,
+                    "columns": 25,
+                    "lines": 35,
+                    "is_active": False,
+                    "user_vars": {ACTIVITY_PANE_TAG: "session-one"},
+                },
             ],
         }],
     }])
@@ -220,8 +231,44 @@ def test_the_window_tree_is_flattened_into_terminal_agnostic_rows():
     assert [found.window_id for found in windows] == ["7", "8"]
     assert [found.is_first_in_tab for found in windows] == [True, False]
     assert windows[0].tab_id == "3" and windows[0].tab_is_focused
+    assert windows[0].is_active_in_tab and not windows[1].is_active_in_tab
     assert windows[1].tags == {ACTIVITY_PANE_TAG: "session-one"}
     assert (windows[0].columns, windows[0].lines) == (75, 40)
+
+
+def test_the_window_tree_uses_the_socket_without_a_kitten_process():
+    class SocketRemote(KittyRemote):
+        def __init__(self):
+            super().__init__(listen="unix:/unused", kitten="kitten")
+            self.raw_calls = []
+
+        def raw(self, cmd, payload, want_response=False, timeout=None):
+            self.raw_calls.append((cmd, payload, want_response))
+            return KittyRcResponse(ok=True, data='[{"tabs": [{"id": 3, "windows": [{"id": 7}]}]}]')
+
+        def capture(self, *arguments, timeout=None):
+            raise AssertionError(f"unexpected kitten process: {arguments}")
+
+    remote = SocketRemote()
+
+    windows = kitty_plugin(remote).metadata.windows()
+
+    assert [window.window_id for window in windows] == ["7"]
+    assert remote.raw_calls[0][0] == "ls"
+
+
+def test_a_tab_launch_keeps_focus_only_when_kitty_is_already_focused():
+    background = FakeRemote(printed="7")
+    kitty_plugin(background).tabs.open_tab(TabOpenRequest("/work", ("claude",), ""))
+
+    focused = FakeRemote(printed="8")
+    focused.app_focused = lambda tree=None: True
+    kitty_plugin(focused).tabs.open_tab(TabOpenRequest("/work", ("claude",), ""))
+
+    background_launch = next(call for call in background.calls if call[0] == "launch")
+    focused_launch = next(call for call in focused.calls if call[0] == "launch")
+    assert "--keep-focus" not in background_launch
+    assert "--keep-focus" in focused_launch
 
 
 def test_a_failed_listing_answers_with_the_last_good_one_not_emptiness():

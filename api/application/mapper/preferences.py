@@ -48,7 +48,11 @@ def composer_state(composer_state: ComposerState) -> ComposerStateResponse:
             None if composer_state.queue is None
             else ComposerQueueResponse(
                 items=tuple(
-                    QueuedMessageResponse(text=item.text) for item in composer_state.queue.items
+                    QueuedMessageResponse(
+                        request_id=str(item.request_id),
+                        text=item.text,
+                    )
+                    for item in composer_state.queue.items
                 ),
                 origin=composer_state.queue.origin,
             )

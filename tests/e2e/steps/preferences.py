@@ -6,8 +6,8 @@ import time
 
 from pytest_bdd import parsers, then, when
 
-from sdk.client import BaqylauClient
-from tests.e2e.testkit.references import Sessions
+from sdk.client import BaqylauClient, QuestionDraftAnswer, wait_for
+from tests.e2e.testkit.references import Questions, Sessions
 
 
 @when(parsers.parse(
@@ -56,16 +56,22 @@ def save_composer_draft(
     )
 
 
-@when(parsers.parse('I queue message \'{text}\' for session "{name}"'))
-def queue_message(
+@when(parsers.parse(
+    'I save a draft for question "{name}" with option \'{option}\' '
+    'and free text \'{text}\''
+))
+def save_question_draft(
     client: BaqylauClient,
-    sessions: Sessions,
+    questions: Questions,
     name: str,
+    option: str,
     text: str,
 ) -> None:
-    client.preferences.save_composer_queue(
-        sessions.get(name),
-        messages=(text,),
+    reference = questions.get(name)
+    client.preferences.save_question_draft(
+        reference.session,
+        attention_id=reference.attention_id,
+        answers=(QuestionDraftAnswer((option,), text),),
         origin="e2e",
     )
 
@@ -121,13 +127,24 @@ def global_new_session_draft_is_saved(
     workspace: str,
     text: str,
 ) -> None:
-    found = [
-        item
-        for item in client.preferences.global_state().preferences.new_session_drafts
-        if item.working_directory == workspace
-    ]
-    assert len(found) == 1, f"workspace {workspace!r} has {len(found)} new-session drafts"
-    assert found[0].text == text
+    def saved() -> bool | None:
+        found = [
+            item
+            for item in client.preferences.global_state().preferences.new_session_drafts
+            if item.working_directory == workspace
+        ]
+        if not found:
+            return None
+        assert len(found) == 1, (
+            f"workspace {workspace!r} has {len(found)} new-session drafts"
+        )
+        return True if found[0].text == text else None
+
+    wait_for(
+        f"new-session draft for workspace {workspace!r}",
+        saved,
+        timeout=5,
+    )
 
 
 @then(parsers.parse('composer draft for session "{name}" is \'{text}\''))
@@ -143,17 +160,25 @@ def composer_draft_is_saved(
     assert found.origin == "e2e"
 
 
-@then(parsers.parse('composer queue for session "{name}" contains \'{text}\''))
-def composer_queue_contains(
+@then(parsers.parse(
+    'question draft "{name}" restores option \'{option}\' '
+    'and free text \'{text}\''
+))
+def question_draft_is_restored(
     client: BaqylauClient,
-    sessions: Sessions,
+    questions: Questions,
     name: str,
+    option: str,
     text: str,
 ) -> None:
-    found = client.preferences.session_state(sessions.get(name)).composer.queue
+    reference = questions.get(name)
+    found = client.preferences.session_state(reference.session).dialog.draft
     assert found is not None
-    assert [item.text for item in found.items] == [text]
+    assert found.attention_id == reference.attention_id
     assert found.origin == "e2e"
+    assert len(found.answers) == 1
+    assert found.answers[0].selected == (option,)
+    assert found.answers[0].other == text
 
 
 @then(parsers.parse('view mode for session "{name}" is {view_mode}'))

@@ -22,7 +22,6 @@
     | 'rename'
     | 'autoname'
     | 'alerts'
-    | 'rewind'
     | 'interrupt'
     | 'close';
   type Menu = 'model' | 'effort' | 'rename';
@@ -166,8 +165,9 @@
     });
   }
 
-  async function startRewind(): Promise<void> {
-    await run('rewind', () => view.beginRewind());
+  function startRewind(): void {
+    menu = null;
+    view.beginRewind();
   }
 
   function pickModel(modelId: string): void {

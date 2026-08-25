@@ -46,5 +46,15 @@ describe('feed item', () => {
     await user.click(header);
     expect(block).toHaveAttribute('data-open', '1');
     expect(screen.getByText('new')).toBeVisible();
+    expect(container.querySelector('.removed')).toHaveAttribute(
+      'aria-label',
+      'removed line 1',
+    );
+    expect(container.querySelector('.added')).toHaveAttribute(
+      'aria-label',
+      'added line 1',
+    );
+    expect(container.querySelector('.removed .dm')).toHaveTextContent('−');
+    expect(container.querySelector('.added .dm')).toHaveTextContent('+');
   });
 });

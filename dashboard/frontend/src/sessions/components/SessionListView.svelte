@@ -42,22 +42,22 @@
 {:else if appState.sessions.length === 0}
   <div class="empty">no sessions recorded yet</div>
 {:else}
-  {#each groups as group (group.workingDirectory)}
+  {#each groups as group (group.projectDirectory)}
     <div class="dirhead">
       <span class="dirname"
-        >{directoryName(group.workingDirectory) || 'no project'}</span
+        >{directoryName(group.projectDirectory) || 'no project'}</span
       >
-      {#if group.workingDirectory.length > 0}
-        <span class="dirpath">{group.workingDirectory}</span>
+      {#if group.projectDirectory.length > 0}
+        <span class="dirpath">{group.projectDirectory}</span>
       {/if}
       <span class="dircount">{sessionCount(group.count)}</span>
-      {#if group.workingDirectory.length > 0}
+      {#if group.projectDirectory.length > 0}
         <button
           class="dirnew"
           type="button"
-          title={`new session in ${group.workingDirectory}`}
+          title={`new session in ${group.projectDirectory}`}
           onclick={() => {
-            appState.requestNewSession(group.workingDirectory);
+            appState.requestNewSession(group.projectDirectory);
           }}>+</button
         >
       {/if}
@@ -67,11 +67,11 @@
         disabled={group.active.length > 0}
         title={group.active.length > 0
           ? `can't hide — ${String(group.active.length)} ${group.active.length === 1 ? 'active session' : 'active sessions'} here`
-          : group.workingDirectory.length > 0
+          : group.projectDirectory.length > 0
             ? 'hide this directory from the list (re-appears when a new session starts here)'
             : 'hide the projectless sessions from the list (re-appears when a new one starts)'}
         onclick={() => {
-          void appState.hideWorkingDirectory(group.workingDirectory);
+          void appState.hideWorkingDirectory(group.projectDirectory);
         }}>✕</button
       >
     </div>
@@ -86,17 +86,17 @@
       {@const rows = group[kind]}
       {#if rows.length > 0}
         <button
-          class:open={foldOpen(group.workingDirectory, kind)}
+          class:open={foldOpen(group.projectDirectory, kind)}
           class="fold"
           type="button"
           onclick={() => {
-            toggleFold(group.workingDirectory, kind);
+            toggleFold(group.projectDirectory, kind);
           }}
         >
-          {foldOpen(group.workingDirectory, kind) ? '▾' : '▸'}
+          {foldOpen(group.projectDirectory, kind) ? '▾' : '▸'}
           {kind} · {rows.length}
         </button>
-        {#if foldOpen(group.workingDirectory, kind)}
+        {#if foldOpen(group.projectDirectory, kind)}
           <div class="sgrid folded">
             {#each rows as snapshot (snapshot.session.sessionId)}
               <SessionCard {snapshot} />

@@ -317,6 +317,24 @@ class Origin(BaseModel):
     from_: str | None = Field(default=None, alias="from")
 
 
+class TeammateIdleNotificationDocument(BaseModel):
+    """The JSON body in one Claude team ``idle_notification`` message."""
+
+    model_config = FOREIGN
+    type: Literal["idle_notification"] = "idle_notification"
+    from_: str = Field(alias="from")
+    timestamp: str | None = None
+    idleReason: str
+    failureReason: str | None = None
+
+
+class TeammateMessageBodyHeader(BaseModel):
+    """Only the discriminator for an optional JSON teammate message body."""
+
+    model_config = OPEN_FOREIGN
+    type: str | None = None
+
+
 class UserRecord(BaseModel):
     model_config = FOREIGN
     type: Literal["user"] = "user"
@@ -352,7 +370,7 @@ class UserRecord(BaseModel):
     sourceToolUseID: str | None = None
     toolDenialKind: str | None = None
     turnCompanion: bool | None = None
-    userFeedback: ForeignMetadata | None = None
+    userFeedback: ForeignMetadata | str | None = None
     imagePasteIds: list[str | int] | None = None
 
 
@@ -508,8 +526,8 @@ class AttachmentRecord(BaseModel, Generic[AttachmentBody]):
 
 class QueueOperationRecord(BaseModel):
     """A `type=queue-operation` record — the enqueue half of a
-    task-notification's delivery (transcript.py header); read for nothing but
-    its `type`, so declared as far as the corpus goes and no further."""
+    task-notification's delivery. Most notifications also have a `user` copy.
+    A child background command can have only this parent-transcript copy."""
 
     model_config = FOREIGN
     type: Literal["queue-operation"] = "queue-operation"
@@ -691,6 +709,7 @@ class ToolResponse(BaseModel):
 
     model_config = OPEN_FOREIGN
     content: str | ToolResponseBlocks | None = None
+    result: str | ToolResponseBlocks | None = None
     file: ToolResponseFile | None = None
     type: str | None = None
     structuredPatch: list[PatchHunk] | None = None
@@ -698,6 +717,11 @@ class ToolResponse(BaseModel):
     backgroundedByUser: bool | None = None
     isAsync: bool | None = None
     status: str | None = None
+    name: str | None = None
+    agentId: str | None = None
+    agent_id: str | None = None
+    teammate_id: str | None = None
+    team_name: str | None = None
     taskId: str | None = None
     planWasEdited: bool | None = None
 
@@ -750,6 +774,7 @@ class HookPayload(BaseModel):
     hook_event_id: str | None = None
     uuid: str | None = None
     session_id: ClaudeCodeSessionId | None = None
+    session_title: str | None = None
     transcript_path: str | None = None
     agent_transcript_path: str | None = None
     cwd: str | None = None

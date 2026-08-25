@@ -4,33 +4,87 @@ from __future__ import annotations
 
 import threading
 import time
+from dataclasses import dataclass
 from typing import Callable, Mapping
 
 from pydantic import JsonValue
 
-from domain.events import CanonicalEvent, EventPayload
+from domain.events import CanonicalEvent, EventPayload, SessionFinished, SessionStarted
 from domain.records import RecordedTranslationDecision
+from audit.failures import CoalescingFailureRecorder
 from audit.recorder import AuditRecorder
 from harness.contract import (
     CanonicalEventReaction,
     CoreTranslator,
     HarnessRawEventSource,
+    SessionResumeRecorder,
+    SessionTerminalState,
+    TerminalWindows,
 )
 from harness.models import InterruptRegistry, RawEvent, Session, TranslationResult
 from harness.registry import HarnessRegistry
 from engine.interpret import output_source
 from engine.interpret.interrupts import PendingInterruptSource
-from engine.interpret.liveness import ProcessProbe, SessionLivenessSource
+from engine.interpret.liveness import (
+    ProcessProbe,
+    SessionLivenessSource,
+    SessionWindowLivenessSource,
+)
 from repository.contract.facts import CanonicalEventRepository, RawEventRepository
 from repository.contract.shell_output import ShellOutputRepository
 from repository.contract.sessions import SessionRepository
 
 TICK_INTERVAL_SECONDS = 0.25
+TERMINAL_SNAPSHOT_INTERVAL_SECONDS = 1.0
+SHELL_OUTPUT_EXPIRY_INTERVAL_SECONDS = 60.0
 TRANSLATION_BATCH_SIZE = 500
 
 
 class TranslationConsistencyError(ValueError):
     """A translation does not agree with the raw event it came from."""
+
+
+class TerminalSnapshotSampler:
+    """Use one terminal window snapshot for several fast interpreter ticks."""
+
+    def __init__(
+        self,
+        session_terminal_state: SessionTerminalState | None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._terminal = session_terminal_state
+        self._clock = clock
+        self._sampled_at: float | None = None
+        self._windows: TerminalWindows = ()
+
+    def sample(self) -> TerminalWindows:
+        if self._terminal is None:
+            return ()
+        now = self._clock()
+        if (
+            self._sampled_at is None
+            or now - self._sampled_at >= TERMINAL_SNAPSHOT_INTERVAL_SECONDS
+        ):
+            self._windows = self._terminal.windows()
+            self._sampled_at = now
+        return self._windows
+
+    def invalidate(self) -> None:
+        """Make the next sample read the terminal again.
+
+        A launch can add a window between two interpreter ticks. The snapshot
+        from before that launch must not be used to decide that the new window
+        has already closed.
+        """
+        self._sampled_at = None
+
+
+@dataclass(frozen=True)
+class SessionSourceBatch:
+    """All pull sources for one session in one interpreter cycle."""
+
+    session: Session
+    sources: tuple[HarnessRawEventSource, ...]
 
 
 def checked(raw_event: RawEvent, translation_result: TranslationResult) -> TranslationResult:
@@ -61,9 +115,7 @@ def _check_consistency(raw_event: RawEvent, event: CanonicalEvent[EventPayload])
     if event.actor_id != raw_event.actor_id:
         raise TranslationConsistencyError("canonical event actor does not match its raw event")
     if event.parent_actor_id != raw_event.parent_actor_id:
-        raise TranslationConsistencyError(
-            "canonical event parent actor does not match its raw event"
-        )
+        raise TranslationConsistencyError("canonical event parent actor does not match its raw event")
     if event.parent_actor_id == event.actor_id:
         raise TranslationConsistencyError("an actor cannot be its own parent")
 
@@ -97,6 +149,8 @@ class Interpreter:
         audit_recorder: AuditRecorder,
         interrupt_registry: InterruptRegistry,
         clock: Callable[[], float] = time.time,
+        session_terminal_state: SessionTerminalState | None = None,
+        session_resume_recorder: SessionResumeRecorder | None = None,
     ) -> None:
         self.session_repository = session_repository
         self.harness_registry = harness_registry
@@ -106,8 +160,13 @@ class Interpreter:
         self.core_translators = core_translators
         self.inputs = inputs
         self.audit_recorder = audit_recorder
+        self.failures = CoalescingFailureRecorder(audit_recorder, "interpreter")
         self.interrupt_registry = interrupt_registry
         self.clock = clock
+        self.terminal = session_terminal_state
+        self.terminal_snapshots = TerminalSnapshotSampler(session_terminal_state)
+        self.launch_effects = session_resume_recorder
+        self._last_expiration_at: float | None = None
         # The liveness sources are rebuilt every tick; the probe's verified-pid
         # memory has to outlive them (engine/interpret/liveness.py ProcessProbe).
         self.liveness = ProcessProbe()
@@ -122,12 +181,7 @@ class Interpreter:
         Guarded, so a broken auditor can never take down the interpreter it
         exists to explain.
         """
-        try:
-            self.audit_recorder.error(
-                str(context.get("session_id", "")), f"interpreter ({where})", context
-            )
-        except Exception:
-            pass
+        self.failures.record(where, context)
 
     def run(self, stop_event: threading.Event) -> None:
         while not stop_event.is_set():
@@ -138,24 +192,49 @@ class Interpreter:
             stop_event.wait(TICK_INTERVAL_SECONDS)
 
     def tick(self) -> None:
+        terminal_windows = self.terminal_snapshots.sample()
         self._expire()
-        self._pull()
+        self._discover_resumes(terminal_windows)
+        self._pull(terminal_windows)
         self._translate()
+
+    def _discover_resumes(self, terminal_windows: TerminalWindows) -> None:
+        if self.terminal is None or self.launch_effects is None:
+            return
+        for plugin in self.harness_registry.plugins():
+            locator = plugin.resume_locator
+            if locator is None:
+                continue
+            for session_id, window_id in locator.locate(terminal_windows):
+                session = self.session_repository.find(session_id)
+                if session is None or session.terminal_window_id == window_id:
+                    continue
+                self.launch_effects.resumed(plugin.info.name, session_id, window_id)
 
     # --- expire: a following that outlived its ceiling -------------------------
 
     def _expire(self) -> None:
-        # An explicit step, once a tick. It used to happen inside the read that
-        # listed the followings, so asking what was being followed could unlink
-        # a file.
+        # A two-hour safety ceiling does not need a write transaction four times
+        # each second. The first cycle cleans old rows. Later cycles do this at
+        # most once a minute.
+        now = self.clock()
+        if (
+            self._last_expiration_at is not None
+            and 0 <= now - self._last_expiration_at
+            < SHELL_OUTPUT_EXPIRY_INTERVAL_SECONDS
+        ):
+            return
         try:
-            output_source.expire(self.shell_output_repository, self.clock())
+            output_source.expire(self.shell_output_repository, now)
         except Exception:
             self._audit_failure("output expiry", {})
+        else:
+            self._last_expiration_at = now
 
     # --- pull: turn the outside world into recorded raw events -----------------
 
-    def _pull(self) -> None:
+    def _pull(self, terminal_windows: TerminalWindows) -> None:
+        batches: list[SessionSourceBatch] = []
         for session in self.session_repository.watchable():
             try:
                 if session.plugin is None:
@@ -169,29 +248,57 @@ class Interpreter:
                     *output_source.sources_for_session(self.shell_output_repository, session.session_id),
                     # ALWAYS built — no silent skip: a pid-less session raises,
                     # loudly, into the audit below.
-                    SessionLivenessSource(session, self.liveness),
+                    self._liveness_source(session, terminal_windows),
                     PendingInterruptSource(session, self.interrupt_registry),
                 )
             except Exception:
                 self._audit_failure("source construction", {"session_id": str(session.session_id)})
                 continue
-            self._pull_sources(session, sources)
+            batches.append(SessionSourceBatch(session, sources))
+        identities = tuple(dict.fromkeys(
+            source.source_identity
+            for batch in batches
+            for source in batch.sources
+            if source.source_identity
+        ))
+        try:
+            positions = self.raw_event_repository.latest_positions(identities)
+        except Exception:
+            for batch in batches:
+                self._audit_failure(
+                    "resume positions",
+                    {"session_id": str(batch.session.session_id)},
+                )
+            return
+        for batch in batches:
+            self._pull_sources(batch, positions)
+
+    def _liveness_source(
+        self,
+        session: Session,
+        terminal_windows: TerminalWindows,
+    ) -> HarnessRawEventSource:
+        if session.harness_process_id is not None:
+            return SessionLivenessSource(session, self.liveness)
+        if self.terminal is not None:
+            return SessionWindowLivenessSource(
+                session,
+                self.terminal,
+                terminal_windows,
+            )
+        raise ValueError(f"session has no liveness source: {session.session_id}")
 
     def _pull_sources(
         self,
-        session: Session,
-        sources: tuple[HarnessRawEventSource, ...],
+        session_source_batch: SessionSourceBatch,
+        positions: Mapping[str, str],
     ) -> None:
-        # One query for every source's resume position, not one each: a busy
-        # machine has dozens of sources and this runs four times a second.
-        identities = [getattr(source, "source_identity", "") for source in sources]
-        try:
-            positions = self.raw_event_repository.latest_positions([name for name in identities if name])
-        except Exception:
-            self._audit_failure("resume positions", {"session_id": str(session.session_id)})
-            return
-        for source in sources:
-            self._pull_source(session, source, positions.get(source.source_identity))
+        for source in session_source_batch.sources:
+            self._pull_source(
+                session_source_batch.session,
+                source,
+                positions.get(source.source_identity),
+            )
 
     def _pull_source(
         self,
@@ -235,6 +342,14 @@ class Interpreter:
         outcome = self.canonical_event_repository.record_translation(
             raw_event, plugin.info.plugin_version, translation, self.clock()
         )
+        if any(
+            isinstance(canonical_event.payload, SessionStarted)
+            for canonical_event in outcome.accepted
+        ):
+            # A confirmed start can add a terminal window after the snapshot
+            # sampled at the start of this tick. Force a current view before
+            # liveness checks the new run on the next tick.
+            self.terminal_snapshots.invalidate()
         for reaction in self.inputs:
             # Reaction-outer, events-inner: each input finishes the batch before
             # the next starts, so the sessions row is current before anything
@@ -249,4 +364,19 @@ class Interpreter:
                             "session_id": str(canonical_event.session_id),
                             "event_id": str(canonical_event.event_id),
                         },
+                    )
+        if any(
+            isinstance(canonical_event.payload, SessionFinished)
+            for canonical_event in outcome.accepted
+        ):
+            for name, release in (
+                ("translation", plugin.translator.release_session),
+                ("source", plugin.sources.release_session),
+            ):
+                try:
+                    release(raw_event.session_id)
+                except Exception:
+                    self._audit_failure(
+                        f"{name} memory release",
+                        {"session_id": str(raw_event.session_id)},
                     )

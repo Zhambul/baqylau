@@ -390,7 +390,11 @@ export function unifiedDiffHtml(value: string): EscapedHtml {
   const rows = diffRows(value).map((row) => {
     if (row.kind === 'separator')
       return '<div class="dl sep"><span class="ln"></span><span class="tx">⋮</span></div>';
-    return `<div class="dl ${row.kind}"><span class="ln">${String(row.number)}</span><span class="tx">${changedCode(row)}</span></div>`;
+    if (row.kind === 'context')
+      return `<div class="dl context"><span class="ln">${String(row.number)}</span><span class="tx">${changedCode(row)}</span></div>`;
+    const marker = row.kind === 'removed' ? '−' : '+';
+    const label = `${row.kind} line ${String(row.number)}`;
+    return `<div class="dl ${row.kind}" aria-label="${label}"><span class="ln"><span class="dm" aria-hidden="true">${marker}</span>${String(row.number)}</span><span class="tx">${changedCode(row)}</span></div>`;
   });
   return escapedHtml(`<div class="tdiff">${rows.join('')}</div>`);
 }

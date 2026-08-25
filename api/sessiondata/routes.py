@@ -12,12 +12,13 @@ from api.common.models.fields import SessionIdPath
 from api.sessiondata import mapper
 from api.sessiondata.models.entry import EntryPageResponse
 from api.sessiondata.models.session_data import SessionDataListResponse, SessionDataResponse
-from app.providers import Repositories, SessionDataStore, Terminal
-from core.repository import RepositoryStatus
+from app.providers import Repositories, SessionDataStore, Sessions, Terminal
+from core.repository import RepositoryQueries, RepositoryStatus
 from domain.errors import UnknownReference
 from domain.ids import SessionId
 from domain.sessiondata import SessionData
 from repository.contract.session_data import SessionDataRepository
+from repository.contract.sessions import SessionRepository
 from terminal.adapter import TerminalAdapter
 
 router = APIRouter()
@@ -31,9 +32,10 @@ def session_data_list(
     read_model: SessionDataStore,
     terminal: Terminal,
     repositories: Repositories,
+    session_storage: Sessions,
 ) -> SessionDataListResponse:
-    """Every visible session's aggregate, and the cursor to open the global
-    stream from — the list view, in two queries.
+    """Every live session's aggregate, and the cursor to open the global
+    stream from — the live dashboard, in two queries.
 
     The cursor is read BEFORE the rows: a write landing between the two shows
     up in `sessions` (its row already carries the change) and is harmlessly
@@ -61,10 +63,17 @@ def session_data_list(
         sessions=tuple(
             mapper.session_data(
                 data,
-                live=data.session.session_id in live,
+                live=True,
                 repository_status=repository(data.session.working_directory),
+                project_directory=_project_directory(
+                    session_storage,
+                    repositories,
+                    data.session.session_id,
+                    data.session.working_directory,
+                ),
             )
             for data in visible
+            if data.session.session_id in live
         ),
     )
 
@@ -75,12 +84,19 @@ def session_data(
     read_model: SessionDataStore,
     terminal: Terminal,
     repositories: Repositories,
+    session_storage: Sessions,
 ) -> SessionDataResponse:
     data = _found(read_model, SessionId(session_id))
     return mapper.session_data(
         data,
         live=_live(terminal, data.session.session_id),
         repository_status=repositories.status(data.session.working_directory),
+        project_directory=_project_directory(
+            session_storage,
+            repositories,
+            data.session.session_id,
+            data.session.working_directory,
+        ),
     )
 
 
@@ -119,3 +135,15 @@ def _live(terminal_adapter: TerminalAdapter, session_id: SessionId) -> bool:
     session is attended, not the handle it is attended through.
     """
     return terminal_adapter.window_for_session(session_id) is not None
+
+
+def _project_directory(
+    session_repository: SessionRepository,
+    repository_queries: RepositoryQueries,
+    session_id: SessionId,
+    working_directory: str,
+) -> str:
+    session = session_repository.find(session_id)
+    if session is not None and session.project_directory:
+        return session.project_directory
+    return repository_queries.project_directory(working_directory)

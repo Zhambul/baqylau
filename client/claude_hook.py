@@ -39,8 +39,6 @@ def main() -> None:
         # process is still blocked on the response, so the ancestry it reads is
         # provably alive — and this client stays free of a `ps` fork.
         _http.CLIENT_PROCESS_HEADER: str(os.getpid()),
-        _http.ACCOUNT_ID_HEADER: os.environ.get(_http.ACCOUNT_SLUG_VARIABLE, ""),
-        _http.ACCOUNT_NAME_HEADER: os.environ.get(_http.ACCOUNT_LABEL_VARIABLE, ""),
         _http.LAUNCH_MODEL_HEADER: os.environ.get(_http.LAUNCH_MODEL_VARIABLE, ""),
         _http.LAUNCH_EFFORT_HEADER: os.environ.get(_http.LAUNCH_EFFORT_VARIABLE, ""),
     })

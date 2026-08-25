@@ -8,7 +8,6 @@ from fastapi import APIRouter, HTTPException
 
 from api.common.models.replies.saved_response import SavedResponse
 from api.application.models.preferences.composer_draft_request import ComposerDraftRequest
-from api.application.models.preferences.composer_queue_request import ComposerQueueRequest
 from api.application.models.preferences.dialog_draft_request import DialogDraftRequest
 from api.application.models.preferences.global_notifications_request import (
     GlobalNotificationsRequest,
@@ -46,7 +45,7 @@ from api.application.models.preferences.session_application_response import (
 from app.providers import ApplicationPreferences, PushSigningKeys, SessionApplication
 from notify.channels import webpush
 from dashboard.services.preferences import BrowserPresence, BrowserPushSubscription
-from domain.workspace import AnswerSelection, QueuedMessage
+from domain.workspace import AnswerSelection
 from domain.ids import AttentionId, DeviceId, HarnessName, SessionId
 
 router = APIRouter()
@@ -174,19 +173,6 @@ def save_composer_draft(
         composer_draft_request.sequence,
     )
     return SavedResponse(saved=saved)
-
-
-@guarded.post("/api/sessions/{session_id}/application/composer-queue")
-def save_composer_queue(
-    session_id: SessionIdPath, composer_queue_request: ComposerQueueRequest, workspace: SessionApplication
-) -> SavedResponse:
-    messages = tuple(
-        QueuedMessage(item.text) for item in composer_queue_request.items if item.text.strip()
-    )
-    workspace.save_composer_queue(
-        SessionId(session_id), messages, composer_queue_request.origin
-    )
-    return SavedResponse()
 
 
 @guarded.post("/api/sessions/{session_id}/application/dialog-draft")

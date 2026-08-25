@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from domain.events import (
     ActorAssignmentFinished,
+    ActorDescriptionChanged,
     ActorNameChanged,
     ActorStarted,
     CanonicalEvent,
@@ -30,11 +31,13 @@ from domain.events import (
 )
 from domain.ids import AccountId
 from harness.impl.claude_code.ids import (
+    ClaudeCodeActorId,
     ClaudeCodeCallId,
     ClaudeCodeMessageId,
     ClaudeCodeReasoningId,
     ClaudeCodeShellId,
     ClaudeCodeTurnId,
+    actor_id_from_claude_code,
     assignment_id_from_claude_code_call,
     message_id_from_claude_code,
     reasoning_id_from_claude_code,
@@ -62,7 +65,7 @@ from harness.impl.claude_code.canonical import records, transcript
 from harness.impl.claude_code.canonical.support import SYNTHETIC_MODEL_ID, content, event, model_reference, timestamp
 from harness.impl.claude_code.canonical.toolcalls import BACKGROUND_LAUNCH_STUB, ToolCallSemantics
 from harness.impl.claude_code.canonical.turns import TurnSemantics
-from harness.models import RawEvent, TranslationError
+from harness.models import RawEvent, TranslationError, session_run_started_events
 from harness.models.selections import SelectionSemantics
 
 
@@ -264,7 +267,7 @@ def session_events(
     lead_actor_id = raw_event.actor_id
     if raw_event.parent_actor_id is not None:
         metadata = records.AgentMetaFile()
-        if raw_event.source_type == "child_transcript":
+        if raw_event.source_type in ("child_transcript", "teammate_transcript"):
             metadata_path = os.path.splitext(raw_event.source_name)[0] + ".meta.json"
             try:
                 with open(metadata_path, encoding="utf-8") as metadata_file:
@@ -287,14 +290,24 @@ def session_events(
                 ),
             )
         ]
+        native_name = str(metadata.name or "").strip()
         description = str(metadata.description or "").strip()
+        display_name = native_name or description
+        if display_name:
+            events.append(event(
+                raw_event,
+                "actor",
+                str(raw_event.actor_id),
+                "name:metadata",
+                ActorNameChanged(display_name),
+            ))
         if description:
             events.append(event(
                 raw_event,
                 "actor",
                 str(raw_event.actor_id),
-                "name:description",
-                ActorNameChanged(description),
+                "description:metadata",
+                ActorDescriptionChanged(description),
             ))
         return events
     transcript_path = str(document.transcript_path or "")
@@ -309,22 +322,26 @@ def session_events(
         effort=None,
         account=None,
     )
-    events = [
-        event(
-            raw_event,
-            "session",
-            str(raw_event.session_id),
-            "started",
-            session_started,
-        ),
-        event(
-            raw_event,
-            "actor",
-            str(lead_actor_id),
-            "started",
-            ActorStarted("claude", ActorRole.LEAD),
-        ),
-    ]
+    actor_started = ActorStarted("claude", ActorRole.LEAD)
+    if raw_event.source_type == "hook" and raw_event.terminal_window_id is not None:
+        events = list(session_run_started_events(raw_event, session_started, actor_started))
+    else:
+        events = [
+            event(
+                raw_event,
+                "session",
+                str(raw_event.session_id),
+                "started",
+                session_started,
+            ),
+            event(
+                raw_event,
+                "actor",
+                str(lead_actor_id),
+                "started",
+                actor_started,
+            ),
+        ]
     if raw_event.account_id is not None or raw_event.account_display_name is not None:
         account_id = raw_event.account_id or AccountId("")
         display_name = raw_event.account_display_name or account_id or "default"
@@ -443,7 +460,7 @@ def translate_transcript(
         # "status" stream, which is what a monitors panel reads as an EVENT
         # rather than as output.
         task_id = ClaudeCodeShellId(record.task)
-        armed = tool_call_semantics.monitor_shell(task_id)
+        armed = tool_call_semantics.monitor_shell(raw_event, task_id)
         if armed is None:
             # A monitor armed before this translation began — a daemon restarted
             # mid-watch. The event belongs to a command we cannot name, and
@@ -451,7 +468,7 @@ def translate_transcript(
             # the watch's own end still lands, because that notification names
             # its tool_use_id outright.
             return []
-        ordinal = tool_call_semantics.next_monitor_ordinal(task_id)
+        ordinal = tool_call_semantics.next_monitor_ordinal(raw_event, task_id)
         payload = ShellProgressed(
             armed,
             ordinal,
@@ -479,6 +496,7 @@ def translate_transcript(
                 context=raw_event.source_position,
             )
         payload = ShellOutputFinished(shell_id, background_outcome(record.status))
+        tool_call_semantics.monitor_finished(raw_event, shell_id)
         return [event(
             raw_event,
             "shell",
@@ -488,7 +506,13 @@ def translate_transcript(
             occurred_at=occurred_at,
         )]
     if isinstance(record, transcript.ActorAssignmentFinishedTranscriptRecord):
-        assignment_id = assignment_id_from_claude_code_call(record.assignment_id)
+        assignment_call = tool_call_semantics.assignment_call(
+            raw_event,
+            record.actor_id,
+            record.assignment_id,
+        )
+        assignment_id = assignment_id_from_claude_code_call(assignment_call)
+        tool_call_semantics.assignment_finished(raw_event, record.actor_id)
         status = record.status
         outcome: Outcome = (
             Outcome.FAILED if status == "failed"
@@ -512,17 +536,77 @@ def translate_transcript(
                 occurred_at=occurred_at,
             )
         ]
+    if isinstance(record, transcript.TeammateIdleTranscriptRecord):
+        events = []
+        notifications_by_actor = {}
+        for notification in record.notifications:
+            actor_native_id = (
+                transcript.teammate_actor_id(raw_event.source_name, notification.from_)
+                or ClaudeCodeActorId(notification.from_)
+            )
+            resolved_actor_id = actor_id_from_claude_code(actor_native_id)
+            notifications_by_actor[resolved_actor_id] = (
+                actor_native_id,
+                notification,
+            )
+        for resolved_actor_id, (
+            actor_native_id,
+            notification,
+        ) in notifications_by_actor.items():
+            legacy_lead_observation = raw_event.parent_actor_id is None
+            if not legacy_lead_observation and resolved_actor_id != raw_event.actor_id:
+                continue
+            actor_raw_event = raw_event
+            assignment_call = tool_call_semantics.assignment_call(
+                actor_raw_event,
+                actor_native_id,
+                ClaudeCodeCallId(""),
+            )
+            if not assignment_call:
+                raise TranslationError(
+                    f"Claude Code teammate {notification.from_!r} has no assignment",
+                    context=raw_event.source_position,
+                )
+            tool_call_semantics.assignment_finished(actor_raw_event, actor_native_id)
+            outcome = (
+                Outcome.SUCCEEDED
+                if notification.idleReason == "available"
+                else Outcome.FAILED
+                if notification.idleReason == "failed"
+                else Outcome.CANCELLED
+                if notification.idleReason in ("stopped", "cancelled")
+                else Outcome.UNKNOWN
+            )
+            assignment_id = assignment_id_from_claude_code_call(assignment_call)
+            events.append(event(
+                actor_raw_event,
+                "actor_assignment",
+                str(assignment_id),
+                "finished",
+                ActorAssignmentFinished(
+                    assignment_id,
+                    outcome,
+                    content(notification.failureReason) if notification.failureReason else None,
+                    None,
+                ),
+                occurred_at=timestamp(notification.timestamp),
+            ))
+        return events
     if isinstance(record, transcript.TeamMessageTranscriptRecord):
         if not record.sender:
             raise TranslationError(
                 "Claude Code teammate message has no sender",
                 context=raw_event.source_position,
             )
+        is_parent_prompt = (
+            record.sender == transcript.LEAD_TEAMMATE_ID
+            and raw_event.parent_actor_id is not None
+        )
         payload = MessageCreated(
             message_id_from_claude_code(ClaudeCodeMessageId(native_identity)),
-            MessageRole.PEER,
+            MessageRole.PARENT if is_parent_prompt else MessageRole.PEER,
             content(record.body),
-            None,
+            MessagePhase.PROMPT if is_parent_prompt else None,
             None,
         )
         events = []
@@ -725,8 +809,13 @@ def translate_transcript(
             # and its REPLACE mode would wipe any watch chunk that committed
             # first. The real output arrives through the file watch.
             if result_text.startswith(BACKGROUND_LAUNCH_STUB):
+                tool_call_semantics.forget(raw_event, call_id)
                 continue
             failed = bool(tool_result_block.is_error)
+            declined_attention = (
+                failed
+                and tool_call_semantics.pending_attention(raw_event, call_id)
+            )
             events.extend(
                 tool_call_semantics.tool_result(
                     raw_event,
@@ -737,8 +826,9 @@ def translate_transcript(
                     cancelled=record.cancelled,
                 )
             )
-            if failed and tool_call_semantics.pending_attention(call_id):
+            if declined_attention:
                 events.append(tool_call_semantics.attention_declined(raw_event, call_id, result_text))
+            tool_call_semantics.forget(raw_event, call_id)
         for text_index, result_text in enumerate(record.texts):
             text_identity = f"{native_identity}:text:{text_index}"
             payload = MessageCreated(

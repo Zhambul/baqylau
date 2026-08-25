@@ -5,8 +5,9 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from pathlib import Path
 
-from conftest import REPOSITORY_ROOT
+REPOSITORY_ROOT = str(Path(__file__).resolve().parents[1])
 
 # The processes that used to be on this list — the hook entries, the two pane
 # processes, the keybinding, the status-line shim — are stdlib-only clients now

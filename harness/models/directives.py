@@ -1,6 +1,6 @@
 """The engine's own synthetic raw events, as documents.
 
-Four raw-event payloads that nothing outside this tree ever produces: a chunk
+Raw-event payloads that nothing outside this tree ever produces: a chunk
 of a followed output file, the observation that a CLI process is gone, and the
 mark left by an interrupt no native raw event corroborated. They are OURS on
 both ends — written by `engine/interpret/`, read by a translator — and each was
@@ -18,9 +18,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from domain.ids import SessionId, ShellId
+from domain.ids import AssignmentId, AttentionId, SessionId, ShellId, TurnId
 from domain.stored import STORED
-from domain.values import ProgressStream, TitleOrigin
+from domain.values import OpenWorkKind, PlanState, ProgressStream, TitleOrigin
 
 
 @dataclass(frozen=True)
@@ -54,6 +54,50 @@ class InterruptMark:
     __pydantic_config__ = STORED
 
     session_id: SessionId
+
+
+@dataclass(frozen=True)
+class PlanDecisionObservation:
+    """A plan decision that the control driver confirmed."""
+
+    __pydantic_config__ = STORED
+
+    attention_id: AttentionId
+    state: PlanState
+    feedback: str | None
+    edited: bool
+    turn_id: TurnId | None
+
+
+@dataclass(frozen=True)
+class SessionRenameObservation:
+    """A confirmed direct write to a parked harness title store."""
+
+    __pydantic_config__ = STORED
+
+    title: str
+    origin: TitleOrigin
+
+
+@dataclass(frozen=True)
+class SessionCloseWorkObservation:
+    """One open work item at the confirmed session-close boundary."""
+
+    __pydantic_config__ = STORED
+
+    kind: OpenWorkKind
+    subject_id: TurnId | ShellId | AssignmentId
+    turn_id: TurnId | None
+
+
+@dataclass(frozen=True)
+class SessionResumeObservation:
+    """A confirmed native resume launch for one known session."""
+
+    __pydantic_config__ = STORED
+
+    working_directory: str
+    source_reference: str
 
 
 @dataclass(frozen=True)

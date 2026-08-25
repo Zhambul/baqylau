@@ -20,6 +20,7 @@ describe('session-data translator', () => {
       worktree: null,
       dirty: true,
     });
+    expect(snapshot.projectDirectory).toBe('/work/project');
     expect('id' in (lead ?? {})).toBe(false);
   });
 

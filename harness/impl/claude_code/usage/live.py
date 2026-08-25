@@ -207,7 +207,26 @@ class GetUsageResponse(BaseModel):
     rate_limits: LiveRateLimits | None = None
     rate_limits_available: bool
     subscription_type: str | None = None
-    behaviors: LiveBehaviors
+    behaviors: LiveBehaviors | None = None
+
+
+class NativeOauthAccount(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    organizationType: str | None = None
+
+
+class NativeUsageCache(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    fetchedAtMs: float | int
+    utilization: LiveRateLimits
+
+
+class NativeProfile(BaseModel):
+    """Only the two usage fields read from Claude's large native profile."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    oauthAccount: NativeOauthAccount | None = None
+    cachedUsageUtilization: NativeUsageCache | None = None
 
 
 class GetUsageRequest(BaseModel):
@@ -234,11 +253,25 @@ class ControlResponseLine(BaseModel):
     type: Literal["control_response"]
     response: ControlResponseBody
 
+
+class ControlResponseIdentityBody(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    request_id: ClaudeCodeControlRequestId | None = None
+
+
+class ControlResponseIdentity(BaseModel):
+    """The two fields needed to identify our response before strict parsing."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    type: str | None = None
+    response: ControlResponseIdentityBody | None = None
+
 # The probe must not out-live a refresh cycle by much. Two seconds is the happy
 # path; the slow one is the CLI's own retry ladder when the usage endpoint is
 # throttled, which it walks before answering with nothing.
 PROBE_TIMEOUT_SECONDS = 6.0
 CACHE_SECONDS = 600.0
+FAILURE_CACHE_SECONDS = 60.0
 COMMAND = "claude"
 BINARY_DIRECTORIES = (
     "~/.local/bin",
@@ -281,7 +314,7 @@ MAX_MODEL_WINDOWS = 6
 class CacheEntry:
     config_directory: str
     expires_at: float
-    usage: "LiveUsage | None"
+    collection: "LiveUsageCollection"
 
 
 _cache: list[CacheEntry] = []
@@ -294,6 +327,20 @@ class LiveUsage:
     captured_at: float
     plan: str | None
     windows: tuple[UsageWindowSample, ...]
+
+
+@dataclass(frozen=True)
+class LiveUsageCollection:
+    """The newest usable snapshot and a current collection problem, if any."""
+
+    usage: LiveUsage | None
+    error: str | None
+
+
+@dataclass(frozen=True)
+class ProbeResult:
+    response: GetUsageResponse | None
+    error: str | None
 
 
 def subprocess_environment(config_directory: str | None) -> Mapping[str, str]:
@@ -354,7 +401,7 @@ def windows(
     """The account-wide pair first, then one sample per model bucket."""
     if live_rate_limits is None:
         return ()
-    samples = []
+    samples: dict[str, UsageWindowSample] = {}
     for key, window in (
         ("five_hour", live_rate_limits.five_hour), ("seven_day", live_rate_limits.seven_day)
     ):
@@ -363,7 +410,11 @@ def windows(
         used_percent = _percent(window.utilization)
         if used_percent is None:
             continue
-        samples.append(UsageWindowSample(key, used_percent, _epoch_seconds(window.resets_at)))
+        samples[key] = UsageWindowSample(
+            key,
+            used_percent,
+            _epoch_seconds(window.resets_at),
+        )
     for bucket in live_rate_limits.model_scoped or ():
         if len(samples) >= len(ACCOUNT_WINDOWS) + MAX_MODEL_WINDOWS:
             break
@@ -371,40 +422,71 @@ def windows(
         used_percent = _percent(bucket.utilization)
         if model_key is None or used_percent is None:
             continue
-        samples.append(
-            UsageWindowSample(model_key, used_percent, _epoch_seconds(bucket.resets_at))
+        samples[model_key] = UsageWindowSample(
+            model_key,
+            used_percent,
+            _epoch_seconds(bucket.resets_at),
         )
-    return tuple(samples)
+    for limit in live_rate_limits.limits:
+        if len(samples) >= len(ACCOUNT_WINDOWS) + MAX_MODEL_WINDOWS:
+            break
+        model = limit.scope.model if limit.scope is not None else None
+        if model is None or "weekly" not in limit.kind.lower():
+            continue
+        model_key = _model_key(model.display_name)
+        used_percent = _percent(limit.percent)
+        if model_key is None or used_percent is None:
+            continue
+        samples[model_key] = UsageWindowSample(
+            model_key,
+            used_percent,
+            _epoch_seconds(limit.resets_at),
+        )
+    return tuple(samples.values())
 
 
 def _control_response(
     process: subprocess.Popen[str],
     deadline: float,
-) -> GetUsageResponse | None:
+) -> ProbeResult:
     """The reply to our one request, out of a stream that also carries the
     session's own lifecycle lines."""
     if process.stdout is None:
-        return None
+        return ProbeResult(None, "usage probe has no output stream")
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            return None
+            return ProbeResult(None, "usage probe timed out")
         readable, _, _ = select.select((process.stdout,), (), (), remaining)
         if not readable:
-            return None
+            return ProbeResult(None, "usage probe timed out")
         line = process.stdout.readline()
         if not line:
-            return None
+            return ProbeResult(None, "usage probe ended without a response")
         try:
-            message = ControlResponseLine.model_validate_json(line)
+            identity = ControlResponseIdentity.model_validate_json(line)
         except ValidationError:
             continue
-        if message.response.request_id != REQUEST_ID:
+        if identity.type != "control_response" or identity.response is None:
             continue
-        return message.response.response
+        if identity.response.request_id != REQUEST_ID:
+            continue
+        try:
+            message = ControlResponseLine.model_validate_json(line)
+        except ValidationError as error:
+            return ProbeResult(
+                None,
+                f"usage probe schema failure: {error.errors()[0]['type']}",
+            )
+        document = message.response.response
+        if document is None:
+            return ProbeResult(None, "usage probe returned no usage document")
+        return ProbeResult(document, None)
+
+
 def request_usage(
     config_directory: str | None,
-) -> GetUsageResponse | None:
+) -> ProbeResult:
     """One `get_usage` round trip against one account's configuration."""
     try:
         process = subprocess.Popen(
@@ -422,15 +504,15 @@ def request_usage(
             start_new_session=True,
         )
     except OSError:
-        return None
+        return ProbeResult(None, "usage probe could not start Claude")
     try:
         if process.stdin is None:
-            return None
+            return ProbeResult(None, "usage probe has no input stream")
         process.stdin.write(REQUEST.model_dump_json() + "\n")
         process.stdin.flush()
         return _control_response(process, time.monotonic() + PROBE_TIMEOUT_SECONDS)
     except OSError:
-        return None
+        return ProbeResult(None, "usage probe communication failed")
     finally:
         if process.stdin is not None:
             try:
@@ -440,24 +522,80 @@ def request_usage(
         process.terminate()
 
 
-def usage(config_directory: str | None) -> LiveUsage | None:
-    """One account's live windows, at most one probe per CACHE_SECONDS."""
+def native_usage(config_directory: str | None) -> LiveUsageCollection:
+    """Read Claude's last profile-scoped usage snapshot for one account."""
+    if not config_directory:
+        return LiveUsageCollection(None, None)
+    profile_path = os.path.join(config_directory, ".claude.json")
+    try:
+        with open(profile_path, encoding="utf-8") as source:
+            profile = NativeProfile.model_validate_json(source.read())
+    except OSError:
+        return LiveUsageCollection(None, "Claude profile usage cache is unavailable")
+    except ValidationError as error:
+        return LiveUsageCollection(
+            None,
+            f"Claude profile usage schema failure: {error.errors()[0]['type']}",
+        )
+    cached = profile.cachedUsageUtilization
+    if cached is None:
+        return LiveUsageCollection(None, None)
+    samples = windows(cached.utilization)
+    if not samples:
+        return LiveUsageCollection(None, None)
+    organization_type = (
+        profile.oauthAccount.organizationType if profile.oauthAccount is not None else None
+    )
+    return LiveUsageCollection(
+        LiveUsage(
+            captured_at=float(cached.fetchedAtMs) / 1000,
+            plan=organization_type or None,
+            windows=samples,
+        ),
+        None,
+    )
+
+
+def collect(
+    config_directory: str | None = None,
+) -> LiveUsageCollection:
+    """Refresh usage and keep the last good native snapshot on failure."""
     now = time.time()
     cache_key = config_directory or ""
     cached = next((entry for entry in _cache if entry.config_directory == cache_key), None)
     if cached is not None and cached.expires_at > now:
-        return cached.usage
-    document = request_usage(config_directory)
-    result = None
-    if document is not None:
-        samples = windows(document.rate_limits)
-        if samples:
-            plan = document.subscription_type
-            result = LiveUsage(
-                captured_at=now,
-                plan=plan if plan else None,
-                windows=samples,
+        return cached.collection
+
+    native = native_usage(config_directory)
+    if native.usage is not None and now - native.usage.captured_at <= CACHE_SECONDS:
+        result = native
+    else:
+        probed = request_usage(config_directory)
+        document = probed.response
+        if document is None:
+            result = LiveUsageCollection(native.usage, probed.error)
+        elif not document.rate_limits_available:
+            result = LiveUsageCollection(
+                native.usage,
+                "Claude profile rate limits are not available for this account",
             )
+        else:
+            samples = windows(document.rate_limits)
+            if samples:
+                result = LiveUsageCollection(
+                    LiveUsage(
+                        captured_at=now,
+                        plan=document.subscription_type or None,
+                        windows=samples,
+                    ),
+                    None,
+                )
+            else:
+                result = LiveUsageCollection(
+                    native.usage,
+                    "Claude profile usage contains no rate-limit windows",
+                )
     _cache[:] = [entry for entry in _cache if entry.config_directory != cache_key]
-    _cache.append(CacheEntry(cache_key, now + CACHE_SECONDS, result))
+    ttl = CACHE_SECONDS if result.error is None else FAILURE_CACHE_SECONDS
+    _cache.append(CacheEntry(cache_key, now + ttl, result))
     return result

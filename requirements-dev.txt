@@ -11,6 +11,14 @@ pytest-xdist>=3.5
 # a workspace), and behave's own runner would reach none of them. `make test`
 # ignores tests/e2e, so the hermetic suite still runs without this installed.
 pytest-bdd>=8.1
+# Browser-origin Gherkin cases use the same pytest fixtures and real daemon as
+# the live harness suite. The plug-in supplies typed browser pages; Chrome is
+# selected by the opt-in browser runner, so no recorded frontend server is used.
+pytest-playwright==0.9.0
+playwright==1.62.0
+# A normal embedded TrueType font makes image-attachment checks test the image
+# path, not the harness model's ability to read a custom block font.
+Pillow>=10.1
 # Typed HTTP transport for the live application client.
 httpx>=0.28
 # The terminal emulator behind terminal/impl/pty — the headless terminal that
@@ -34,3 +42,4 @@ mypy==2.3.0
 # (AppKit ships neither stubs nor py.typed and is declared in mypy.ini instead.)
 types-PyYAML==6.0.12.20260815
 types-Pygments==2.20.0.20260728
+types-psutil==7.2.2.20260518

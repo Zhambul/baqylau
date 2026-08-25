@@ -29,12 +29,10 @@ Feature: browser-owned preferences round trip through the application
     Then work "open preferences" completes
     And work "open preferences" has worker type lead
     When I save composer draft 'unsent detail' for session "primary"
-    And I queue message 'follow-up detail' for session "primary"
     And I set view mode focus for session "primary"
     And I mute notifications for session "primary"
     And I hide tasks for session "primary"
     Then composer draft for session "primary" is 'unsent detail'
-    And composer queue for session "primary" contains 'follow-up detail'
     And view mode for session "primary" is focus
     And notifications for session "primary" are muted
     And tasks for session "primary" are hidden

@@ -47,7 +47,8 @@ class ShellState:
 @dataclass
 class AssignmentState:
     assignment_id: str
-    actor_id: str
+    owner_actor_id: str
+    actor_id: str | None
     turn_id: str | None
     assigned_actor_name: str | None
     requested_prompt: str | None
@@ -156,7 +157,45 @@ class SessionSnapshot:
         return _shells(self.entries, actor_id=actor_id)
 
     def assignments(self) -> tuple[AssignmentState, ...]:
-        return _assignments(self.entries)
+        assignments = _assignments(self.entries)
+        for assignment in assignments:
+            if (
+                assignment.actor_id in (None, assignment.owner_actor_id)
+                and assignment.assigned_actor_name
+            ):
+                candidates = [
+                    actor
+                    for actor in self.data.actors
+                    if actor.parent_actor_id == assignment.owner_actor_id
+                    and actor.name == assignment.assigned_actor_name
+                ]
+                if len(candidates) == 1:
+                    assignment.actor_id = candidates[0].actor_id
+            if (
+                assignment.state is None
+                or assignment.result
+                or assignment.actor_id is None
+            ):
+                continue
+            final_messages = [
+                entry
+                for entry in self.entries
+                if entry.cursor > assignment.started_cursor
+                and (
+                    assignment.finished_cursor is None
+                    or entry.cursor < assignment.finished_cursor
+                )
+                and entry.actor_id == assignment.actor_id
+                and isinstance(entry.body, MessageBodyResponse)
+                and entry.body.recipient_actor_id == assignment.owner_actor_id
+                and entry.body.role in ("assistant", "peer")
+                and entry.body.content.text.strip()
+            ]
+            if final_messages:
+                final_body = final_messages[-1].body
+                if isinstance(final_body, MessageBodyResponse):
+                    assignment.result = final_body.content.text.strip()
+        return assignments
 
     def skills(self) -> tuple[SkillState, ...]:
         return _skills(self.entries)
@@ -234,9 +273,13 @@ def _assignments(entries: tuple[EntryResponse, ...]) -> tuple[AssignmentState, .
     for entry in entries:
         body = entry.body
         if isinstance(body, AssignmentStartedBodyResponse):
+            owner_actor_id = entry.parent_actor_id or entry.actor_id
             folded[body.assignment_id] = AssignmentState(
                 assignment_id=body.assignment_id,
-                actor_id=entry.actor_id,
+                owner_actor_id=owner_actor_id,
+                actor_id=(
+                    entry.actor_id if entry.parent_actor_id is not None else None
+                ),
                 turn_id=entry.turn_id,
                 assigned_actor_name=body.assigned_actor_name,
                 requested_prompt=(
@@ -244,11 +287,30 @@ def _assignments(entries: tuple[EntryResponse, ...]) -> tuple[AssignmentState, .
                 ),
                 started_cursor=entry.cursor,
             )
+        elif (
+            isinstance(body, MessageBodyResponse)
+            and body.role == "parent"
+            and body.phase == "prompt"
+            and entry.parent_actor_id is not None
+        ):
+            candidates = [
+                item
+                for item in folded.values()
+                if item.actor_id is None
+                and item.owner_actor_id == entry.parent_actor_id
+                and item.started_cursor < entry.cursor
+                and item.state is None
+                and item.requested_prompt is not None
+                and item.requested_prompt.strip() == body.content.text.strip()
+            ]
+            if len(candidates) == 1:
+                candidates[0].actor_id = entry.actor_id
         elif isinstance(body, AssignmentFinishedBodyResponse):
             found = folded.get(body.assignment_id)
             if found is None:
                 found = AssignmentState(
                     assignment_id=body.assignment_id,
+                    owner_actor_id=entry.parent_actor_id or entry.actor_id,
                     actor_id=entry.actor_id,
                     turn_id=entry.turn_id,
                     assigned_actor_name=None,

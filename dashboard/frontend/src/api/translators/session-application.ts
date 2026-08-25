@@ -27,6 +27,7 @@ export function translateSessionApplication(
           ? null
           : {
               items: wire.composer.queue.items.map((item) => ({
+                requestId: item.request_id,
                 text: item.text,
               })),
               origin: clientId(wire.composer.queue.origin),

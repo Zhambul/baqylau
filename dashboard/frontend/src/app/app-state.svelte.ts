@@ -325,7 +325,10 @@ export class AppState {
           });
           void this.audit.flush();
           this.bootId = bootId;
-          window.location.reload();
+          this.globalStream?.close();
+          this.globalStream = null;
+          this.connection = 'connecting';
+          void this.recoverAfterRestart(signal);
         }
       },
       invalid: (error) => {
@@ -343,6 +346,18 @@ export class AppState {
         this.globalStream = null;
       },
       { once: true },
+    );
+  }
+
+  private async recoverAfterRestart(signal: AbortSignal): Promise<void> {
+    await Promise.all([
+      this.loadSessions(signal),
+      this.loadApplication(signal),
+    ]);
+    if (signal.aborted) return;
+    this.openGlobalStream(
+      this.listState === 'ready' ? this.sessionCursor : 0,
+      signal,
     );
   }
 
@@ -394,6 +409,7 @@ export class AppState {
     this.adoptingSessions.add(id);
     try {
       const snapshot = await readSession(id);
+      if (!snapshot.live) return;
       if (
         !this.sessions.some(
           (known) => known.session.sessionId === snapshot.session.sessionId,

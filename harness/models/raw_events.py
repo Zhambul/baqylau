@@ -11,8 +11,11 @@ import time
 from dataclasses import dataclass
 
 from domain.events import (
+    ActorStarted,
     CanonicalEvent,
     EventPayload,
+    SessionFinished,
+    SessionStarted,
     ShellOutputLocated,
 )
 from domain.ids import (
@@ -109,6 +112,56 @@ def canonical_event(
     )
 
 
+def session_run_started_events(
+    raw_event: RawEvent,
+    session_started: SessionStarted,
+    actor_started: ActorStarted,
+    *,
+    occurred_at: float | None = None,
+) -> tuple[CanonicalEvent[EventPayload], CanonicalEvent[EventPayload]]:
+    """Build the two facts that start one native session run.
+
+    A dashboard resume observation and the harness's SessionStart hook both
+    know the terminal window. They must therefore name the same run. A hook
+    without a terminal window uses its own delivery position, which still
+    keeps separate native runs separate.
+    """
+    run_id = str(raw_event.terminal_window_id or raw_event.source_position)
+    return (
+        canonical_event(
+            raw_event,
+            "session_run",
+            run_id,
+            "started",
+            session_started,
+            occurred_at=occurred_at,
+        ),
+        canonical_event(
+            raw_event,
+            "actor_run",
+            f"{raw_event.actor_id}:{run_id}",
+            "started",
+            actor_started,
+            occurred_at=occurred_at,
+        ),
+    )
+
+
+def session_run_finished_event(
+    raw_event: RawEvent,
+    session_finished: SessionFinished,
+) -> CanonicalEvent[EventPayload]:
+    """Build the finish fact for the native run in one terminal window."""
+    run_id = str(raw_event.terminal_window_id or raw_event.source_position)
+    return canonical_event(
+        raw_event,
+        "session_run",
+        run_id,
+        "finished",
+        session_finished,
+    )
+
+
 class TranslationError(ValueError):
     def __init__(self, reason: str, *, context: str | None = None) -> None:
         super().__init__(reason)
@@ -152,6 +205,9 @@ class RawEventSourceContext:
 OUTPUT_LOCATION_SOURCE_TYPE = "output_location"
 LIVENESS_SOURCE_TYPE = "liveness"
 INTERRUPT_SOURCE_TYPE = "interrupt"
+CONTROL_SOURCE_TYPE = "control"
+RESUME_SOURCE_TYPE = "resume_launch"
+RESUME_LIVENESS_SOURCE_TYPE = "resume_liveness"
 TITLE_SOURCE_TYPE = "title"
 
 

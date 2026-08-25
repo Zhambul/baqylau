@@ -39,7 +39,6 @@ from pathlib import Path
 
 import pytest
 
-from conftest import REPOSITORY_ROOT
 from api.hooks import routes as hook_routes
 from api.telemetry import harness as telemetry_routes
 from api.sessiondata import routes as session_data_routes, streams as session_data_streams
@@ -48,7 +47,7 @@ from api.terminal import panes as pane_routes
 from core import clients
 from core.daemon import contract
 from harness.hooks import headers
-from harness.impl.claude_code import account, launcher as claude_launcher
+from harness.impl.claude_code import launcher as claude_launcher
 from harness.impl.claude_code.otel import launch as otel_launch
 from harness.impl.claude_code.usage import live as claude_live_usage
 from harness.models import TELEMETRY_KIND_HEADER
@@ -56,7 +55,7 @@ from terminal import adapter as terminal_adapter
 from terminal.impl.kitty import remote as kitty_remote
 from terminal.impl.pty import plugin as pty_plugin
 
-ROOT = Path(REPOSITORY_ROOT)
+ROOT = Path(__file__).resolve().parents[1]
 CLIENT = ROOT / "client"
 SHARED = ("_http.py", "_daemon.py", "_model.py", "_render.py", "_handoff.py")
 
@@ -318,15 +317,11 @@ def test_the_http_module_matches_the_daemon():
     assert (http_module.HOST, http_module.PORT) == (contract.HOST_ADDRESS, contract.PORT_NUMBER)
     assert http_module.TERMINAL_WINDOW_HEADER == headers.TERMINAL_WINDOW_HEADER
     assert http_module.CLIENT_PROCESS_HEADER == headers.CLIENT_PROCESS_HEADER
-    assert http_module.ACCOUNT_ID_HEADER == headers.ACCOUNT_ID_HEADER
-    assert http_module.ACCOUNT_NAME_HEADER == headers.ACCOUNT_NAME_HEADER
     assert http_module.LAUNCH_MODEL_HEADER == headers.LAUNCH_MODEL_HEADER
     assert http_module.LAUNCH_EFFORT_HEADER == headers.LAUNCH_EFFORT_HEADER
     assert http_module.TELEMETRY_KIND_HEADER == TELEMETRY_KIND_HEADER
     assert http_module.LAUNCH_MODEL_VARIABLE == claude_launcher.LAUNCH_MODEL_VARIABLE
     assert http_module.LAUNCH_EFFORT_VARIABLE == claude_launcher.LAUNCH_EFFORT_VARIABLE
-    assert http_module.ACCOUNT_SLUG_VARIABLE == account.SLUG_VARIABLE
-    assert http_module.ACCOUNT_LABEL_VARIABLE == account.LABEL_VARIABLE
     assert http_module.PROBE_VARIABLE == claude_live_usage.PROBE_VARIABLE
     # One line per terminal we can drive: a client cannot import a plugin to ask
     # which variable names the current window, so it carries the union. BOTH are
@@ -498,8 +493,6 @@ def test_the_claude_hook_ships_its_stdin_and_what_it_observed(daemon):
         port=daemon.port,
         environment={
             "KITTY_WINDOW_ID": "77",
-            account.SLUG_VARIABLE: "c2",
-            account.LABEL_VARIABLE: "Account Two",
             claude_launcher.LAUNCH_MODEL_VARIABLE: "fable",
             claude_launcher.LAUNCH_EFFORT_VARIABLE: "high",
         },
@@ -514,8 +507,8 @@ def test_the_claude_hook_ships_its_stdin_and_what_it_observed(daemon):
     # Its own pid, not the CLI's: the daemon walks the ancestry, while the CLI is
     # still blocked on this response and therefore provably alive.
     assert delivery.headers[headers.CLIENT_PROCESS_HEADER].isdigit()
-    assert delivery.headers[headers.ACCOUNT_ID_HEADER] == "c2"
-    assert delivery.headers[headers.ACCOUNT_NAME_HEADER] == "Account Two"
+    assert headers.ACCOUNT_ID_HEADER not in delivery.headers
+    assert headers.ACCOUNT_NAME_HEADER not in delivery.headers
     assert delivery.headers[headers.LAUNCH_MODEL_HEADER] == "fable"
     assert delivery.headers[headers.LAUNCH_EFFORT_HEADER] == "high"
 
@@ -541,7 +534,7 @@ def test_the_codex_hook_ships_only_what_codex_has(daemon):
         CODEX_HOOK,
         stdin=b'{"session_id":"session-two"}',
         port=daemon.port,
-        environment={"KITTY_WINDOW_ID": "12", account.SLUG_VARIABLE: "c2"},
+        environment={"KITTY_WINDOW_ID": "12"},
     )
 
     assert completed.returncode == 0
@@ -566,7 +559,6 @@ def test_the_statusline_ships_the_windows_and_still_runs_the_real_status_line(da
         arguments=[sys.executable, "-c", "import sys; sys.stdin.read(); print('HUD')"],
         stdin=stdin,
         port=daemon.port,
-        environment={account.SLUG_VARIABLE: "work", account.LABEL_VARIABLE: "Work"},
     )
 
     assert completed.returncode == 0
@@ -576,8 +568,8 @@ def test_the_statusline_ships_the_windows_and_still_runs_the_real_status_line(da
     assert delivery.headers[TELEMETRY_KIND_HEADER] == "statusline"
     document = json.loads(delivery.body)
     assert document["rate_limits"]["five_hour"]["used_percentage"] == 25
-    # Forwarded RAW — what a valid account id looks like is decided daemon-side
-    assert (document["_account_id"], document["_account_name"]) == ("work", "Work")
+    assert "_account_id" not in document
+    assert "_account_name" not in document
 
 
 def test_the_keybinding_ships_only_its_environment(daemon):

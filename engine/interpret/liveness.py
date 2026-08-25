@@ -6,8 +6,13 @@ import time
 
 from core.process import process_alive, process_is_alive
 from domain.ids import RawEventId
-from harness.contract import HarnessRawEventSource
-from harness.models import LIVENESS_SOURCE_TYPE, RawEvent, Session
+from harness.contract import HarnessRawEventSource, SessionTerminalState, TerminalWindows
+from harness.models import (
+    LIVENESS_SOURCE_TYPE,
+    RESUME_LIVENESS_SOURCE_TYPE,
+    RawEvent,
+    Session,
+)
 from repository.mapper.documents import encode_document
 from harness.models.directives import ProcessExit
 
@@ -68,10 +73,7 @@ class SessionLivenessSource(HarnessRawEventSource):
         # re-reading them off `self.session` below would discard that.
         self.plugin = session.plugin
         self.harness_process_id = session.harness_process_id
-        self.source_identity = (
-            f"{self.plugin.info.name}:liveness:"
-            f"{session.session_id}:{self.harness_process_id}"
-        )
+        self.source_identity = f"{self.plugin.info.name}:liveness:{session.session_id}:{self.harness_process_id}"
 
     def read(self, after_position: str | None) -> tuple[RawEvent, ...]:
         if after_position == "exited":
@@ -82,19 +84,69 @@ class SessionLivenessSource(HarnessRawEventSource):
             self.plugin.info.cli_process_name,
         ):
             return ()
-        return (RawEvent(
-            raw_event_id=RawEventId(self.source_identity),
-            harness=self.plugin.info.name,
-            source_type=LIVENESS_SOURCE_TYPE,
-            source_name=f"process:{self.harness_process_id}",
-            source_position="exited",
-            session_id=self.session.session_id,
-            actor_id=self.session.lead_actor_id,
-            parent_actor_id=None,
-            observed_at=time.time(),
-            encoding="json",
-            payload=encode_document(
-                ProcessExit(process_id=self.harness_process_id, state="exited")
+        return (
+            RawEvent(
+                raw_event_id=RawEventId(self.source_identity),
+                harness=self.plugin.info.name,
+                source_type=LIVENESS_SOURCE_TYPE,
+                source_name=f"process:{self.harness_process_id}",
+                source_position="exited",
+                session_id=self.session.session_id,
+                actor_id=self.session.lead_actor_id,
+                parent_actor_id=None,
+                observed_at=time.time(),
+                encoding="json",
+                payload=encode_document(ProcessExit(process_id=self.harness_process_id, state="exited")),
+                source_identity=self.source_identity,
             ),
-            source_identity=self.source_identity,
-        ),)
+        )
+
+
+class SessionWindowLivenessSource(HarnessRawEventSource):
+    """Use the terminal window when a resumed CLI sends no process hook."""
+
+    def __init__(
+        self,
+        session: Session,
+        session_terminal_state: SessionTerminalState,
+        terminal_windows: TerminalWindows,
+    ) -> None:
+        if session.terminal_window_id is None:
+            raise ValueError(f"session has no terminal window: {session.session_id}")
+        if session.plugin is None:
+            raise ValueError(f"session has no attached harness plugin: {session.session_id}")
+        self.session = session
+        self.plugin = session.plugin
+        self.terminal = session_terminal_state
+        self.terminal_windows = terminal_windows
+        self.source_identity = (
+            f"{self.plugin.info.name}:resume-liveness:{session.session_id}:{session.terminal_window_id}"
+        )
+
+    def read(self, after_position: str | None) -> tuple[RawEvent, ...]:
+        if after_position == "exited":
+            return ()
+        window_id = self.session.terminal_window_id
+        if window_id is not None and self.terminal.window_is_live(
+            self.session.session_id,
+            window_id,
+            self.terminal_windows,
+        ):
+            return ()
+        return (
+            RawEvent(
+                raw_event_id=RawEventId(self.source_identity),
+                harness=self.plugin.info.name,
+                source_type=RESUME_LIVENESS_SOURCE_TYPE,
+                source_name=f"window:{self.session.terminal_window_id}",
+                source_position="exited",
+                session_id=self.session.session_id,
+                actor_id=self.session.lead_actor_id,
+                parent_actor_id=None,
+                observed_at=time.time(),
+                encoding="json",
+                payload=encode_document(ProcessExit(process_id=None, state="exited")),
+                source_identity=self.source_identity,
+                terminal_window_id=self.session.terminal_window_id,
+            ),
+        )

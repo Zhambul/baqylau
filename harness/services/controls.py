@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 
 from audit.recorder import AuditRecorder
-from domain.entries import PlanProposedBody, QuestionAskedBody
+from domain.entries import PlanProposedBody, QuestionAskedBody, SessionEntry
 from domain.events import PlanProposed, QuestionAsked
 from harness.contract import HarnessReactorContext
 from harness.models import (
@@ -21,6 +21,8 @@ from harness.models import (
     ControlRequest,
     ControlResult,
     DecidePlan,
+    DeliveryResult,
+    DurableTitleResult,
     Interrupt,
     InterruptRegistry,
     OpenRewind,
@@ -30,6 +32,7 @@ from harness.models import (
     SelectModel,
     SendText,
 )
+from harness.services.control_effects import ControlEffectRecorder
 from repository.contract.session_data import SessionDataRepository
 from repository.contract.sessions import SessionRepository
 from terminal.adapter import TerminalAdapter
@@ -93,6 +96,7 @@ class HarnessControlService(HarnessReactorContext):
         session_data_repository: SessionDataRepository,
         audit_recorder: AuditRecorder,
         interrupt_registry: InterruptRegistry,
+        control_effect_recorder: ControlEffectRecorder,
     ) -> None:
         self.sessions = session_repository
         self.terminal = terminal_adapter
@@ -100,6 +104,7 @@ class HarnessControlService(HarnessReactorContext):
         self.read_model = session_data_repository
         self.audit = audit_recorder
         self.interrupts = interrupt_registry
+        self.control_effects = control_effect_recorder
 
     # One typed public method per gesture — the request type IS the parameter,
     # so a caller never builds a bare `ControlRequest` and this class never
@@ -149,6 +154,10 @@ class HarnessControlService(HarnessReactorContext):
         return self._audited(decide_plan)
 
     def _audited(self, request: ControlRequest) -> ControlOutcome:
+        pending_entry = self._pending_attention_entry(request) if isinstance(request, DecidePlan) else None
+        work_before_close = (
+            self.control_effects.work_before_close(request.session_id) if isinstance(request, CloseSession) else ()
+        )
         started = time.monotonic()
         try:
             outcome = self._execute(request)
@@ -156,6 +165,35 @@ class HarnessControlService(HarnessReactorContext):
             _audit_control(self.audit, request, None, time.monotonic() - started)
             raise
         _audit_control(self.audit, request, outcome, time.monotonic() - started)
+        if (
+            isinstance(request, DecidePlan)
+            and outcome.status == ControlAcknowledgement.ACKNOWLEDGED
+            and pending_entry is not None
+        ):
+            self._record_plan_decision(request, pending_entry)
+        if (
+            isinstance(request, SendText)
+            and isinstance(outcome, DeliveryResult)
+            and outcome.status == ControlAcknowledgement.ACKNOWLEDGED
+            and outcome.queued
+        ):
+            self.control_effects.text_queued(request)
+        if isinstance(request, CloseSession) and outcome.status == ControlAcknowledgement.ACKNOWLEDGED:
+            session = self.sessions.find(request.session_id)
+            if session is not None:
+                self.control_effects.session_closed(
+                    session,
+                    request,
+                    work_before_close,
+                )
+        if (
+            isinstance(request, RenameSession)
+            and isinstance(outcome, DurableTitleResult)
+            and outcome.status == ControlAcknowledgement.ACKNOWLEDGED
+        ):
+            session = self.sessions.find(request.session_id)
+            if session is not None:
+                self.control_effects.session_renamed(session, request)
         # An interrupt the harness acknowledged but did not corroborate in its
         # own raw event: nothing else will ever tell the interpreter this turn
         # ended, so mark it for the registry's fallback fact. A harness whose
@@ -168,6 +206,20 @@ class HarnessControlService(HarnessReactorContext):
         ):
             self.interrupts.mark(request.session_id)
         return outcome
+
+    def _record_plan_decision(
+        self,
+        decide_plan: DecidePlan,
+        pending_session_entry: SessionEntry,
+    ) -> None:
+        session = self.sessions.find(decide_plan.session_id)
+        if session is None or session.plugin is None:
+            return
+        self.control_effects.plan_decided(
+            session,
+            decide_plan,
+            pending_session_entry,
+        )
 
     def _execute(self, request: ControlRequest) -> ControlOutcome:
         session = self.sessions.find(request.session_id)
@@ -193,6 +245,7 @@ class HarnessControlService(HarnessReactorContext):
                 terminal=self.plugin,
                 terminal_window_id=self.terminal.window_for_session(request.session_id),
                 current_effort=lead.effort if lead is not None else None,
+                lead_active=bool(lead and lead.statistics.active_since_internal is not None),
                 pending_attention=self._pending_attention(request),
             ),
         )
@@ -203,13 +256,24 @@ class HarnessControlService(HarnessReactorContext):
         A gesture names the attention it answers; anything else pending is
         somebody else's, and answering the wrong dialog is worse than declining.
         """
+        entry = self._pending_attention_entry(request)
+        if entry is not None:
+            body = entry.body
+            if isinstance(body, QuestionAskedBody):
+                return QuestionAsked(body.attention_id, body.questions)
+            if isinstance(body, PlanProposedBody):
+                return PlanProposed(body.attention_id, body.plan)
+        return None
+
+    def _pending_attention_entry(self, request: ControlRequest) -> SessionEntry | None:
         attention_id = getattr(request, "attention_id", None)
         if attention_id is None:
             return None
-        for entry in self.read_model.pending_attention(request.session_id):
-            body = entry.body
-            if isinstance(body, QuestionAskedBody) and body.attention_id == attention_id:
-                return QuestionAsked(body.attention_id, body.questions)
-            if isinstance(body, PlanProposedBody) and body.attention_id == attention_id:
-                return PlanProposed(body.attention_id, body.plan)
-        return None
+        return next(
+            (
+                entry
+                for entry in self.read_model.pending_attention(request.session_id)
+                if getattr(entry.body, "attention_id", None) == attention_id
+            ),
+            None,
+        )

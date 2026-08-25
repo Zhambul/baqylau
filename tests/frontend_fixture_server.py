@@ -3,19 +3,19 @@
 from __future__ import annotations
 
 import os
-import signal
-import subprocess
+import socket
 import sys
 import tempfile
 import time
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 PORT = int(os.environ.get("BAQYLAU_E2E_PORT", "8794"))
 
 
-def _seed(data_directory: Path) -> None:
+def _seed(data_directory: Path) -> dict[Any, Any]:
     os.environ["BAQYLAU_DATA_DIR"] = str(data_directory)
     os.environ["BAQYLAU_DASHBOARD_PORT"] = str(PORT)
     os.environ["BAQYLAU_DASHBOARD_NOTIFY_TELEGRAM"] = "0"
@@ -26,6 +26,7 @@ def _seed(data_directory: Path) -> None:
     from app import providers
     from app.injection import registry, resolve
     from domain.events import (
+        ActorAssignmentStarted,
         ActorDescriptionChanged,
         ActorFinished,
         ActorStarted,
@@ -36,6 +37,7 @@ def _seed(data_directory: Path) -> None:
         GoalChanged,
         MessageCreated,
         ModelChanged,
+        QuestionAnswered,
         QuestionAsked,
         SearchPerformed,
         SessionFinished,
@@ -54,23 +56,27 @@ def _seed(data_directory: Path) -> None:
     from domain.ids import (
         AccountId,
         ActorId,
+        AssignmentId,
         AttentionId,
         CanonicalEventId,
         HarnessName,
         MessageId,
         QuestionId,
         RawEventId,
+        RequestId,
         SessionId,
         ShellId,
         TaskId,
         TaskListId,
         TurnId,
+        WindowId,
     )
     from domain.records import RecordedTranslationDecision
-    from domain.workspace import ComposerQueue, QueuedMessage
+    from domain.workspace import QueuedMessage
     from domain.values import (
         AccountReference,
         ActorRole,
+        AttentionAnswer,
         AttentionChoice,
         AttentionPrompt,
         EffortChangeReason,
@@ -92,14 +98,10 @@ def _seed(data_directory: Path) -> None:
         UsageScope,
     )
     from harness.models import RawEvent, Session, TranslationResult
+    from fake_terminal import FakeTerminal, window
+    from terminal.models import SESSION_WINDOW_TAG
 
     instances = registry()
-    sessions = resolve(instances, providers.sessions)
-    raw_events = resolve(instances, providers.raw_events)
-    canonical_events = resolve(instances, providers.canonical_events)
-    reaction_loop = resolve(instances, providers.reaction_loop)
-    workspaces = resolve(instances, providers.workspaces)
-
     now = time.time()
     harness = HarnessName.CODEX
     active_session = SessionId("fixture-active")
@@ -107,7 +109,28 @@ def _seed(data_directory: Path) -> None:
     child_actor = ActorId("fixture-active:researcher")
     parked_session = SessionId("fixture-parked")
     parked_lead = ActorId("fixture-parked:lead")
+    waiting_session = SessionId("fixture-waiting")
+    waiting_lead = ActorId("fixture-waiting:lead")
+    waiting_child = ActorId("fixture-waiting:child")
+    active_window = WindowId("fixture-active-window")
+    waiting_window = WindowId("fixture-waiting-window")
     working_directory = str(REPOSITORY_ROOT)
+    fake_terminal = FakeTerminal((
+        window(
+            active_window,
+            tags={SESSION_WINDOW_TAG: str(active_session)},
+        ),
+        window(
+            waiting_window,
+            tags={SESSION_WINDOW_TAG: str(waiting_session)},
+        ),
+    ))
+    instances[providers.terminal_plugin.build] = fake_terminal.plugin()  # type: ignore[attr-defined]
+    sessions = resolve(instances, providers.sessions)
+    raw_events = resolve(instances, providers.raw_events)
+    canonical_events = resolve(instances, providers.canonical_events)
+    reaction_loop = resolve(instances, providers.reaction_loop)
+    workspaces = resolve(instances, providers.workspaces)
 
     sessions.save(
         harness,
@@ -116,12 +139,23 @@ def _seed(data_directory: Path) -> None:
             active_lead,
             "fixture.jsonl",
             working_directory,
+            terminal_window_id=active_window,
             harness_process_id=os.getpid(),
         ),
     )
     sessions.save(
         harness,
         Session(parked_session, parked_lead, "fixture.jsonl", working_directory),
+    )
+    sessions.save(
+        harness,
+        Session(
+            waiting_session,
+            waiting_lead,
+            "fixture.jsonl",
+            working_directory,
+            terminal_window_id=waiting_window,
+        ),
     )
 
     facts: list[CanonicalEvent] = []
@@ -408,6 +442,43 @@ def _seed(data_directory: Path) -> None:
         parent_actor_id=active_lead,
         seconds_ago=490,
     )
+    answered_attention = AttentionId("fixture-answered-attention")
+    answered_questions = (
+        AttentionPrompt(
+            QuestionId("0"),
+            None,
+            "Which incidents do I close to Done?",
+            False,
+            (AttentionChoice("All 120"), AttentionChoice("Only my 80")),
+        ),
+        AttentionPrompt(
+            QuestionId("1"),
+            None,
+            "Add a comment on each closed incident?",
+            False,
+            (AttentionChoice("No comment"), AttentionChoice("Add a short note")),
+        ),
+    )
+    add(
+        "answered-question-asked",
+        QuestionAsked(answered_attention, answered_questions),
+        turn_id=turn,
+        seconds_ago=80,
+    )
+    add(
+        "answered-question-resolved",
+        QuestionAnswered(
+            answered_attention,
+            (
+                AttentionAnswer(QuestionId("0"), ("All 120",)),
+                AttentionAnswer(QuestionId("1"), ("No comment",)),
+            ),
+            None,
+        ),
+        turn_id=turn,
+        seconds_ago=70,
+    )
+
     question = QuestionId("fixture-question")
     add(
         "active-question",
@@ -428,6 +499,66 @@ def _seed(data_directory: Path) -> None:
         ),
         turn_id=turn,
         seconds_ago=60,
+    )
+
+    waiting_turn = TurnId("waiting-turn")
+    add(
+        "waiting-started",
+        SessionStarted(
+            working_directory,
+            "fixture.jsonl",
+            None,
+            "Waiting for subagent",
+            model,
+            "low",
+            None,
+        ),
+        session_id=waiting_session,
+        actor_id=waiting_lead,
+        seconds_ago=120,
+    )
+    add(
+        "waiting-lead",
+        ActorStarted("Claude", ActorRole.LEAD),
+        session_id=waiting_session,
+        actor_id=waiting_lead,
+        seconds_ago=119,
+    )
+    add(
+        "waiting-title",
+        SessionTitleChanged("Waiting for subagent", TitleOrigin.AUTOMATIC),
+        session_id=waiting_session,
+        actor_id=waiting_lead,
+        seconds_ago=118.5,
+    )
+    add(
+        "waiting-assignment",
+        ActorAssignmentStarted(
+            AssignmentId("fixture-running-assignment"),
+            TextContent("Verify the result"),
+            "Verifier",
+            TextContent("Run the verification"),
+        ),
+        session_id=waiting_session,
+        actor_id=waiting_lead,
+        turn_id=waiting_turn,
+        seconds_ago=118,
+    )
+    add(
+        "waiting-child",
+        ActorStarted("Verifier", ActorRole.CHILD),
+        session_id=waiting_session,
+        actor_id=waiting_child,
+        parent_actor_id=waiting_lead,
+        seconds_ago=117,
+    )
+    add(
+        "waiting-turn-finished",
+        TurnFinished(None, Outcome.SUCCEEDED),
+        session_id=waiting_session,
+        actor_id=waiting_lead,
+        turn_id=waiting_turn,
+        seconds_ago=116,
     )
 
     parked_turn = TurnId("parked-turn")
@@ -514,43 +645,35 @@ def _seed(data_directory: Path) -> None:
             now,
         )
     reaction_loop.tick()
-    workspaces.save_composer_queue(
+    workspaces.enqueue_composer_message(
         active_session,
-        ComposerQueue(
-            (QueuedMessage("show this complete queued message"),),
-            "browser-fixture",
+        QueuedMessage(
+            RequestId("browser-fixture-queued"),
+            "show this complete queued message",
         ),
+        "send",
     )
+    return instances
 
 
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="baqylau-browser-") as temporary:
         data_directory = Path(temporary)
-        _seed(data_directory)
-        log_path = data_directory / "daemon.log"
-        command = [
-            sys.executable,
-            str(REPOSITORY_ROOT / "bin/baqylau-dashboard.py"),
-            "serve",
-            "--port",
-            str(PORT),
-            "--data-dir",
-            str(data_directory),
-            "--log",
-            str(log_path),
-        ]
-        process = subprocess.Popen(command, cwd=REPOSITORY_ROOT)
+        instances = _seed(data_directory)
+        from api import dependencies
+        from api.app import build_web_application
+        from api.server import build_server
+        from app.injection import resolve
 
-        def stop(_signal: int, _frame: object) -> None:
-            if process.poll() is None:
-                process.terminate()
-
-        signal.signal(signal.SIGTERM, stop)
-        signal.signal(signal.SIGINT, stop)
-        exit_code = process.wait()
-        if exit_code != 0 and log_path.is_file():
-            sys.stderr.write(log_path.read_text(encoding="utf-8"))
-        return exit_code
+        bound_socket = socket.create_server(("127.0.0.1", PORT))
+        policy = resolve(instances, dependencies.policy)
+        bound_socket.listen(policy.request_queue_size)
+        server = build_server(
+            build_web_application(instances, run_background_workers=False),
+            policy.graceful_shutdown_seconds,
+        )
+        server.run(sockets=[bound_socket])
+        return 0
 
 
 if __name__ == "__main__":

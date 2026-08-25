@@ -13,14 +13,21 @@
   const appState = getAppState();
   const shown = $derived(
     (appState.application?.usageRows ?? []).filter(
-      (row) => row.windows.length > 0 || row.authenticationError !== null,
+      (row) =>
+        row.windows.length > 0 ||
+        row.authenticationError !== null ||
+        row.collectionError !== null,
     ),
   );
   const columns = $derived(usageColumns(shown));
   const hasAuthenticationError = $derived(
     shown.some((row) => row.authenticationError !== null),
   );
-  const tracks = $derived(usageTracks(columns.length, hasAuthenticationError));
+  const hasCollectionError = $derived(
+    shown.some((row) => row.collectionError !== null),
+  );
+  const hasWarning = $derived(hasAuthenticationError || hasCollectionError);
+  const tracks = $derived(usageTracks(columns.length, hasWarning));
   const nameCharacters = $derived(
     shown.reduce(
       (width, row) => Math.max(width, accountName(row).length),
@@ -71,13 +78,23 @@
         <span class="aname" style:grid-column={tracks.name}
           >{accountName(row)}</span
         >
-        {#if hasAuthenticationError}
+        {#if hasWarning}
           <span
-            class:ghost={row.authenticationError === null}
+            class:ghost={row.authenticationError === null &&
+              row.collectionError === null}
             class="uauth"
+            class:usage-collection-error={row.collectionError !== null}
             style:grid-column={tracks.badge}
-            title={row.authenticationError ?? undefined}
-            aria-hidden={row.authenticationError === null}>⚠ logged out</span
+            title={row.authenticationError ?? row.collectionError ?? undefined}
+            aria-hidden={row.authenticationError === null &&
+              row.collectionError === null}
+            >{row.authenticationError !== null
+              ? '⚠ logged out'
+              : row.collectionError !== null
+                ? row.windows.length === 0
+                  ? '⚠ usage unavailable'
+                  : '⚠ refresh failed'
+                : '⚠'}</span
           >
         {/if}
         {#if row.windows.length === 0}

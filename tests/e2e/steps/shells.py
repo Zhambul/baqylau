@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from pytest_bdd import parsers, then, when
 
+from api.sessiondata.models.entry import ShellFinishedBodyResponse
 from sdk.client import BaqylauClient
 from sdk.state import SessionSnapshot, ShellState
 from tests.e2e.testkit import selectors
 from tests.e2e.testkit.policy import WaitPolicy
-from tests.e2e.testkit.references import ShellRef, Shells, Turns
+from tests.e2e.testkit.references import ShellRef, Shells, Turns, Works
 
 
 def _shell(snapshot: SessionSnapshot, reference: ShellRef) -> ShellState:
@@ -160,6 +161,42 @@ def command_has_state(
     )
 
 
+@then(parsers.parse(
+    'turn "{turn_name}" prompt is delivered after command "{command_name}" finishes'
+))
+def turn_prompt_is_delivered_after_command_finishes(
+    client: BaqylauClient,
+    turns: Turns,
+    shells: Shells,
+    wait_policy: WaitPolicy,
+    turn_name: str,
+    command_name: str,
+) -> None:
+    command = shells.get(command_name)
+    turn = selectors.turn(
+        client.sessions.watch(command.session),
+        turns.get(turn_name),
+        wait_policy.turn,
+    )
+    turns.replace(turn_name, turn)
+    if turn.prompt_cursor is None:
+        raise AssertionError(f"turn {turn_name!r} has no prompt cursor")
+    finished = [
+        entry
+        for entry in client.sessions.snapshot(command.session).entries
+        if entry.actor_id == command.actor_id
+        and isinstance(entry.body, ShellFinishedBodyResponse)
+        and entry.body.shell_id == command.shell_id
+    ]
+    assert len(finished) == 1, (
+        f"command {command_name!r} has {len(finished)} completion facts"
+    )
+    assert turn.prompt_cursor > finished[0].cursor, (
+        f"turn {turn_name!r} prompt at {turn.prompt_cursor} was not delivered "
+        f"after command {command_name!r} finished at {finished[0].cursor}"
+    )
+
+
 @then(parsers.parse('command "{name}" has output containing \'{text}\''))
 def command_has_output(
     client: BaqylauClient,
@@ -186,6 +223,19 @@ def command_has_exit_code(
         lambda snapshot: True if _shell(snapshot, reference).exit_code == exit_code else None,
         timeout=wait_policy.feed,
     )
+
+
+@then(parsers.parse('command "{command_name}" belongs to worker of work "{work_name}"'))
+def command_belongs_to_work_worker(
+    shells: Shells,
+    works: Works,
+    command_name: str,
+    work_name: str,
+) -> None:
+    command = shells.get(command_name)
+    work = works.get(work_name)
+    assert command.session == work.session
+    assert command.actor_id == work.worker.actor_id
 
 
 @then(parsers.parse('command "{name}" becomes a background job'))

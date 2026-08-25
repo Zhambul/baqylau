@@ -40,6 +40,7 @@ LABEL_VARIABLE
 # baseline: a serialized field is a framework contract, not debt.
 new_session_drafts  # dashboard/services/preferences.py
 error_id         # audit/models.py
+completed        # api/sessiondata GoalResponse; read by HTTP model serialization
 
 # `notify/presence.py`'s RouteDecision/RouteCandidate: read whole by
 # `dataclasses.asdict(decision)` (notify/notifier.py, the `notify-route`
@@ -146,6 +147,7 @@ sender_thread_id   # records.py CollabAgentToolCallItem
 receiver_thread_ids  # records.py CollabAgentToolCallItem
 receiver_agents      # records.py CollabAgentToolCallItem
 agents_states        # records.py CollabAgentToolCallItem
+image_url            # records.py ContentPart
 
 # A TypedDict field read only through dict-literal construction and ["check"]
 # subscripts (askdialog_screen.rows / its dialog callers) — the ANNOTATION is
@@ -218,6 +220,12 @@ preventedContinuation               # SystemRecord
 durationMs                          # SystemRecord / GoalStatusAttachment
 messageCount                        # SystemRecord
 pendingBackgroundAgentCount         # SystemRecord
+session_title                      # HookPayload
+
+# terminal/models/values.py WindowInfo is built from the terminal protocol.
+# Consumers use the tab-level focus values. This native pane-level field stays
+# in the closed terminal shape and is read through dataclass serialization.
+is_active_in_tab
 fallbackModel                       # SystemRecord
 originalModel                       # SystemRecord
 persistedAsDefault                  # SystemRecord

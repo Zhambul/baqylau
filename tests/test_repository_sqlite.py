@@ -8,8 +8,10 @@ exercised through the thing that composes it is a store nobody tests.
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from decimal import Decimal
+from threading import Barrier
 
 import pytest
 
@@ -28,6 +30,7 @@ from domain.events import (
     ShellBackgrounded,
     ShellFinished,
     ShellOutputFinished,
+    TurnFinished,
 )
 from domain.ids import (
     ActorId,
@@ -35,13 +38,20 @@ from domain.ids import (
     CanonicalEventId,
     HarnessName,
     MessageId,
+    RequestId,
     ShellId,
     RawEventId,
     SessionId,
     TaskId,
     WindowId,
 )
-from domain.sessiondata import ActorFacts, ActorStatus, LifecycleState, SessionFacts
+from domain.sessiondata import (
+    ActorFacts,
+    ActorStatus,
+    LifecycleState,
+    SessionFacts,
+    SessionGoal,
+)
 from domain.shells import ShellFollowState, ShellOutputFollowing
 from domain.preferences import (
     NewSessionDraft,
@@ -53,6 +63,7 @@ from domain.uploads import StoredUpload
 from domain.values import (
     ActorRole,
     ExecutionMode,
+    GoalState,
     MessagePhase,
     MessageRole,
     ModelReference,
@@ -60,9 +71,10 @@ from domain.values import (
     ShellFollowUntil,
     TextContent,
 )
-from domain.workspace import AnswerSelection, ComposerDraft, ComposerQueue, DialogDraft, QueuedMessage
+from domain.workspace import AnswerSelection, ComposerDraft, DialogDraft, QueuedMessage
 from harness.models import AccountUsageSnapshot, RawEvent, Session, TranslationResult, UsageWindowSample
 from repository.errors import EventIdentityConflict, SchemaVersionMismatch
+from repository.mapper import documents
 from repository.mapper.documents import decode_document, encode_document
 from repository.impl.sqlite.canonical_events import SqliteCanonicalEventRepository
 from repository.impl.sqlite.connection import SqliteDatabase
@@ -179,12 +191,49 @@ def test_the_main_schema_is_created_whole_at_the_current_version(tmp_path):
 
     with database.read() as connection:
         version = connection.execute("SELECT version FROM schema_version WHERE id=1").fetchone()
-        tables = {
-            row["name"]
-            for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        }
+        tables = {row["name"] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert version["version"] == MAIN_SCHEMA_VERSION
-    assert {"raw_events", "canonical_events", "interpretations", "shell_output"} <= tables
+    assert {
+        "raw_events",
+        "pending_raw_events",
+        "canonical_events",
+        "interpretations",
+        "shell_output",
+    } <= tables
+
+
+def _restore_version_six_queue_table(connection) -> None:
+    connection.execute("DROP INDEX index_composer_queue_request")
+    connection.execute("ALTER TABLE composer_queue_items RENAME TO composer_queue_items_v7")
+    connection.execute(
+        """
+        CREATE TABLE composer_queue_items(
+            session_id TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            PRIMARY KEY(session_id, position),
+            FOREIGN KEY(session_id) REFERENCES session_workspaces(session_id)
+                ON DELETE CASCADE
+        )
+        """
+    )
+    connection.execute(
+        "INSERT INTO composer_queue_items(session_id, position, text) "
+        "SELECT session_id, position, text FROM composer_queue_items_v7"
+    )
+    connection.execute("DROP TABLE composer_queue_items_v7")
+
+
+def _restore_version_eleven_schema(connection) -> None:
+    connection.execute("DROP TRIGGER sessions_lifecycle_after_event")
+    connection.execute("DROP TRIGGER sessions_lifecycle_after_insert")
+    connection.execute("ALTER TABLE sessions DROP COLUMN lifecycle")
+    connection.execute("ALTER TABLE sessions DROP COLUMN project_directory")
+
+
+def _restore_version_ten_schema(connection) -> None:
+    _restore_version_eleven_schema(connection)
+    connection.execute("ALTER TABLE raw_events DROP COLUMN payload_codec")
 
 
 def test_version_four_actor_models_are_migrated_to_the_domain_shape(tmp_path):
@@ -209,6 +258,8 @@ def test_version_four_actor_models_are_migrated_to_the_domain_shape(tmp_path):
                    '$.model.selection_id', 'opus'
                )"""
         )
+        _restore_version_six_queue_table(connection)
+        _restore_version_ten_schema(connection)
         connection.execute("UPDATE schema_version SET version = 4 WHERE id = 1")
 
     upgraded = main_database(path)
@@ -249,6 +300,8 @@ def test_version_five_closes_finished_codex_backgrounded_shells(tmp_path):
         1001.0,
     )
     with old_database.write() as connection:
+        _restore_version_six_queue_table(connection)
+        _restore_version_ten_schema(connection)
         connection.execute("UPDATE schema_version SET version = 5 WHERE id = 1")
 
     upgraded = main_database(path)
@@ -260,9 +313,227 @@ def test_version_five_closes_finished_codex_backgrounded_shells(tmp_path):
     assert repaired is not None
     assert repaired.payload == ShellOutputFinished(shell_id, Outcome.SUCCEEDED)
     with upgraded.read() as connection:
+        version = connection.execute("SELECT version FROM schema_version WHERE id = 1").fetchone()
+    assert version["version"] == MAIN_SCHEMA_VERSION
+
+
+def test_version_six_queued_messages_gain_stable_request_identities(tmp_path):
+    path = str(tmp_path / "main.db")
+    old_database = main_database(path)
+    old_database.initialize()
+    with old_database.write() as connection:
+        connection.execute(
+            "INSERT INTO session_workspaces(session_id, queue_origin) VALUES(?, ?)",
+            (str(SESSION), "browser"),
+        )
+        connection.executemany(
+            "INSERT INTO composer_queue_items(session_id, position, request_id, text) VALUES(?, ?, ?, ?)",
+            (
+                (str(SESSION), 0, "request-one", "one"),
+                (str(SESSION), 1, "request-two", "two"),
+            ),
+        )
+        _restore_version_six_queue_table(connection)
+        _restore_version_ten_schema(connection)
+        connection.execute("UPDATE schema_version SET version = 6 WHERE id = 1")
+
+    upgraded = main_database(path)
+    upgraded.initialize()
+
+    stored = SqliteSessionWorkspaceRepository(upgraded).find(SESSION)
+    assert stored is not None and stored.queue is not None
+    assert [item.request_id for item in stored.queue.items] == [
+        "legacy:0",
+        "legacy:1",
+    ]
+    with upgraded.read() as connection:
+        version = connection.execute("SELECT version FROM schema_version WHERE id = 1").fetchone()
+    assert version["version"] == MAIN_SCHEMA_VERSION
+
+
+def test_version_seven_goals_gain_the_complete_state_shape(tmp_path):
+    path = str(tmp_path / "main.db")
+    old_database = main_database(path)
+    old_database.initialize()
+    facts = SessionFacts(
+        session_id=SESSION,
+        harness=HARNESS,
+        state=LifecycleState.RUNNING,
+        working_directory="/project",
+        started_at=1000.0,
+        lead_actor_id=ACTOR,
+        goal=SessionGoal("Ship it", GoalState.COMPLETED, None),
+    )
+    with old_database.write() as connection:
+        connection.execute(
+            "INSERT INTO session_data(session_id, revision, payload) VALUES(?, ?, ?)",
+            (str(SESSION), 1, encode_document(facts).decode()),
+        )
+        connection.execute(
+            """
+            UPDATE session_data
+            SET payload = json_set(
+                json_remove(payload, '$.goal.state', '$.goal.reason'),
+                '$.goal.completed', true
+            )
+            """
+        )
+        _restore_version_ten_schema(connection)
+        connection.execute("UPDATE schema_version SET version = 7 WHERE id = 1")
+
+    upgraded = main_database(path)
+    upgraded.initialize()
+
+    with upgraded.read() as connection:
+        row = connection.execute(
+            "SELECT payload FROM session_data WHERE session_id = ?",
+            (str(SESSION),),
+        ).fetchone()
         version = connection.execute(
             "SELECT version FROM schema_version WHERE id = 1"
         ).fetchone()
+    restored = decode_document(SessionFacts, row["payload"])
+    assert restored.goal is not None
+    assert restored.goal.state == GoalState.COMPLETED
+    assert restored.goal.reason is None
+    assert version["version"] == MAIN_SCHEMA_VERSION
+
+
+def test_version_eight_settles_codex_shell_finishes_added_after_the_turn(tmp_path):
+    path = str(tmp_path / "main.db")
+    old_database = main_database(path)
+    raw_events = SqliteRawEventRepository(old_database)
+    canonical = SqliteCanonicalEventRepository(old_database)
+    raw = a_raw_event()
+    raw_events.record([raw])
+    turn_finished = replace(
+        a_started_event("turn-finished"),
+        payload=TurnFinished(None, Outcome.SUCCEEDED),
+    )
+    shell_id = ShellId("late-parallel-command")
+    shell_finished = replace(
+        a_started_event("late-shell-finished"),
+        payload=ShellFinished(shell_id, Outcome.SUCCEEDED, TextContent("done"), 0),
+    )
+    canonical.record_translation(
+        raw,
+        "1",
+        TranslationResult((turn_finished, shell_finished), "translated"),
+        1001.0,
+    )
+    with old_database.write() as connection:
+        _restore_version_ten_schema(connection)
+        connection.execute("UPDATE schema_version SET version = 8 WHERE id = 1")
+
+    upgraded = main_database(path)
+    upgraded.initialize()
+
+    repaired = SqliteCanonicalEventRepository(upgraded).find(
+        CanonicalEventId("migration:9:shell-settled:late-shell-finished")
+    )
+    assert repaired is not None
+    assert repaired.payload == ShellOutputFinished(shell_id, Outcome.SUCCEEDED)
+    with upgraded.read() as connection:
+        version = connection.execute(
+            "SELECT version FROM schema_version WHERE id = 1"
+        ).fetchone()
+    assert version["version"] == MAIN_SCHEMA_VERSION
+
+
+def test_version_nine_builds_the_pending_raw_event_queue(tmp_path):
+    path = str(tmp_path / "main.db")
+    old_database = main_database(path)
+    raw_events = SqliteRawEventRepository(old_database)
+    canonical = SqliteCanonicalEventRepository(old_database)
+    decided = a_raw_event("raw-decided", "1")
+    pending = a_raw_event("raw-pending", "2")
+    raw_events.record([decided, pending])
+    canonical.record_translation(
+        decided,
+        "1",
+        TranslationResult((), "ignored_unknown"),
+        1001.0,
+    )
+    with old_database.write() as connection:
+        connection.execute("DROP TABLE pending_raw_events")
+        _restore_version_ten_schema(connection)
+        connection.execute("UPDATE schema_version SET version = 9 WHERE id = 1")
+
+    upgraded = main_database(path)
+    upgraded.initialize()
+
+    assert [event.raw_event_id for event in SqliteRawEventRepository(upgraded).unverdicted(10)] == [
+        RawEventId("raw-pending")
+    ]
+    with upgraded.read() as connection:
+        version = connection.execute(
+            "SELECT version FROM schema_version WHERE id = 1"
+        ).fetchone()
+    assert version["version"] == MAIN_SCHEMA_VERSION
+
+
+def test_version_eleven_builds_the_session_lifecycle_index(tmp_path):
+    path = str(tmp_path / "main.db")
+    old_database = main_database(path)
+    sessions = SqliteSessionRepository(old_database)
+    raw_events = SqliteRawEventRepository(old_database)
+    canonical = SqliteCanonicalEventRepository(old_database)
+    sessions.save(HARNESS, a_session())
+    raw = a_raw_event()
+    raw_events.record([raw])
+    finished = replace(
+        a_started_event("event-finished"),
+        payload=SessionFinished(Outcome.SUCCEEDED, None),
+    )
+    canonical.record_translation(
+        raw,
+        "1",
+        TranslationResult((finished,), "translated"),
+        1001.0,
+    )
+    with old_database.write() as connection:
+        _restore_version_eleven_schema(connection)
+        connection.execute("UPDATE schema_version SET version = 11 WHERE id = 1")
+
+    upgraded = main_database(path)
+    upgraded.initialize()
+
+    assert SqliteSessionRepository(upgraded).watchable() == ()
+    with upgraded.read() as connection:
+        session = connection.execute(
+            "SELECT lifecycle FROM sessions WHERE session_id = ?",
+            (str(SESSION),),
+        ).fetchone()
+        version = connection.execute(
+            "SELECT version FROM schema_version WHERE id = 1"
+        ).fetchone()
+    assert session["lifecycle"] == "finished"
+    assert version["version"] == MAIN_SCHEMA_VERSION
+
+
+def test_version_twelve_adds_the_stable_project_identity(tmp_path):
+    path = str(tmp_path / "main.db")
+    old_database = main_database(path)
+    sessions = SqliteSessionRepository(old_database)
+    sessions.save(HARNESS, a_session())
+    with old_database.write() as connection:
+        connection.execute("ALTER TABLE sessions DROP COLUMN project_directory")
+        connection.execute("UPDATE schema_version SET version = 12 WHERE id = 1")
+
+    upgraded = main_database(path)
+    upgraded.initialize()
+
+    stored = SqliteSessionRepository(upgraded).find(SESSION)
+    assert stored is not None
+    assert stored.project_directory is None
+    with upgraded.read() as connection:
+        columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(sessions)")
+        }
+        version = connection.execute(
+            "SELECT version FROM schema_version WHERE id = 1"
+        ).fetchone()
+    assert "project_directory" in columns
     assert version["version"] == MAIN_SCHEMA_VERSION
 
 
@@ -281,16 +552,88 @@ def test_a_failed_write_rolls_the_whole_transaction_back(main):
     assert sessions.find(SESSION) is not None
 
 
+def test_repository_transactions_reuse_one_connection_per_thread(main, monkeypatch):
+    main.initialize()
+    opened = []
+    connect = main._connect
+
+    def tracked_connect():
+        connection = connect()
+        opened.append(connection)
+        return connection
+
+    monkeypatch.setattr(main, "_connect", tracked_connect)
+
+    with main.read() as connection_one:
+        connection_one.execute("SELECT 1").fetchone()
+    with main.read() as connection_two:
+        connection_two.execute("SELECT 1").fetchone()
+    with main.write() as connection_three:
+        connection_three.execute("SELECT 1").fetchone()
+
+    assert connection_one is connection_two is connection_three
+    assert opened == [connection_one]
+
+
+def test_nested_repository_transactions_fail_before_the_outer_transaction_changes(main):
+    with main.read():
+        with pytest.raises(RuntimeError, match="nested SQLite repository transaction"):
+            with main.write():
+                pass
+
+
+def test_repository_connections_are_not_shared_between_threads(main):
+    barrier = Barrier(2)
+
+    def connection_identity() -> int:
+        with main.read() as connection:
+            barrier.wait()
+            return id(connection)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        identities = tuple(executor.map(lambda _: connection_identity(), range(2)))
+
+    assert identities[0] != identities[1]
+
+
 # --- sessions -----------------------------------------------------------------
 
 
 def test_a_session_upsert_writes_identity_once_and_refreshes_the_live_columns(main):
     sessions = SqliteSessionRepository(main)
-    sessions.save(HARNESS, a_session())
-    sessions.save(HARNESS, a_session(terminal_window_id=WindowId("7"), harness_process_id=42))
+    sessions.save(
+        HARNESS,
+        replace(a_session(), project_directory="/project-owner"),
+    )
+    sessions.save(
+        HARNESS,
+        replace(
+            a_session(terminal_window_id=WindowId("7"), harness_process_id=42),
+            project_directory="/different-owner",
+        ),
+    )
     stored = sessions.find(SESSION)
     assert stored is not None
     assert (stored.terminal_window_id, stored.harness_process_id) == ("7", 42)
+    assert stored.project_directory == "/project-owner"
+
+    reopened = SqliteSessionRepository(main_database(main.path)).find(SESSION)
+    assert reopened is not None
+    assert reopened.project_directory == "/project-owner"
+
+
+def test_a_session_upsert_can_fill_a_missing_project_identity(main):
+    sessions = SqliteSessionRepository(main)
+    sessions.save(HARNESS, a_session())
+    sessions.save(
+        HARNESS,
+        replace(a_session(), project_directory="/project-owner"),
+    )
+
+    stored = sessions.find(SESSION)
+
+    assert stored is not None
+    assert stored.project_directory == "/project-owner"
 
 
 def test_a_finished_session_leaves_the_watchable_set(main):
@@ -313,13 +656,33 @@ def test_a_finished_session_leaves_the_watchable_set(main):
         harness_process_id=None,
         payload=SessionFinished(Outcome.SUCCEEDED, None),
     )
+    canonical.record_translation(a_raw_event(), "1", TranslationResult((finished,), "translated"), 1001.0)
+    assert sessions.watchable() == ()
+
+    resumed_raw = a_raw_event("raw-resumed", "2")
+    raw_events.record([resumed_raw])
+    resumed = a_started_event("event-resumed")
     canonical.record_translation(
-        a_raw_event(), "1", TranslationResult((finished,), "translated"), 1001.0
+        resumed_raw,
+        "1",
+        TranslationResult((resumed,), "translated"),
+        1002.0,
+    )
+    assert [session.session_id for session in sessions.watchable()] == [SESSION]
+
+    refinished_raw = a_raw_event("raw-refinished", "3")
+    raw_events.record([refinished_raw])
+    refinished = replace(finished, event_id=CanonicalEventId("event-refinished"))
+    canonical.record_translation(
+        refinished_raw,
+        "1",
+        TranslationResult((refinished,), "translated"),
+        1003.0,
     )
     assert sessions.watchable() == ()
 
 
-# --- raw evidence -------------------------------------------------------------
+# --- raw observations ---------------------------------------------------------
 
 
 def test_re_recording_an_identical_observation_is_a_no_op(main):
@@ -363,10 +726,25 @@ def test_the_backlog_is_evidence_without_a_verdict_in_arrival_order(main):
     canonical = SqliteCanonicalEventRepository(main)
     raw_events.record([a_raw_event()])
     assert [event.raw_event_id for event in raw_events.unverdicted(10)] == [RawEventId("raw-one")]
-    canonical.record_translation(
-        a_raw_event(), "1", TranslationResult((), "ignored_unknown"), 1000.0
-    )
+    canonical.record_translation(a_raw_event(), "1", TranslationResult((), "ignored_unknown"), 1000.0)
     assert raw_events.unverdicted(10) == ()
+
+
+def test_raw_evidence_is_compressed_in_storage_and_restored_exactly(main):
+    raw_events = SqliteRawEventRepository(main)
+    raw = replace(a_raw_event(), payload=b'{"text":"' + b"repeat " * 1_000 + b'"}')
+
+    raw_events.record([raw])
+
+    with main.read() as connection:
+        stored = connection.execute(
+            "SELECT payload, payload_codec FROM raw_events WHERE raw_event_id=?",
+            (str(raw.raw_event_id),),
+        ).fetchone()
+    assert stored["payload_codec"] == "zlib"
+    assert len(stored["payload"]) < len(raw.payload)
+    assert raw_events.find(raw.raw_event_id) == raw
+    raw_events.record([raw])
 
 
 # --- canonical facts ----------------------------------------------------------
@@ -390,12 +768,8 @@ def test_a_re_observed_fact_adds_provenance_and_is_not_re_accepted(main):
     canonical = SqliteCanonicalEventRepository(main)
     second = a_raw_event("raw-two", "2")
     raw_events.record([a_raw_event(), second])
-    canonical.record_translation(
-        a_raw_event(), "1", TranslationResult((a_started_event(),), "translated"), 1000.0
-    )
-    outcome = canonical.record_translation(
-        second, "1", TranslationResult((a_started_event(),), "translated"), 1001.0
-    )
+    canonical.record_translation(a_raw_event(), "1", TranslationResult((a_started_event(),), "translated"), 1000.0)
+    outcome = canonical.record_translation(second, "1", TranslationResult((a_started_event(),), "translated"), 1001.0)
     assert outcome.accepted == ()
     assert [event.event_id for event in outcome.deduplicated] == [CanonicalEventId("event-one")]
     stored = canonical.find(CanonicalEventId("event-one"))
@@ -421,20 +795,25 @@ def test_the_reaction_loops_page_walks_every_session_in_commit_order(main):
         canonical.record_translation(
             raw,
             "1",
-            TranslationResult((CanonicalEvent(
-                event_id=CanonicalEventId(f"event-{index}"),
-                session_id=session_id,
-                actor_id=ACTOR,
-                turn_id=None,
-                parent_actor_id=None,
-                harness=HARNESS,
-                occurred_at=1000.0 + index,
-                terminal_window_id=None,
-                harness_process_id=None,
-                payload=MessageCreated(
-                    MessageId(f"m{index}"), MessageRole.USER, TextContent("hi"), MessagePhase.PROMPT, None
+            TranslationResult(
+                (
+                    CanonicalEvent(
+                        event_id=CanonicalEventId(f"event-{index}"),
+                        session_id=session_id,
+                        actor_id=ACTOR,
+                        turn_id=None,
+                        parent_actor_id=None,
+                        harness=HARNESS,
+                        occurred_at=1000.0 + index,
+                        terminal_window_id=None,
+                        harness_process_id=None,
+                        payload=MessageCreated(
+                            MessageId(f"m{index}"), MessageRole.USER, TextContent("hi"), MessagePhase.PROMPT, None
+                        ),
+                    ),
                 ),
-            ),), "translated"),
+                "translated",
+            ),
             1000.0 + index,
         )
 
@@ -465,17 +844,13 @@ def test_raw_event_audit_joins_an_observation_to_its_interpretation_and_facts(ma
     canonical = SqliteCanonicalEventRepository(main)
     audits = SqliteRawEventAuditRepository(main)
     raw_events.record([a_raw_event()])
-    canonical.record_translation(
-        a_raw_event(), "3", TranslationResult((a_started_event(),), "translated"), 1000.0
-    )
+    canonical.record_translation(a_raw_event(), "3", TranslationResult((a_started_event(),), "translated"), 1000.0)
     one = audits.audit(RawEventId("raw-one"))
     assert one is not None
     assert one.interpretation is not None
     assert one.interpretation.decision == "translated"
     assert one.interpretation.translator_version == "3"
-    assert [item.event.event_id for item in one.interpretation.events] == [
-        CanonicalEventId("event-one")
-    ]
+    assert [item.event.event_id for item in one.interpretation.events] == [CanonicalEventId("event-one")]
     assert audits.audits_for_session(SESSION) == (one,)
 
 
@@ -555,6 +930,43 @@ AN_ACTOR = ActorFacts(
     name="claude",
     state=LifecycleState.RUNNING,
 )
+
+
+def test_document_mapper_reuses_one_adapter_for_each_shape():
+    documents._adapter.cache_clear()
+    try:
+        payload = encode_document(AN_ACTOR)
+        first = decode_document(ActorFacts, payload)
+        second = decode_document(ActorFacts, payload)
+        cache_info = documents._adapter.cache_info()
+    finally:
+        documents._adapter.cache_clear()
+
+    assert first == AN_ACTOR
+    assert second == AN_ACTOR
+    assert cache_info.misses == 1
+    assert cache_info.hits == 2
+
+
+def test_lead_session_read_omits_child_actor_rows(main):
+    store = SqliteSessionDataRepository(main)
+    child = replace(
+        AN_ACTOR,
+        actor_id=ActorId("child-one"),
+        role=ActorRole.CHILD,
+        parent_actor_id=AN_ACTOR.actor_id,
+    )
+    store.apply(
+        SESSION,
+        SessionDataChanges(session=A_SESSION, actors=(AN_ACTOR, child)),
+        1,
+    )
+
+    leads = store.lead_sessions()
+
+    assert len(leads) == 1
+    assert leads[0].session == A_SESSION
+    assert leads[0].lead == AN_ACTOR
 
 
 def an_entry(entry_id: str) -> SessionEntry:
@@ -728,9 +1140,8 @@ def test_an_older_composer_draft_never_clobbers_a_newer_one(main):
 
 def test_the_queue_and_the_dialog_round_trip_as_rows(main):
     workspace = SqliteSessionWorkspaceRepository(main)
-    workspace.save_composer_queue(
-        SESSION, ComposerQueue((QueuedMessage("one"), QueuedMessage("two")), "web")
-    )
+    workspace.enqueue_composer_message(SESSION, QueuedMessage(RequestId("request-one"), "one"), "send")
+    workspace.enqueue_composer_message(SESSION, QueuedMessage(RequestId("request-two"), "two"), "send")
     workspace.save_dialog_draft(
         SESSION,
         DialogDraft(
@@ -743,15 +1154,25 @@ def test_the_queue_and_the_dialog_round_trip_as_rows(main):
     assert stored is not None
     assert stored.queue is not None
     assert [message.text for message in stored.queue.items] == ["one", "two"]
+    assert [message.request_id for message in stored.queue.items] == [
+        "request-one",
+        "request-two",
+    ]
     assert stored.dialog is not None
     assert stored.dialog.answers[0].selected == ("a", "b")
     assert stored.dialog.answers[0].other == "other text"
 
 
-def test_saving_a_queue_replaces_the_previous_one(main):
+def test_a_queued_request_is_idempotent_and_can_be_removed_by_identity(main):
     workspace = SqliteSessionWorkspaceRepository(main)
-    workspace.save_composer_queue(SESSION, ComposerQueue((QueuedMessage("one"),), "web"))
-    workspace.save_composer_queue(SESSION, ComposerQueue((), "web"))
+    message = QueuedMessage(RequestId("request-one"), "one")
+    workspace.enqueue_composer_message(SESSION, message, "send")
+    workspace.enqueue_composer_message(SESSION, message, "send")
+    stored = workspace.find(SESSION)
+    assert stored is not None and stored.queue is not None
+    assert stored.queue.items == (message,)
+
+    workspace.remove_queued_message(SESSION, RequestId("request-one"))
     stored = workspace.find(SESSION)
     assert stored is not None and stored.queue is None
 
@@ -783,9 +1204,7 @@ def test_hiding_a_directory_twice_keeps_the_newer_stamp(main):
     directories = SqliteHiddenDirectoryRepository(main)
     directories.hide("/project", 1.0)
     directories.hide("/project", 2.0)
-    assert [(entry.working_directory, entry.hidden_at) for entry in directories.hidden()] == [
-        ("/project", 2.0)
-    ]
+    assert [(entry.working_directory, entry.hidden_at) for entry in directories.hidden()] == [("/project", 2.0)]
 
 
 def test_a_stale_new_session_draft_is_rejected_and_the_map_is_pruned(main):
@@ -816,9 +1235,7 @@ def test_task_dismissals_store_the_id_set_and_prune_by_session(main):
     for index in range(4):
         dismissals.dismiss(SessionId(f"s{index}"), [TaskId("t")], float(index), 2)
     remaining = [
-        session
-        for session in (SessionId(f"s{index}") for index in range(4))
-        if dismissals.dismissed_task_ids(session)
+        session for session in (SessionId(f"s{index}") for index in range(4)) if dismissals.dismissed_task_ids(session)
     ]
     assert len(remaining) == 2
 
@@ -911,9 +1328,7 @@ def test_errors_are_written_and_counted_per_session(tmp_path):
     database = audit_database(str(tmp_path / "audit.db"))
     writes = SqliteAuditWriteRepository(database)
     reads = SqliteAuditReadRepository(read_only(database))
-    writes.record_error(
-        ApplicationErrorRecord(str(SESSION), "script", "where", "trace", "context", 1, 5.0)
-    )
+    writes.record_error(ApplicationErrorRecord(str(SESSION), "script", "where", "trace", "context", 1, 5.0))
     stored = reads.errors_for_session(SESSION)
     assert [error.action for error in stored] == ["where"]
     assert reads.error_counts() == {SESSION: 1}

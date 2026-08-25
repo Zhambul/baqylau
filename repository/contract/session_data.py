@@ -76,6 +76,14 @@ class AggregateDelta:
 
 
 @dataclass(frozen=True)
+class SessionLead:
+    """The session row and its named lead actor, without child actor rows."""
+
+    session: SessionFacts
+    lead: ActorFacts | None
+
+
+@dataclass(frozen=True)
 class EntryPage:
     """One page of the feed, oldest first.
 
@@ -129,6 +137,10 @@ class SessionDataRepository(Protocol):
 
     def visible(self) -> tuple[SessionData, ...]:
         """Every session's aggregate — the list view, one query per table."""
+        ...
+
+    def lead_sessions(self) -> tuple[SessionLead, ...]:
+        """Every session with only its lead actor."""
         ...
 
     def high_water_cursor(self) -> int:

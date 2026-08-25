@@ -52,6 +52,9 @@ test-all:
 test-drift:
 	$(PY) -m pytest tests/e2e -q -x $(E2E)
 
+test-browser-drift: build-frontend
+	BAQYLAU_E2E_BROWSER=1 $(PY) -m pytest tests/e2e/browser -q -x $(E2E)
+
 # Alias for the (now default-parallel) suite; kept for muscle memory.
 test-par: test
 
@@ -118,4 +121,4 @@ deadcode-backlog:
 		--exclude "$(DEADCODE_EXCLUDES)" \
 		--ignore-decorators "$(DEADCODE_DECORATORS)" || true
 
-.PHONY: frontend-install build-frontend test-frontend test-browser test-python test test-seq test-all test-drift test-par lint lint-fix typecheck deadcode deadcode-backlog
+.PHONY: frontend-install build-frontend test-frontend test-browser test-python test test-seq test-all test-drift test-browser-drift test-par lint lint-fix typecheck deadcode deadcode-backlog

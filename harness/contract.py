@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from collections.abc import Callable
 from typing import Mapping, Protocol
 
-from domain.ids import WindowId
+from domain.ids import HarnessName, SessionId, WindowId
 from domain.values import ModelReference
 from harness.models.catalog import HarnessCatalogSnapshot, QueryContext
 from harness.models.controls import (
@@ -58,6 +58,9 @@ from harness.models.usage import UsageRow
 from repository.contract.usage import AccountUsageRepository
 from domain.events import CanonicalEvent, EventPayload
 from terminal.contract import TerminalViewport
+from terminal.models import WindowInfo
+
+TerminalWindows = tuple[WindowInfo, ...]
 
 
 class HarnessRawEventSource(Protocol):
@@ -77,6 +80,10 @@ class HarnessRawEventSource(Protocol):
 
 class HarnessRawEventSources(Protocol):
     def for_session(self, session: Session) -> tuple[HarnessRawEventSource, ...]: ...
+
+    def release_session(self, session_id: SessionId) -> None:
+        """Release cached source readers after the session has finished."""
+        ...
 
 
 class HarnessHookGateway(Protocol):
@@ -116,6 +123,10 @@ class HarnessTranslator(Protocol):
     """Translates the harness's own raw events: hook payloads and native files."""
 
     def translate(self, raw_event: RawEvent) -> TranslationResult: ...
+
+    def release_session(self, session_id: SessionId) -> None:
+        """Release transient correlation after the session has finished."""
+        ...
 
 
 class CoreTranslator(Protocol):
@@ -231,6 +242,41 @@ class HarnessTerminalProbe(Protocol):
     def input_state(self, terminal_viewport: TerminalViewport, window_id: WindowId) -> TerminalInputState | None: ...
 
 
+class HarnessResumeLocator(Protocol):
+    """Find known native resume commands in terminal process metadata."""
+
+    def locate(
+        self,
+        windows: tuple[WindowInfo, ...],
+    ) -> tuple[tuple[SessionId, WindowId], ...]: ...
+
+
+class SessionTerminalState(Protocol):
+    """The terminal reads required for resume discovery and liveness."""
+
+    def windows(self) -> tuple[WindowInfo, ...]: ...
+
+    def window_for_session(self, session_id: SessionId) -> WindowId | None: ...
+
+    def window_is_live(
+        self,
+        session_id: SessionId,
+        window_id: WindowId,
+        windows: tuple[WindowInfo, ...],
+    ) -> bool: ...
+
+
+class SessionResumeRecorder(Protocol):
+    """Record one confirmed or discovered native resume launch."""
+
+    def resumed(
+        self,
+        harness: HarnessName,
+        session_id: SessionId,
+        window_id: WindowId,
+    ) -> None: ...
+
+
 @dataclass(frozen=True)
 class HarnessPlugin:
     """One harness, composed."""
@@ -250,3 +296,4 @@ class HarnessPlugin:
     model_display: Callable[[ModelReference], str] | None = None
     usage: HarnessUsage | None = None
     terminal_probe: HarnessTerminalProbe | None = None
+    resume_locator: HarnessResumeLocator | None = None
