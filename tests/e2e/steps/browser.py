@@ -244,6 +244,15 @@ def browser_shows_session(
     browser_session_driver.assert_showing(sessions.get(session_name))
 
 
+@when(parsers.parse('I close browser session "{session_name}"'))
+def close_browser_session(
+    browser_session_driver: BrowserSessionDriver,
+    sessions: Sessions,
+    session_name: str,
+) -> None:
+    browser_session_driver.close_session(sessions.get(session_name))
+
+
 @when(parsers.parse('I open session "{session_name}" in the browser'))
 def open_session_in_browser(
     browser_session_driver: BrowserSessionDriver,

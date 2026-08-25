@@ -304,6 +304,33 @@ class BrowserSessionDriver:
             raise AssertionError(f"dashboard returned HTTP {response.status}")
         self.assert_showing(session)
 
+    def close_session(self, session: SessionRef) -> None:
+        self.assert_showing(session)
+        close = self._page.get_by_role("button", name="✕ close", exact=True)
+        expect(close).to_be_enabled(
+            timeout=self._milliseconds(self._wait_policy.feed),
+        )
+        close.click()
+        confirm = self._page.get_by_role(
+            "button", name="close session?", exact=True
+        )
+        with self._page.expect_response(
+            lambda response: response.request.method == "POST"
+            and response.url.endswith(
+                f"/api/sessions/{session.session_id}/controls/close-session"
+            ),
+            timeout=self._milliseconds(self._wait_policy.feed),
+        ) as response_info:
+            confirm.click()
+        if not response_info.value.ok:
+            raise AssertionError(
+                f"browser close returned HTTP {response_info.value.status}"
+            )
+        expect(self._page).to_have_url(
+            re.compile(r"/#/$"),
+            timeout=self._milliseconds(self._wait_policy.feed),
+        )
+
     def send_prompt(self, session: SessionRef, prompt: str) -> TurnRef:
         before = self._client.sessions.snapshot(session)
         lead = before.lead()

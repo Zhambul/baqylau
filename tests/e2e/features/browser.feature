@@ -190,6 +190,10 @@ Feature: the browser controls real harness sessions
     And the browser shows session "primary"
     And the browser shows the exact text 'BROWSER_RESUMED'
     And browser resume "primary" keeps its metadata and one live session
+    When I close browser session "primary"
+    Then session "primary" finishes
+    And the browser session list does not show session "primary"
+    And a fresh application session list does not contain session "primary"
 
     Examples:
       | harness     | model        | account |
