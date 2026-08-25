@@ -28,6 +28,7 @@ from domain.records import RecordedTranslationDecision
 from domain.values import ActorRole, OpenWorkKind, Outcome
 from harness.models.directives import (
     PlanDecisionObservation,
+    ProcessExit,
     SessionCloseWorkObservation,
     SessionRenameObservation,
     SessionResumeObservation,
@@ -60,7 +61,9 @@ class LivenessTranslator(CoreTranslator):
     clean exit and a kill converge on one fact."""
 
     def translate(self, raw_event: RawEvent) -> TranslationResult:
-        finished = SessionFinished(Outcome.UNKNOWN, "process_exited")
+        observation = decode_document(ProcessExit, raw_event.payload)
+        reason = "terminal_reassigned" if observation.state == "displaced" else "process_exited"
+        finished = SessionFinished(Outcome.UNKNOWN, reason)
         return TranslationResult(
             (canonical_event(raw_event, "session", str(raw_event.session_id), "finished", finished),),
             RecordedTranslationDecision.TRANSLATED,
@@ -164,7 +167,6 @@ class ControlTranslator(CoreTranslator):
             ),
             RecordedTranslationDecision.TRANSLATED,
         )
-
     @staticmethod
     def _session_close(raw_event: RawEvent) -> TranslationResult:
         observed = decode_document(SessionCloseWorkObservation, raw_event.payload)

@@ -86,6 +86,10 @@ class SessionUpsertCanonicalEventReaction(CanonicalEventReaction):
                 harness_process_id=(
                     canonical_event.harness_process_id
                     if started is not None
+                    and (
+                        canonical_event.terminal_window_id is not None
+                        or canonical_event.harness_process_id is not None
+                    )
                     else canonical_event.harness_process_id or session.harness_process_id
                 ),
                 project_directory=project_directory,

@@ -71,13 +71,17 @@ Feature: sessions cross dashboard and terminal boundaries
     And turn "after resume" has final answer 'AFTER_RESUME'
     And journey session "primary" uses its exact saved resume metadata
     And journey session "primary" has one live terminal and one logical lineage
+    And session "primary" is live
+    And the terminal tab for journey session "primary" has color awaiting_response
 
     Examples:
       | harness     | model        | account_mode         | start_origin | resume_origin |
       | codex       | gpt-5.6-luna | no                   | dashboard    | terminal      |
       | codex       | gpt-5.6-luna | no                   | terminal     | dashboard     |
+      | codex       | gpt-5.6-luna | no                   | terminal     | terminal      |
       | claude_code | haiku        | no      | dashboard    | terminal      |
       | claude_code | haiku        | no      | terminal     | dashboard     |
+      | claude_code | haiku        | no      | terminal     | terminal      |
 
   Scenario Outline: a terminal-origin session can assign subagent work
     Given session configuration "primary" uses <harness> with model <model> and low effort

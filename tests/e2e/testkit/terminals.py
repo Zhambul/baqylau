@@ -74,6 +74,12 @@ class RealTerminalDriver:
             timeout=self._wait_policy.feed,
         )
 
+    def assert_host_window_exists(self, journey: SessionJourneyRef) -> None:
+        windows = self._terminal.metadata.windows()
+        assert any(
+            str(window.window_id) == journey.window_id for window in windows
+        ), f"session host window {journey.window_id!r} is not on screen"
+
     def toggle(self, journey: SessionJourneyRef) -> None:
         outcome = self._client.terminal.toggle_panes(
             window_id=journey.window_id,

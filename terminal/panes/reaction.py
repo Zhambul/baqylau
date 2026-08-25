@@ -45,6 +45,17 @@ class PaneCanonicalEventReaction(CanonicalEventReaction):
         session = self.sessions.find(session_id)
         if session is None or session.terminal_window_id is None:
             return  # headless launch: no anchor, no panes
+        if (
+            session.plugin is None
+            or not self.terminal.window_hosts_process(
+                session.terminal_window_id,
+                session.harness_process_id,
+                session.plugin.info.cli_process_name,
+            )
+        ):
+            # A child command inherits KITTY_WINDOW_ID from its parent. Do not
+            # let that copied value retag the parent's tab or open panes in it.
+            return
         self.terminal.open_session_panes(SessionPaneRequest(
             session_id,
             session.terminal_window_id,

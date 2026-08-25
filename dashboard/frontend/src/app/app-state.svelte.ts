@@ -64,6 +64,8 @@ export type PendingLaunch = {
 
 export class AppState {
   private globalStream: GlobalStream | null = null;
+  private globalRecovery: Promise<void> | null = null;
+  private lifecycleSignal: AbortSignal | null = null;
   private bootId: string | null = null;
   private readonly adoptingSessions = new SvelteSet<string>();
   private readonly closeTrackers = new SvelteMap<
@@ -137,6 +139,7 @@ export class AppState {
   }
 
   async initialize(signal: AbortSignal): Promise<void> {
+    this.lifecycleSignal = signal;
     this.presence.start();
     void this.push.start().then(() => {
       this.browserNotificationPermission = browserNotificationPermission();
@@ -580,6 +583,7 @@ export class AppState {
   }
 
   destroy(): void {
+    this.lifecycleSignal = null;
     this.clearLaunchTimer();
     this.globalStream?.close();
     this.globalStream = null;
@@ -662,7 +666,28 @@ export class AppState {
     if (document.visibilityState !== 'visible') return;
     void this.loadApplication();
     void this.activeSession?.refreshApplication();
+    if (this.connection !== 'connected') this.recoverGlobalStream();
   };
+
+  private recoverGlobalStream(): void {
+    const signal = this.lifecycleSignal;
+    if (signal === null || signal.aborted || this.globalRecovery !== null)
+      return;
+    this.globalStream?.close();
+    this.globalStream = null;
+    this.connection = 'connecting';
+    const recovery = this.loadSessions(signal).then(() => {
+      if (signal.aborted) return;
+      this.openGlobalStream(
+        this.listState === 'ready' ? this.sessionCursor : 0,
+        signal,
+      );
+    });
+    this.globalRecovery = recovery;
+    void recovery.finally(() => {
+      if (this.globalRecovery === recovery) this.globalRecovery = null;
+    });
+  }
 
   private connectionFacts(): TelemetryFields {
     return {

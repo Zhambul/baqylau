@@ -495,6 +495,12 @@ def session_is_live(client: BaqylauClient, sessions: Sessions, name: str) -> Non
     assert snapshot.data.live
 
 
+@then(parsers.parse('session "{name}" is not live'))
+def session_is_not_live(client: BaqylauClient, sessions: Sessions, name: str) -> None:
+    snapshot = client.sessions.snapshot(sessions.get(name))
+    assert not snapshot.data.live
+
+
 @then(parsers.parse('session "{name}" keeps one live terminal after revision'))
 def session_keeps_one_live_terminal_after_revision(
     client: BaqylauClient,

@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import os
+import shlex
+import subprocess
 from dataclasses import dataclass
 
 from domain.ids import AccountId, SessionId
@@ -10,7 +14,7 @@ from harness.models import LaunchRequest
 from sdk.client import BaqylauClient, LaunchRef, SessionRef, wait_for
 from terminal.contract import TerminalPlugin
 from terminal.launch import launch_tab_request
-from terminal.models import TabCloseRequest, TextSubmitMode, TextSubmitRequest
+from terminal.models import KeySendRequest, TabCloseRequest, TextSubmitMode, TextSubmitRequest
 from terminal.models.values import WindowId
 from tests.e2e.testkit import selectors
 from tests.e2e.testkit.policy import WaitPolicy
@@ -146,6 +150,164 @@ class JourneyDriver:
             self._wait_policy.cleanup,
         )
 
+    def submit_native_command(self, journey: SessionJourneyRef, command: str) -> None:
+        """Submit one native CLI command to the session's real host window."""
+        outcome = self._terminal.input.submit_text(
+            TextSubmitRequest(
+                WindowId(journey.window_id),
+                command,
+                TextSubmitMode.TYPE,
+            )
+        )
+        if not outcome.succeeded:
+            raise AssertionError(f"native command was not delivered: {outcome.reason}")
+
+    def start_new_native_session(
+        self,
+        journey: SessionJourneyRef,
+        prompt: str,
+    ) -> JourneyTurn:
+        """Use native `/new` and send the first prompt in the same host tab."""
+        before = self._client.sessions.snapshot(journey.session)
+        known = frozenset(item.session.session_id for item in self._client.sessions.list().sessions)
+        self.submit_native_command(journey, "/new")
+        self.submit_native_command(journey, prompt)
+        candidates: list[str] = []
+
+        def announced() -> SessionRef | None:
+            nonlocal candidates
+            candidates = [
+                item.session.session_id
+                for item in self._client.sessions.list().sessions
+                if item.session.session_id not in known
+                and item.session.harness == before.data.session.harness
+                and item.session.working_directory == before.data.session.working_directory
+            ]
+            if len(candidates) > 1:
+                raise AssertionError(
+                    f"native /new produced multiple sessions in window "
+                    f"{journey.window_id!r}: {candidates}"
+                )
+            if candidates:
+                return SessionRef(candidates[0])
+            retry = self._terminal.input.send_key(
+                KeySendRequest(WindowId(journey.window_id), "enter")
+            )
+            if not retry.succeeded:
+                raise AssertionError(f"native /new prompt was not submitted: {retry.reason}")
+            return None
+
+        session = wait_for(
+            lambda: (
+                f"native /new in window {journey.window_id!r} to announce one session; "
+                f"found {candidates}"
+            ),
+            announced,
+            timeout=self._wait_policy.session_announcement,
+        )
+        turn = selectors.turn(
+            self._client.sessions.watch(session),
+            TurnRef(
+                session=session,
+                prompt=prompt,
+                cursor_before=0,
+                expected_prompt_count=1,
+            ),
+            self._wait_policy.feed,
+        )
+        return JourneyTurn(
+            SessionJourneyRef(session, JourneyOrigin.TERMINAL, journey.window_id),
+            turn,
+        )
+
+    def run_unattended_with_inherited_window(
+        self,
+        spec: SessionSpec,
+        host: SessionJourneyRef,
+        prompt: str,
+    ) -> SessionRef:
+        """Run a real non-interactive harness with a copied terminal variable.
+
+        This is an invalid ownership claim but a valid process environment:
+        commands started by an agent inherit the host's KITTY_WINDOW_ID. The
+        harness must still run and report its native session. Baqylau must not
+        treat that copied value as proof that the process owns the host tab.
+        """
+        environment = dict(os.environ)
+        for name in (
+            "CLAUDECODE",
+            "CLAUDE_CODE_CHILD_SESSION",
+            "CLAUDE_CODE_SESSION_ID",
+            "CLAUDE_CODE_ENTRYPOINT",
+            "CLAUDE_CODE_EXECPATH",
+            "CLAUDE_CODE_MESSAGING_SOCKET",
+            "CLAUDE_CODE_MESSAGING_TOKEN",
+            "CLAUDE_CODE_SSE_PORT",
+            "CLAUDE_PID",
+            "CLAUDE_EFFORT",
+            "CLAUDE_OTEL_PORT",
+            "CODEX_COMPANION_SESSION_ID",
+            "BAQYLAU_LAUNCH_MODEL",
+            "BAQYLAU_LAUNCH_EFFORT",
+        ):
+            environment.pop(name, None)
+        # The root test fixture isolates application files. A real detached
+        # Claude process must use the user's installed authentication and hook
+        # settings, as a normal terminal command does.
+        environment.pop("CLAUDE_CONFIG_DIR", None)
+        environment.update(self._launch_environment)
+        environment["BAQYLAU_DASHBOARD_PORT"] = str(self._application_port)
+        environment["KITTY_WINDOW_ID"] = host.window_id
+
+        workspace = spec.workspace or self._workspace
+        if spec.harness == "claude_code":
+            command = (
+                "claude",
+                "--print",
+                "--output-format",
+                "json",
+                "--model",
+                spec.model,
+                "--effort",
+                spec.effort,
+                prompt,
+            )
+        elif spec.harness == "codex":
+            command = (
+                "codex",
+                "exec",
+                "--json",
+                "--skip-git-repo-check",
+                "--model",
+                spec.model,
+                "--config",
+                f'model_reasoning_effort="{spec.effort}"',
+                "--cd",
+                workspace,
+                prompt,
+            )
+        else:
+            raise AssertionError(f"unattended execution is not defined for {spec.harness!r}")
+
+        completed = subprocess.run(
+            command,
+            cwd=workspace,
+            env=environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=self._wait_policy.cleanup,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise AssertionError(
+                f"unattended {spec.harness} exited with {completed.returncode}: "
+                f"{completed.stderr.strip()}"
+            )
+        session = SessionRef(self._unattended_session_id(spec.harness, completed.stdout))
+        self._client.sessions.wait_until_finished(session, self._wait_policy.cleanup)
+        return session
+
     def resume(
         self,
         journey: SessionJourneyRef,
@@ -201,7 +363,7 @@ class JourneyDriver:
         )
         request = launch_tab_request(
             spec.workspace or self._workspace,
-            (plan.command, *plan.arguments),
+            self._reusable_shell_command((plan.command, *plan.arguments)),
             title=plan.title,
             environment=(
                 *plan.environment,
@@ -213,6 +375,18 @@ class JourneyDriver:
         if not opened.succeeded or opened.window_id is None:
             raise AssertionError(f"terminal launch failed: {opened.reason}")
         return opened.window_id
+
+    @staticmethod
+    def _reusable_shell_command(command: tuple[str, ...]) -> tuple[str, ...]:
+        """Run a harness as a command in a terminal shell.
+
+        A person starts a harness from a shell. When the harness exits, that
+        shell remains and can start another session. A tab whose first process
+        is the harness itself has different lifecycle behavior and is not a
+        valid terminal-origin journey.
+        """
+        invocation = shlex.join(command)
+        return ("/bin/zsh", "-ilc", f"{invocation}; exec /bin/zsh -il")
 
     def _terminal_window(self, session: SessionRef) -> WindowId:
         def located() -> WindowId | None:
@@ -226,3 +400,20 @@ class JourneyDriver:
             located,
             timeout=self._wait_policy.feed,
         )
+
+    @staticmethod
+    def _unattended_session_id(harness: str, output: str) -> str:
+        if harness == "claude_code":
+            try:
+                session_id = json.loads(output)["session_id"]
+            except (json.JSONDecodeError, KeyError, TypeError) as error:
+                raise AssertionError(f"Claude did not report a session id: {output!r}") from error
+            return str(session_id)
+        for line in output.splitlines():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") == "thread.started" and event.get("thread_id"):
+                return str(event["thread_id"])
+        raise AssertionError(f"Codex did not report a thread id: {output!r}")
