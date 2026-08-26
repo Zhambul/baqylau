@@ -15,6 +15,7 @@ from typing import cast
 import pytest
 
 from domain.entries import (
+    CompactionFinishedBody,
     EffortChangeBody,
     AssignmentStartedBody,
     FileBody,
@@ -910,6 +911,13 @@ def test_an_actor_to_actor_message_is_a_message_with_a_recipient():
         )
     )
     assert entry.body.recipient_actor_id == CHILD
+
+
+def test_a_finished_compaction_entry_carries_expandable_context():
+    context = TextContent("The retained compacted context")
+    entry = entry_of(CompactionFinished(61_000, 4_000, context))
+
+    assert entry.body == CompactionFinishedBody(61_000, 4_000, context)
 
 
 @pytest.mark.parametrize(

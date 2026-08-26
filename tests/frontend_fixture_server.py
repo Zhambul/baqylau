@@ -31,6 +31,7 @@ def _seed(data_directory: Path, port: int) -> dict[Any, Any]:
         ActorFinished,
         ActorStarted,
         CanonicalEvent,
+        CompactionFinished,
         ContextReported,
         EffortChanged,
         FileAccessed,
@@ -354,6 +355,19 @@ def _seed(data_directory: Path, port: int) -> dict[Any, Any]:
         ),
         turn_id=turn,
         seconds_ago=672.6,
+    )
+    add(
+        "active-compaction",
+        CompactionFinished(
+            82_000,
+            12_000,
+            TextContent(
+                "Retained compacted context: amber circle, blue square",
+                MediaType.TEXT_MARKDOWN,
+            ),
+        ),
+        turn_id=turn,
+        seconds_ago=672.4,
     )
     background = ShellId("fixture-background")
     add(

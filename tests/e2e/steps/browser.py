@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 from pytest_bdd import given, parsers, then, when
@@ -10,6 +11,7 @@ from sdk.client import BaqylauClient, wait_for
 from tests.e2e.testkit.browser import BrowserPlanAction, BrowserSessionDriver
 from tests.e2e.testkit.planning import wait_for_plan_answer
 from tests.e2e.testkit.policy import WaitPolicy
+from tests.e2e.testkit.process import ApplicationProcess
 from tests.e2e.testkit.references import (
     BrowserActions,
     BrowserSessionForms,
@@ -410,6 +412,42 @@ def reload_browser_session(
     session_name: str,
 ) -> None:
     browser_session_driver.reload(sessions.get(session_name))
+
+
+@when(parsers.parse(
+    'I reproduce a rebuild cursor overtake for session "{session_name}"'
+))
+def reproduce_rebuild_cursor_overtake(
+    application_process: ApplicationProcess,
+    sessions: Sessions,
+    session_name: str,
+) -> None:
+    """Put the live process in the state observed in session 01a03de0.
+
+    A rebuild process advanced the stored stream boundary while the daemon kept
+    its earlier in-memory revision. Advancing both durable cursor spaces here
+    reproduces that boundary without racing two test processes nondeterministically.
+    The next real fact must use a cursor above this boundary.
+    """
+    session = sessions.get(session_name)
+    path = application_process.config.data_directory / "main.db"
+    with sqlite3.connect(path) as connection:
+        found = connection.execute(
+            "SELECT MAX(value) FROM ("
+            "SELECT COALESCE(MAX(cursor), 0) AS value FROM canonical_events "
+            "UNION ALL SELECT COALESCE(MAX(cursor), 0) FROM session_entries "
+            "UNION ALL SELECT COALESCE(MAX(revision), 0) FROM session_data "
+            "UNION ALL SELECT COALESCE(MAX(revision), 0) FROM session_data_actors)"
+        ).fetchone()
+        boundary = int(found[0]) + 1_000
+        connection.execute(
+            "UPDATE sqlite_sequence SET seq=? WHERE name='canonical_events'",
+            (boundary,),
+        )
+        connection.execute(
+            "UPDATE session_data SET revision=? WHERE session_id=?",
+            (boundary, str(session.session_id)),
+        )
 
 
 @when("I reload the browser session list")

@@ -172,6 +172,7 @@ class CompactionStartedBodyResponse(BaseModel):
 class CompactionFinishedBodyResponse(BaseModel):
     before_tokens: int | None
     after_tokens: int | None
+    context: ContentResponse | None
 
 
 class AssignmentStartedBodyResponse(BaseModel):

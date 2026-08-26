@@ -803,8 +803,8 @@ CREATE TABLE IF NOT EXISTS shell_output(
 --
 -- What every frontend reads, and the only thing they read. Written at push time
 -- by the writers behind `SessionDataRepository`; `revision` and
--- `session_entries.cursor` come from ONE counter, so "everything after cursor
--- C" is a single question with a single answer across both kinds of change.
+-- `session_entries.cursor` use the canonical event cursor, so "everything
+-- after cursor C" is one question with one answer across both kinds of change.
 
 CREATE TABLE IF NOT EXISTS session_data(
     session_id TEXT PRIMARY KEY,

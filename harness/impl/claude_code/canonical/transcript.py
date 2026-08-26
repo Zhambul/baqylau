@@ -128,6 +128,7 @@ def _note_tag(xml: str, name: str) -> str | None:
 class TranscriptKind(StrEnum):
     BAD = "bad"
     COMPACT = "compact"
+    COMPACT_SUMMARY = "compact_summary"
     RECAP = "recap"
     PROMPT = "prompt"
     SLASH_COMMAND = "slash_command"
@@ -151,6 +152,14 @@ class BadTranscriptRecord:
 class CompactTranscriptRecord:
     before_tokens: int | None
     kind: TranscriptKind = TranscriptKind.COMPACT
+
+
+@dataclass(frozen=True)
+class CompactSummaryTranscriptRecord:
+    text: str
+    boundary_id: str | None
+    before_tokens: int | None = None
+    kind: TranscriptKind = TranscriptKind.COMPACT_SUMMARY
 
 
 @dataclass(frozen=True)
@@ -247,7 +256,8 @@ class ActorAssignmentFinishedTranscriptRecord:
 
 
 TranscriptRecord: TypeAlias = (
-    BadTranscriptRecord | CompactTranscriptRecord | TextTranscriptRecord
+    BadTranscriptRecord | CompactTranscriptRecord | CompactSummaryTranscriptRecord
+    | TextTranscriptRecord
     | PromptTranscriptRecord | SlashCommandTranscriptRecord
     | TeamMessageTranscriptRecord | ResultsTranscriptRecord
     | TeammateIdleTranscriptRecord
@@ -478,7 +488,7 @@ _RESUMES_TURN = (
 # Every `kind` parse_line can return — the record vocabulary of this module,
 # declared in one place so a reader can see the whole of it, and so that adding
 # a kind is a visible act rather than one more branch somewhere.
-KINDS = ("bad", "compact", "recap", "prompt", "teammsg", "results",
+KINDS = ("bad", "compact", "compact_summary", "recap", "prompt", "teammsg", "results",
          "assistant", "monitor_event", "monitor_ended",
          "actor_assignment_finished", "background_command_completed", "goal")
 
@@ -537,6 +547,8 @@ def parse_line(s: str) -> TranscriptRecord | None:
         if isinstance(content, str):
             if not content.strip():
                 return None
+            if user.isCompactSummary:
+                return CompactSummaryTranscriptRecord(content, user.parentUuid)
             if user.origin is not None and user.origin.kind == "task-notification":
                 notification = _task_notification(content)
                 # The earlier queue enqueue owns monitor records. Unlike

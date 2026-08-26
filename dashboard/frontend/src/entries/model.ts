@@ -174,6 +174,7 @@ export type EntryContent =
       readonly body: {
         readonly beforeTokens: number | null;
         readonly afterTokens: number | null;
+        readonly context: Content | null;
       };
     }
   | {

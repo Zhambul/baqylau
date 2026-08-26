@@ -266,6 +266,7 @@ class CompactionStartedBody(EntryBody):
 class CompactionFinishedBody(EntryBody):
     before_tokens: int | None = None
     after_tokens: int | None = None
+    context: Content | None = None
 
 
 @dataclass(frozen=True)

@@ -330,7 +330,9 @@ def entry_body(entry_body: EntryBody) -> EntryBodyResponse:
         return CompactionStartedBodyResponse(before_tokens=entry_body.before_tokens)
     if isinstance(entry_body, bodies.CompactionFinishedBody):
         return CompactionFinishedBodyResponse(
-            before_tokens=entry_body.before_tokens, after_tokens=entry_body.after_tokens
+            before_tokens=entry_body.before_tokens,
+            after_tokens=entry_body.after_tokens,
+            context=values.maybe_content(entry_body.context),
         )
     if isinstance(entry_body, bodies.AssignmentStartedBody):
         return AssignmentStartedBodyResponse(

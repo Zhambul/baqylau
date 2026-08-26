@@ -108,10 +108,10 @@ class SessionDataRepository(Protocol):
     ) -> int:
         """One event's read-model rows and the progress mark, in ONE transaction.
 
-        Stamps every row with the same new revision and returns it. Advancing
-        `reaction_progress` inside the same transaction is what makes a crash
-        replayable: the mark moves only if the rows did, and re-applying an event
-        is harmless because an entry's id is UNIQUE.
+        Stamps every row with the event's canonical cursor and returns it.
+        Advancing `reaction_progress` inside the same transaction is what makes
+        a crash replayable: the mark moves only if the rows did, and re-applying
+        an event is harmless because an entry's id is UNIQUE.
         """
         ...
 

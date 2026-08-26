@@ -1,13 +1,13 @@
-"""The read model over SQLite: three tables, one counter, one write method.
+"""The read model over SQLite: three tables, one cursor, one write method.
 
 Every write goes through `apply`, which is one transaction over all three
 tables plus the progress mark. That is the whole concurrency design: one writer
-thread stamps rows with one monotonic counter, and every reader asks the same
-question — "what changed after C?" — of an index.
+thread stamps rows with the event's monotonic cursor, and every reader asks the
+same question — "what changed after C?" — of an index.
 
-The counter is held in memory and initialised from the maximum across the three
-tables, so it survives a restart without a table of its own. Correct because
-there is exactly one writer: the reaction loop.
+The canonical event cursor stamps every row that event changes. It is already
+global, monotonic, and durable, so a rebuild or a second process cannot make a
+live stream move backwards.
 """
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ from __future__ import annotations
 import sqlite3
 import time
 from collections.abc import Sequence
-from threading import Lock
 
 from domain.entries import (
     ATTENTION_ENTRY_TYPES,
@@ -47,8 +46,6 @@ _ENTRY_COLUMNS = (
 class SqliteSessionDataRepository(SessionDataRepository):
     def __init__(self, sqlite_database: SqliteDatabase) -> None:
         self.sqlite_database = sqlite_database
-        self._revision_lock = Lock()
-        self._revision: int | None = None
 
     # --- the write side ------------------------------------------------------
 
@@ -58,10 +55,11 @@ class SqliteSessionDataRepository(SessionDataRepository):
         session_data_changes: SessionDataChanges,
         canonical_cursor: int,
     ) -> int:
-        # An event that changes nothing still moves the mark, but it does not
-        # burn a revision: a cursor with no row behind it is a client's poll that
-        # returns nothing, every time, forever.
-        revision = 0 if session_data_changes.empty else self._next_revision()
+        # The canonical cursor is the stable identity of this change. Using a
+        # process-local counter here made a daemon that started during a rebuild
+        # keep handing out its stale, lower values after the rebuild finished.
+        # Browsers had already passed those values and never received the rows.
+        revision = canonical_cursor
         with self.sqlite_database.write() as connection:
             if session_data_changes.entry is not None:
                 entry = session_data_changes.entry
@@ -124,19 +122,9 @@ class SqliteSessionDataRepository(SessionDataRepository):
             for table in ("session_entries", "session_data_actors", "session_data"):
                 connection.execute(f"DELETE FROM {table}")
             connection.execute("DELETE FROM reaction_progress")
-            # The entry cursor is an AUTOINCREMENT column, whose high-water mark
-            # outlives the rows; a rebuild that left it in place would start the
-            # new feed above every cursor a client already holds.
+            # Entries now use explicit canonical cursors. Clear SQLite's unused
+            # AUTOINCREMENT mark too, so the table has no hidden cursor state.
             connection.execute("DELETE FROM sqlite_sequence WHERE name='session_entries'")
-        with self._revision_lock:
-            self._revision = 0
-
-    def _next_revision(self) -> int:
-        with self._revision_lock:
-            if self._revision is None:
-                self._revision = self.high_water_cursor()
-            self._revision += 1
-            return self._revision
 
     def high_water_cursor(self) -> int:
         with self.sqlite_database.read() as connection:

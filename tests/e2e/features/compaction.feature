@@ -24,6 +24,7 @@ Feature: session compaction has a complete lifecycle
     When I name the compaction in session "primary" after control "compact context" "context compaction"
     Then compaction "context compaction" finishes
     And compaction "context compaction" has one finished feed entry
+    And compaction "context compaction" has expandable compacted context
     And compaction "context compaction" leaves its actor ready
     When I send prompt to session "primary" as turn "after compaction"
       """

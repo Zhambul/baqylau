@@ -1436,20 +1436,20 @@ def an_entry(entry_id: str) -> SessionEntry:
     )
 
 
-def test_one_counter_stamps_the_entries_and_the_aggregate_revisions_alike(main):
+def test_the_canonical_cursor_stamps_entries_and_aggregate_revisions_alike(main):
     """The whole stream mechanism: an entry's cursor and an aggregate row's
-    revision come from ONE monotonic counter, so "everything after C" is a single
-    question with a single answer across both kinds of change."""
+    revision use the SAME canonical cursor, so "everything after C" is one
+    question with one answer across both kinds of change."""
     store = SqliteSessionDataRepository(main)
 
     first = store.apply(SESSION, SessionDataChanges(session=A_SESSION, actors=(AN_ACTOR,)), 10)
     second = store.apply(SESSION, SessionDataChanges(entry=an_entry("e1")), 11)
     third = store.apply(SESSION, SessionDataChanges(actors=(replace(AN_ACTOR, status=ActorStatus.WORKING),)), 12)
 
-    assert (first, second, third) == (1, 2, 3)
+    assert (first, second, third) == (10, 11, 12)
     data = store.read(SESSION)
-    assert data.cursor == 3
-    assert store.entries_page(SESSION, limit=10).items[0].cursor == 2
+    assert data.cursor == 12
+    assert store.entries_page(SESSION, limit=10).items[0].cursor == 11
     # …and the mark moved with the rows, every time.
     assert store.progress() == 12
 
@@ -1466,14 +1466,21 @@ def test_an_aggregate_read_reports_the_high_water_mark_across_both_kinds(main):
     assert data.cursor == 2
 
 
-def test_the_counter_survives_a_restart_by_reading_what_is_already_there(main):
-    """A fresh process must not hand out a cursor a client already holds."""
+def test_a_stale_process_cannot_hand_out_a_cursor_a_client_already_holds(main):
+    """A rebuild in another process must not make a live stream move back.
+
+    This is the production failure from session 01a03de0: the daemon cached its
+    next revision while a rebuild process was still filling the projection.
+    After the rebuild reached a higher cursor, the daemon wrote the next prompt
+    below the browser's boundary, so the prompt was never reconciled.
+    """
     first = SqliteSessionDataRepository(main)
     first.apply(SESSION, SessionDataChanges(entry=an_entry("e1")), 1)
-    first.apply(SESSION, SessionDataChanges(entry=an_entry("e2")), 2)
+    rebuilding = SqliteSessionDataRepository(main)
+    rebuilding.apply(SESSION, SessionDataChanges(entry=an_entry("e100")), 100)
 
-    restarted = SqliteSessionDataRepository(main)
-    assert restarted.apply(SESSION, SessionDataChanges(entry=an_entry("e3")), 3) == 3
+    assert first.apply(SESSION, SessionDataChanges(entry=an_entry("e101")), 101) == 101
+    assert [entry.cursor for entry in first.entries_page(SESSION, limit=10).items] == [1, 100, 101]
 
 
 def test_an_entry_is_written_once_however_often_its_event_is_replayed(main):
@@ -1544,10 +1551,8 @@ def test_an_entry_body_decodes_as_the_shape_its_own_type_names(main):
     assert stored.body == ShellStartedBody(ShellId("sh1"), TextContent("make test"), ExecutionMode.BACKGROUND)
 
 
-def test_clearing_the_read_model_resets_the_cursor_space_it_handed_out(main):
-    """A rebuild starts the feed again from one. Leaving the AUTOINCREMENT mark
-    behind would start it above every cursor a client already holds, and every
-    poll would come back empty."""
+def test_clearing_the_read_model_keeps_replayed_canonical_cursor_identity(main):
+    """A rebuild gives a fact the same cursor it had before the clear."""
     store = SqliteSessionDataRepository(main)
     store.apply(SESSION, SessionDataChanges(session=A_SESSION, entry=an_entry("e1")), 7)
     store.clear()
@@ -1555,8 +1560,8 @@ def test_clearing_the_read_model_resets_the_cursor_space_it_handed_out(main):
     assert store.read(SESSION) is None
     assert store.visible() == ()
     assert store.progress() == 0
-    assert store.apply(SESSION, SessionDataChanges(entry=an_entry("e1")), 1) == 1
-    assert store.entries_page(SESSION, limit=10).items[0].cursor == 1
+    assert store.apply(SESSION, SessionDataChanges(entry=an_entry("e1")), 7) == 7
+    assert store.entries_page(SESSION, limit=10).items[0].cursor == 7
 
 
 def test_the_list_view_reads_every_session_with_its_own_cursor(main):

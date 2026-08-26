@@ -376,6 +376,7 @@ function entryContent(wire: EntryWireContent): EntryContent {
         body: {
           beforeTokens: optionalCount(body, 'before_tokens'),
           afterTokens: optionalCount(body, 'after_tokens'),
+          context: optionalContent(body, 'context'),
         },
       };
     case 'assignment_started':

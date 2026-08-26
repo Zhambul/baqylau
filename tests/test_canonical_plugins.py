@@ -2965,27 +2965,68 @@ def test_codex_hook_maps_unique_compaction_lifecycle():
             raw_event_id="compact-after",
         )
     )
-
-    assert isinstance(before.canonical_events[0].payload, CompactionStarted)
-    assert isinstance(after.canonical_events[0].payload, CompactionFinished)
-
-
-def test_codex_rollout_compaction_boundary_is_known_hook_plumbing():
-    translated = CodexCanonicalTranslator().translate(
+    boundary = translator.translate(
         raw_event(
-            {"type": "compacted", "payload": {"message": "", "replacement_history": []}},
+            {
+                "type": "compacted",
+                "payload": {
+                    "message": "",
+                    "replacement_history": [
+                        {
+                            "type": "message",
+                            "role": "user",
+                            "content": [
+                                {"type": "input_text", "text": "Remember amber circle."},
+                            ],
+                        },
+                        {
+                            "type": "compaction",
+                            "encrypted_content": "opaque-native-summary",
+                        },
+                    ],
+                },
+            },
             harness=HarnessName.CODEX,
             source_type="rollout",
             raw_event_id="compact-boundary",
         )
     )
 
-    assert translated.decision == "ignored_nonsemantic"
-    assert translated.canonical_events == ()
+    assert isinstance(before.canonical_events[0].payload, CompactionStarted)
+    assert after.canonical_events == ()
+    assert isinstance(boundary.canonical_events[0].payload, CompactionFinished)
+    finished = boundary.canonical_events[0].payload
+    assert finished.context is not None
+    assert "Remember amber circle." in finished.context.text
+    assert "encrypted in the native context" in finished.context.text
+
+
+def test_codex_rollout_compaction_boundary_carries_direct_context():
+    translated = CodexCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "compacted",
+                "payload": {
+                    "message": "Direct compacted context",
+                    "replacement_history": [],
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="compact-boundary",
+        )
+    )
+
+    assert translated.decision == "translated"
+    finished = translated.canonical_events[0].payload
+    assert isinstance(finished, CompactionFinished)
+    assert finished.context is not None
+    assert finished.context.text == "Direct compacted context"
 
 
 def test_claude_compaction_metadata_maps_to_one_finished_event():
-    translated = ClaudeCanonicalTranslator().translate(
+    translator = ClaudeCanonicalTranslator()
+    boundary = translator.translate(
         raw_event(
             {
                 "type": "system",
@@ -3016,11 +3057,31 @@ def test_claude_compaction_metadata_maps_to_one_finished_event():
             raw_event_id="compact-one",
         )
     )
+    translated = translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "compact-summary",
+                "parentUuid": "compact-one",
+                "isCompactSummary": True,
+                "message": {
+                    "role": "user",
+                    "content": "Compacted summary retains amber circle.",
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="compact-summary",
+        )
+    )
 
+    assert boundary.decision == "ignored_nonsemantic"
     assert translated.decision == "translated"
-    assert [event.payload for event in translated.canonical_events] == [
-        CompactionFinished(15182, None),
-    ]
+    finished = translated.canonical_events[0].payload
+    assert isinstance(finished, CompactionFinished)
+    assert finished.before_tokens == 15182
+    assert finished.context is not None
+    assert finished.context.text == "Compacted summary retains amber circle."
 
 
 def test_claude_compaction_hook_and_boundary_map_one_complete_lifecycle():
@@ -3066,18 +3127,41 @@ def test_claude_compaction_hook_and_boundary_map_one_complete_lifecycle():
             raw_event_id="compact-boundary",
         )
     )
+    summary_finished = translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "compact-summary",
+                "parentUuid": "compact-boundary",
+                "isCompactSummary": True,
+                "message": {
+                    "role": "user",
+                    "content": "The compacted context.",
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="compact-summary",
+        )
+    )
 
     lifecycle = (
         *started.canonical_events,
         *hook_finished.canonical_events,
         *boundary_finished.canonical_events,
+        *summary_finished.canonical_events,
     )
     assert hook_finished.decision == "ignored_nonsemantic"
+    assert boundary_finished.decision == "ignored_nonsemantic"
     assert [type(event.payload) for event in lifecycle] == [
         CompactionStarted,
         CompactionFinished,
     ]
-    assert lifecycle[-1].payload == CompactionFinished(15182, None)
+    finished = lifecycle[-1].payload
+    assert isinstance(finished, CompactionFinished)
+    assert finished.before_tokens == 15182
+    assert finished.context is not None
+    assert finished.context.text == "The compacted context."
 
 
 def test_codex_session_start_hook_matches_rollout_metadata(tmp_path, monkeypatch):

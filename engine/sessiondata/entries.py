@@ -199,7 +199,11 @@ def _body(event_payload: EventPayload, harness: HarnessName, model_naming: Model
     if isinstance(event_payload, CompactionStarted):
         return CompactionStartedBody(event_payload.before_tokens)
     if isinstance(event_payload, CompactionFinished):
-        return CompactionFinishedBody(event_payload.before_tokens, event_payload.after_tokens)
+        return CompactionFinishedBody(
+            event_payload.before_tokens,
+            event_payload.after_tokens,
+            event_payload.context,
+        )
     if isinstance(event_payload, ActorAssignmentStarted):
         return AssignmentStartedBody(
             event_payload.assignment_id, event_payload.actor_name, event_payload.prompt
@@ -261,5 +265,4 @@ def _diff(file_accessed: FileAccessed) -> TextContent:
     field of its own — which is what lets the entry body have ONE content field
     instead of two that are never both filled."""
     return TextContent(file_accessed.unified_diff or "", MediaType.TEXT_PLAIN)
-
 

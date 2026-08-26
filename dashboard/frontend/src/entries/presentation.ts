@@ -458,7 +458,7 @@ export function presentEntry(
       return note(
         entry,
         `Context compacted${detail}`,
-        EMPTY,
+        contentBody(entry.body.context),
         'succeeded',
         'compaction',
       );

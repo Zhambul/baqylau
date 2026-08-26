@@ -47,7 +47,7 @@ function compaction(
     : {
         ...common,
         type,
-        body: { beforeTokens: 100, afterTokens: 20 },
+        body: { beforeTokens: 100, afterTokens: 20, context: null },
       };
 }
 

@@ -422,6 +422,7 @@ class CompactionStarted(EventPayload):
 class CompactionFinished(EventPayload):
     before_tokens: int | None
     after_tokens: int | None
+    context: Content | None = None
 
 
 EventPayloadType = TypeVar("EventPayloadType", bound=EventPayload)

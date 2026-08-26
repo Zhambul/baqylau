@@ -557,6 +557,9 @@ class CodexCanonicalTranslator(HarnessTranslator):
         # source and use it to close that same turn when the terminal interrupt
         # record is sparse.
         self._active_turns: dict[str, CodexTurnId] = {}
+        self._compactions: dict[
+            tuple[SessionId, str], tuple[int | None, int | None]
+        ] = {}
         self._sources_by_session: dict[SessionId, set[str]] = {}
         self._selections = SelectionSemantics()
         self._rewind_continuity = rewind_continuity or RewindContinuity()
@@ -611,6 +614,9 @@ class CodexCanonicalTranslator(HarnessTranslator):
             self._active_turns.pop(source, None)
         self._goals.pop(str(session_id), None)
         self._working_directories.pop(str(session_id), None)
+        for key in tuple(self._compactions):
+            if key[0] == session_id:
+                self._compactions.pop(key, None)
         self._selections.release_session(session_id)
         self._rewind_continuity.release(session_id)
 
@@ -986,11 +992,20 @@ class CodexCanonicalTranslator(HarnessTranslator):
         if hook_name == "SessionStart":
             return run_started
         if hook_name == "PreCompact":
+            self._compactions[(raw_event.session_id, str(raw_event.actor_id))] = (
+                hook.before_tokens,
+                None,
+            )
             payload: EventPayload = CompactionStarted(hook.before_tokens)
             return [*run_started, event(raw_event, "compaction", native_identity, "started", payload)]
         if hook_name == "PostCompact":
-            payload = CompactionFinished(hook.before_tokens, hook.after_tokens)
-            return [*run_started, event(raw_event, "compaction", native_identity, "finished", payload)]
+            key = raw_event.session_id, str(raw_event.actor_id)
+            previous = self._compactions.get(key, (None, None))
+            self._compactions[key] = (
+                hook.before_tokens if hook.before_tokens is not None else previous[0],
+                hook.after_tokens,
+            )
+            return run_started
         return run_started
 
     def _hook_run_started_events(
@@ -2021,12 +2036,26 @@ class CodexCanonicalTranslator(HarnessTranslator):
                         occurred_at=occurred_at,
                     ))
             return events
-        if isinstance(record, (CompactRecord, CompactBoundaryRecord)):
-            # Codex reports the same compaction through PreCompact/PostCompact
-            # hooks. Those hooks own the lifecycle and token counts. The
-            # rollout records are display notices for native clients; mapping
-            # them too creates a second `compaction.finished` feed row.
+        if isinstance(record, CompactRecord):
             return []
+        if isinstance(record, CompactBoundaryRecord):
+            key = raw_event.session_id, str(raw_event.actor_id)
+            before_tokens, after_tokens = self._compactions.pop(
+                key, (None, None)
+            )
+            payload = CompactionFinished(
+                before_tokens,
+                after_tokens,
+                content(record.context, markdown=True) if record.context else None,
+            )
+            return [event(
+                raw_event,
+                "compaction",
+                str(record.window_id or native_identity),
+                "finished",
+                payload,
+                occurred_at=occurred_at,
+            )]
         if isinstance(record, AskRecord):
             call_id = CodexCallId(record.call_id or native_identity)
             self._call_records[(self._source_key(raw_event), call_id)] = record

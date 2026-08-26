@@ -114,3 +114,35 @@ def compaction_has_one_finished_feed_entry(
         one_finish,
         timeout=wait_policy.feed,
     )
+
+
+@then(parsers.parse('compaction "{name}" has expandable compacted context'))
+def compaction_has_compacted_context(
+    client: BaqylauClient,
+    compactions: Compactions,
+    wait_policy: WaitPolicy,
+    name: str,
+) -> None:
+    reference = compactions.get(name)
+
+    def context_contains(snapshot: SessionSnapshot) -> bool | None:
+        finishes = [
+            entry.body
+            for entry in snapshot.entries
+            if entry.actor_id == reference.actor_id
+            and entry.cursor > reference.started_cursor
+            and isinstance(entry.body, CompactionFinishedBodyResponse)
+        ]
+        if not finishes:
+            return None
+        assert len(finishes) == 1
+        context = finishes[0].context
+        assert context is not None, f"compaction {name!r} has no compacted context"
+        assert context.text.strip(), f"compaction {name!r} has empty compacted context"
+        return True
+
+    client.sessions.watch(reference.session).wait(
+        f"compaction {name!r} to have expandable compacted context",
+        context_contains,
+        timeout=wait_policy.feed,
+    )

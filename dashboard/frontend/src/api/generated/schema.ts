@@ -1447,6 +1447,7 @@ export interface components {
             before_tokens: number | null;
             /** After Tokens */
             after_tokens: number | null;
+            context: components["schemas"]["ContentResponse"] | null;
         };
         /** CompactionStartedBodyResponse */
         CompactionStartedBodyResponse: {

@@ -618,13 +618,28 @@ class TurnContextPayload(BaseModel):
     multi_agent_mode: str | None = None
 
 
+class CompactedContentPart(BaseModel):
+    model_config = OPEN_FOREIGN
+    type: str | None = None
+    text: str | None = None
+
+
+class CompactedHistoryItem(BaseModel):
+    """One readable member of Codex's replacement context."""
+
+    model_config = OPEN_FOREIGN
+    type: str | None = None
+    role: str | None = None
+    author: str | None = None
+    recipient: str | None = None
+    content: str | list[CompactedContentPart | str] | None = None
+    encrypted_content: str | None = None
+
+
 class CompactedPayload(BaseModel):
     model_config = FOREIGN
     message: str | None = None
-    # The entire rewritten conversation — deliberately never modeled beyond
-    # its length (rollout._top_compacted): a record shape must not be a
-    # megabyte, so this is read only as `len(...)`, never indexed into.
-    replacement_history: list[ForeignMetadata] | None = None
+    replacement_history: list[CompactedHistoryItem] | None = None
     window_id: str | int | None = None
     previous_window_id: str | int | None = None
     first_window_id: str | int | None = None
@@ -1306,6 +1321,7 @@ class SettingsRecord:
 class CompactBoundaryRecord:
     kind: Literal["compact_boundary"] = "compact_boundary"
     message: str
+    context: str
     replaced: int
     window_id: str | int | None
     previous_window_id: str | int | None

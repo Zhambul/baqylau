@@ -931,8 +931,23 @@ def translate_transcript(
             ))
         return events
     if isinstance(record, transcript.CompactTranscriptRecord):
-        payload = CompactionFinished(record.before_tokens, None)
-        return [event(raw_event, "compaction", native_identity, "finished", payload, occurred_at=occurred_at)]
+        # The following `isCompactSummary` record owns the finished event: it
+        # carries the context a person needs to inspect after expansion.
+        return []
+    if isinstance(record, transcript.CompactSummaryTranscriptRecord):
+        payload = CompactionFinished(
+            record.before_tokens,
+            None,
+            content(record.text, markdown=True),
+        )
+        return [event(
+            raw_event,
+            "compaction",
+            record.boundary_id or native_identity,
+            "finished",
+            payload,
+            occurred_at=occurred_at,
+        )]
     if isinstance(record, transcript.TextTranscriptRecord) and record.kind == transcript.TranscriptKind.RECAP:
         payload = MessageCreated(
             message_id_from_claude_code(ClaudeCodeMessageId(native_identity)),

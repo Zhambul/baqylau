@@ -1,5 +1,27 @@
 Feature: the browser controls real harness sessions
 
+  Scenario Outline: an idle prompt remains visible after a rebuild cursor overtakes the live writer
+    Given session configuration "primary" uses <harness> with model <model> and low effort
+    When I start browser session "primary" as turn "before cursor overtake" with prompt
+      """
+      Do not use tools. Reply only with BEFORE_CURSOR_OVERTAKE.
+      """
+    Then turn "before cursor overtake" completes
+    When I reproduce a rebuild cursor overtake for session "primary"
+    And I reload browser session "primary"
+    And I send browser prompt to session "primary" as turn "after cursor overtake"
+      """
+      Do not use tools. Reply only with AFTER_CURSOR_OVERTAKE.
+      """
+    Then turn "after cursor overtake" completes
+    And turn "after cursor overtake" has final answer 'AFTER_CURSOR_OVERTAKE'
+    And the browser feed shows text containing 'Reply only with AFTER_CURSOR_OVERTAKE.'
+
+    Examples:
+      | harness     | model        |
+      | codex       | gpt-5.6-luna |
+      | claude_code | haiku        |
+
   Scenario Outline: usage appears after the first application read misses it
     Given the next browser application read omits usage for <harness>
     When I open the browser session list

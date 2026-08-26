@@ -759,6 +759,9 @@ def test_harness_adapters_never_use_raw_dictionaries_or_jsonvalue():
             "BACKGROUND_OUTCOMES",
             "notifications_by_actor",
         },
+        "harness/impl/claude_code/canonical/translator.py": {
+            "_pending_compactions",
+        },
         "harness/impl/claude_code/canonical/sources.py": {"notifications_by_actor"},
         "harness/impl/claude_code/canonical/toolcalls.py": {
             "TOOL_KINDS",
@@ -801,6 +804,7 @@ def test_harness_adapters_never_use_raw_dictionaries_or_jsonvalue():
             "_goals",
                 "_working_directories",
                 "_active_turns",
+                "_compactions",
                 "_mcp_tool_outcomes",
                 "_sources_by_session",
                 "result_calls",

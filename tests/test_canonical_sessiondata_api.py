@@ -19,6 +19,7 @@ from unittest.mock import Mock
 import pytest
 
 from domain.entries import (
+    CompactionFinishedBody,
     EntryBody,
     FileState,
     MessageBody,
@@ -77,6 +78,7 @@ from domain.values import (
     WorktreeAction,
 )
 from api.sessiondata import mapper, routes, streams
+from api.sessiondata.models.entry import CompactionFinishedBodyResponse
 from core.repository import RepositoryQueries, RepositoryStatus
 from dashboard.services.application_updates import ApplicationUpdateState
 from dashboard.services.preferences import (
@@ -491,6 +493,20 @@ def test_every_entry_kind_has_a_wire_shape():
         except TypeError:
             unmapped.append(name)
     assert unmapped == []
+
+
+def test_compacted_context_crosses_the_http_boundary():
+    response = mapper.entry_body(
+        CompactionFinishedBody(
+            61_000,
+            4_000,
+            TextContent("The retained compacted context"),
+        )
+    )
+
+    assert isinstance(response, CompactionFinishedBodyResponse)
+    assert response.context is not None
+    assert response.context.text == "The retained compacted context"
 
 
 def _sample(body_type):

@@ -39,6 +39,9 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
         self._toolcalls = ToolCallSemantics()
         self._turns = TurnSemantics()
         self._selections = SelectionSemantics()
+        self._pending_compactions: dict[
+            tuple[SessionId, str], tuple[str, int | None]
+        ] = {}
 
     def translate(self, raw_event: RawEvent) -> TranslationResult:
         try:
@@ -51,6 +54,9 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
         self._toolcalls.clear_session(session_id)
         self._turns.release_session(session_id)
         self._selections.release_session(session_id)
+        for key in tuple(self._pending_compactions):
+            if key[0] == session_id:
+                self._pending_compactions.pop(key, None)
 
     def _stamped(self, raw_event: RawEvent, translation_result: TranslationResult) -> TranslationResult:
         """Every fact of an open turn carries it.
@@ -174,6 +180,22 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
             return TranslationResult((), RecordedTranslationDecision.IGNORED_NONSEMANTIC, "transcript plumbing record")
         if isinstance(record, transcript.BadTranscriptRecord):
             raise TranslationError("malformed Claude Code transcript record", context=raw_event.source_position)
+        compaction_key = raw_event.session_id, str(raw_event.actor_id)
+        if isinstance(record, transcript.CompactTranscriptRecord):
+            boundary_id = str(transcript_document.uuid or raw_event.source_position)
+            self._pending_compactions[compaction_key] = (
+                boundary_id,
+                record.before_tokens,
+            )
+        elif isinstance(record, transcript.CompactSummaryTranscriptRecord):
+            pending = self._pending_compactions.pop(compaction_key, None)
+            if pending is not None:
+                boundary_id, before_tokens = pending
+                record = replace(
+                    record,
+                    boundary_id=record.boundary_id or boundary_id,
+                    before_tokens=before_tokens,
+                )
         transcript_events = translate_transcript(
             raw_event,
             transcript_document,

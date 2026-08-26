@@ -350,6 +350,16 @@ test('keeps activity details readable and expandable', async ({ page }) => {
   await webFetch.locator('.bhead').click();
   await expect(webFetch.locator('.bbody')).toContainText('Example Domain page');
 
+  const compaction = page
+    .locator('.blk')
+    .filter({ hasText: 'Context compacted' });
+  await expect(compaction).toHaveAttribute('data-open', '0');
+  await compaction.locator('.bhead').click();
+  await expect(compaction).toHaveAttribute('data-open', '1');
+  await expect(compaction.locator('.bbody')).toContainText(
+    'Retained compacted context: amber circle, blue square',
+  );
+
   const webSearchLabel = webSearch.locator('.operation-label');
   const background = page.locator('.operation-label', {
     hasText: 'background',
