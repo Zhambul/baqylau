@@ -100,6 +100,38 @@ test('loads the production shell and session list without browser failures', asy
   expect(failures).toEqual([]);
 });
 
+test('receives application changes without polling the snapshot endpoint', async ({
+  page,
+  request,
+}) => {
+  const failures = watchBrowserFailures(page);
+  let applicationReads = 0;
+  page.on('request', (browserRequest) => {
+    const url = new URL(browserRequest.url());
+    if (
+      browserRequest.method() === 'GET' &&
+      url.pathname === '/api/application'
+    )
+      applicationReads += 1;
+  });
+
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: '◉ alerts' })).toBeVisible();
+  await expect.poll(() => applicationReads).toBe(1);
+
+  const update = await request.post('/api/application/notifications', {
+    data: { enabled: false },
+  });
+  expect(update.ok()).toBe(true);
+  await expect(
+    page.getByRole('button', { name: '○ alerts off' }),
+  ).toBeVisible();
+
+  await page.waitForTimeout(5_500);
+  expect(applicationReads).toBe(1);
+  expect(failures).toEqual([]);
+});
+
 test('recovers a launch after the hidden page loses its global stream', async ({
   page,
   request,

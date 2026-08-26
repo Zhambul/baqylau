@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { wireActor, wireEntry, wireSession } from '../test/session-fixture';
 import {
   StreamValidationFailure,
+  decodeGlobalApplicationFrame,
   decodeGlobalStreamFrame,
   decodeReadyFrame,
   decodeSessionStreamFrame,
@@ -53,5 +54,68 @@ describe('stream decoder', () => {
         }),
       ),
     ).toThrow(/unknown type/);
+  });
+
+  it('decodes a global application snapshot and rejects an invalid usage row', () => {
+    const wire = {
+      usage_rows: [
+        {
+          harness: 'codex',
+          account_id: null,
+          display_name: 'Default',
+          switchable: false,
+          default_for_launch: true,
+          plan: 'pro',
+          windows: [
+            {
+              key: 'five-hour',
+              label: '5 hour',
+              used_percent: '25',
+              resets_at: 1_700_001_000,
+              duration_minutes: 300,
+              scope: 'account',
+              model_id: null,
+            },
+          ],
+          scheduling_score: '75',
+          scheduling_allowed: true,
+          limit: null,
+          authentication_error: null,
+          collection_error: null,
+        },
+      ],
+      notifications: { enabled: false, latest: null },
+      preferences: {
+        new_session: {
+          working_directory: '/work',
+          harness: 'codex',
+          model: 'gpt-5.6-sol',
+          effort: 'high',
+        },
+        new_session_drafts: [],
+        hidden_directories: { '/old': 1_700_000_000 },
+        limits: {
+          upload_bytes: 1_000,
+          rename_characters: 80,
+          presence_seconds: 30,
+        },
+      },
+    };
+
+    const application = decodeGlobalApplicationFrame(JSON.stringify(wire));
+
+    expect(application.notifications.enabled).toBe(false);
+    expect(application.usageRows[0]?.windows[0]?.scope).toBe('account');
+    expect(application.preferences.hiddenDirectories.get('/old')).toBe(
+      1_700_000_000,
+    );
+    expect(() =>
+      decodeGlobalApplicationFrame(
+        JSON.stringify({
+          ...wire,
+          usage_rows: [{ ...wire.usage_rows[0], switchable: 'yes' }],
+        }),
+      ),
+    ).toThrow(/switchable/);
   });
 });

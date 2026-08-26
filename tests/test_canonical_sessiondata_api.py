@@ -78,6 +78,13 @@ from domain.values import (
 )
 from api.sessiondata import mapper, routes, streams
 from core.repository import RepositoryQueries, RepositoryStatus
+from dashboard.services.application_updates import ApplicationUpdateState
+from dashboard.services.preferences import (
+    ApplicationPreferences,
+    DashboardLimits,
+    GlobalNotificationState,
+    NewSessionPreferences,
+)
 from decimal import Decimal
 from repository.contract.session_data import SessionDataChanges
 from repository.contract.session_data import SessionDataRepository
@@ -681,6 +688,23 @@ class SilentAudit:
         self.failures.append((where, context))
 
 
+class ApplicationSnapshots:
+    def __init__(self) -> None:
+        self.enabled = True
+        self.reads = 0
+
+    def snapshot(self) -> ApplicationPreferences:
+        self.reads += 1
+        return ApplicationPreferences(
+            new_session=NewSessionPreferences(None, None, None, None),
+            new_session_drafts=(),
+            hidden_directories={},
+            limits=DashboardLimits(1_000, 80, 30.0),
+            notifications=GlobalNotificationState(self.enabled, None),
+            usage_rows=(),
+        )
+
+
 def frame_body(frame: str) -> dict:
     """The `data:` line of one SSE frame, as the object it is."""
     for line in frame.splitlines():
@@ -812,19 +836,66 @@ def test_the_global_stream_carries_every_session_and_no_entries(tmp_path):
     )
 
     async def frames():
-        stream = streams._global_frames(read_model, SilentAudit(), 0, "boot-one")
+        application = ApplicationSnapshots()
+        updates = ApplicationUpdateState()
+        stream = streams._global_frames(
+            read_model,
+            SilentAudit(),
+            0,
+            "boot-one",
+            application,
+            updates,
+        )
         ready = await asyncio.wait_for(stream.__anext__(), 3)
+        application_frame = await asyncio.wait_for(stream.__anext__(), 3)
         frame = await asyncio.wait_for(stream.__anext__(), 3)
         await stream.aclose()
-        return ready, frame
+        return ready, application_frame, frame
 
-    ready, frame = asyncio.run(frames())
+    ready, application_frame, frame = asyncio.run(frames())
     assert "event: ready" in ready
     assert frame_body(ready) == {"boot_id": "boot-one"}
+    assert "event: application" in application_frame
+    assert "id:" not in application_frame
+    assert frame_body(application_frame)["notifications"]["enabled"] is True
     body = frame_body(frame)
     assert {row["session_id"] for row in body["sessions"]} == {"session-one", "session-two"}
     assert len(body["actors"]) == 2
     assert "entries" not in body
+
+
+def test_the_global_stream_reads_application_state_only_after_a_revision(tmp_path):
+    read_model = store(tmp_path)
+    application = ApplicationSnapshots()
+    updates = ApplicationUpdateState()
+
+    async def frames():
+        stream = streams._global_frames(
+            read_model,
+            SilentAudit(),
+            0,
+            "boot-one",
+            application,
+            updates,
+        )
+        await asyncio.wait_for(stream.__anext__(), 3)
+        initial = await asyncio.wait_for(stream.__anext__(), 3)
+        pending = asyncio.create_task(stream.__anext__())
+        await asyncio.sleep(0.8)
+        stable_reads = application.reads
+        application.enabled = False
+        updates.publish()
+        changed = await asyncio.wait_for(pending, 3)
+        await stream.aclose()
+        return initial, changed, stable_reads
+
+    initial, changed, stable_reads = asyncio.run(frames())
+
+    assert frame_body(initial)["notifications"]["enabled"] is True
+    assert frame_body(changed)["notifications"]["enabled"] is False
+    assert "id:" not in changed
+    assert stable_reads == 1
+    assert application.reads == 2
 
 
 def test_a_stream_that_fails_says_so_and_ends_so_the_client_reconnects(tmp_path):

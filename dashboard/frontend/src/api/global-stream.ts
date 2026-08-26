@@ -1,10 +1,16 @@
-import { decodeGlobalStreamFrame, decodeReadyFrame } from './stream-decoder';
+import type { GlobalApplication } from '../application/model';
+import {
+  decodeGlobalApplicationFrame,
+  decodeGlobalStreamFrame,
+  decodeReadyFrame,
+} from './stream-decoder';
 import type { GlobalStreamDelta } from './stream-decoder';
 
 export type GlobalStreamCallbacks = {
   readonly opened: () => void;
   readonly disconnected: () => void;
   readonly delta: (frame: GlobalStreamDelta) => void;
+  readonly application: (application: GlobalApplication) => void;
   readonly ready: (bootId: string) => void;
   readonly invalid: (error: Error) => void;
 };
@@ -48,6 +54,15 @@ export class GlobalStream {
     this.source.addEventListener('sessionData', (event) => {
       try {
         callbacks.delta(decodeGlobalStreamFrame(messageData(event)));
+      } catch (error) {
+        callbacks.invalid(
+          error instanceof Error ? error : new Error(String(error)),
+        );
+      }
+    });
+    this.source.addEventListener('application', (event) => {
+      try {
+        callbacks.application(decodeGlobalApplicationFrame(messageData(event)));
       } catch (error) {
         callbacks.invalid(
           error instanceof Error ? error : new Error(String(error)),

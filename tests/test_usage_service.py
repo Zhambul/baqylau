@@ -89,6 +89,32 @@ def test_application_usage_state_retries_after_a_transient_source_failure():
     assert stop.delays == [5.0, 60]
 
 
+def test_application_usage_state_publishes_only_changed_rows():
+    row = UsageRow(
+        HarnessName.CODEX,
+        None,
+        "Default",
+        False,
+        True,
+        "pro",
+        (),
+        Decimal("1"),
+        True,
+        None,
+        None,
+    )
+    source = UsageSource()
+    changes = []
+    state = ApplicationUsageState(source, changed=lambda: changes.append("changed"))
+
+    state.refresh()
+    source.rows = (row,)
+    state.refresh()
+    state.refresh()
+
+    assert changes == ["changed"]
+
+
 def test_shared_usage_cache_runs_one_probe_for_multiple_readers(tmp_path):
     row = UsageRow(
         HarnessName.CODEX,

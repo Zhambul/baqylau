@@ -1368,6 +1368,19 @@ def test_canonical_sse_has_no_broker_or_application_event_registry():
     assert not (ROOT / "api" / "broker.py").exists()
 
 
+def test_global_application_updates_use_the_event_stream_instead_of_a_timer():
+    state = (
+        ROOT / "dashboard" / "frontend" / "src" / "app" / "app-state.svelte.ts"
+    ).read_text(encoding="utf-8")
+    stream = (
+        ROOT / "dashboard" / "frontend" / "src" / "api" / "global-stream.ts"
+    ).read_text(encoding="utf-8")
+
+    assert "APPLICATION_REFRESH_MS" not in state
+    assert "applicationRefreshTimer" not in state
+    assert "addEventListener('application'" in stream
+
+
 def test_resume_and_sse_have_one_authoritative_path():
     launch_files = (
         ROOT / "harness" / "models" / "launch.py",

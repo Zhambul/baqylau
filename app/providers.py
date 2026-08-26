@@ -30,6 +30,7 @@ from app.services.uploads import UploadService
 from core import data
 from core.repository import RepositoryQueries
 from dashboard import config as dashboard_config
+from dashboard.services.application_updates import ApplicationUpdateState
 from dashboard.services.notices import DashboardNotificationState
 from dashboard.services.preferences import ApplicationPreferenceService
 from dashboard.services.workspace import (
@@ -445,8 +446,23 @@ Catalog = Annotated[HarnessCatalogService, Depends(catalog)]
 
 
 @singleton
-def usage_state(harnesses: Registry, usage: AccountUsage) -> ApplicationUsageState:
-    return ApplicationUsageState.configured(HarnessUsageService(harnesses, usage))
+def application_update_state() -> ApplicationUpdateState:
+    return ApplicationUpdateState()
+
+
+ApplicationUpdates = Annotated[ApplicationUpdateState, Depends(application_update_state)]
+
+
+@singleton
+def usage_state(
+    harnesses: Registry,
+    usage: AccountUsage,
+    updates: ApplicationUpdates,
+) -> ApplicationUsageState:
+    return ApplicationUsageState.configured(
+        HarnessUsageService(harnesses, usage),
+        updates.publish,
+    )
 
 
 UsageState = Annotated[ApplicationUsageState, Depends(usage_state)]
@@ -544,8 +560,8 @@ PresenceSignals = Annotated[Presence, Depends(presence)]
 
 
 @singleton
-def dashboard_notification_state() -> DashboardNotificationState:
-    return DashboardNotificationState()
+def dashboard_notification_state(updates: ApplicationUpdates) -> DashboardNotificationState:
+    return DashboardNotificationState(updates.publish)
 
 
 NotificationState = Annotated[DashboardNotificationState, Depends(dashboard_notification_state)]
@@ -582,6 +598,7 @@ def application_preferences(
     directories: HiddenDirectories,
     subscriptions: PushSubscriptions,
     signals: PresenceSignals,
+    updates: ApplicationUpdates,
 ) -> ApplicationPreferenceService:
     return ApplicationPreferenceService(
         read_model,
@@ -595,6 +612,7 @@ def application_preferences(
         directories,
         subscriptions,
         signals,
+        updates,
     )
 
 

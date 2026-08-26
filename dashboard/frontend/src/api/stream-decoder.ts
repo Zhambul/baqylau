@@ -1,7 +1,9 @@
 import type { Entry } from '../entries/model';
+import type { GlobalApplication } from '../application/model';
 import type { Actor, Session } from '../sessions/model';
 import type { components } from './generated/schema';
 import { decodeEntry } from './translators/entries';
+import { translateGlobalApplication } from './translators/application';
 import { translateActor, translateSession } from './translators/session-data';
 
 type Schemas = components['schemas'];
@@ -51,6 +53,17 @@ function nullableString(value: unknown, name: string): string | null {
   );
 }
 
+function optionalNullableString(value: unknown, name: string): string | null {
+  if (
+    typeof value === 'object' &&
+    value !== null &&
+    (!(name in value) || Reflect.get(value, name) === null)
+  ) {
+    return null;
+  }
+  return stringValue(value, name);
+}
+
 function numberValue(value: unknown, name: string): number {
   const candidate = field(value, name);
   if (typeof candidate !== 'number' || !Number.isFinite(candidate)) {
@@ -88,6 +101,112 @@ function arrayValue(value: unknown, name: string): readonly unknown[] {
     throw new StreamValidationFailure(`event field must be an array: ${name}`);
   }
   return candidate;
+}
+
+function numberRecord(value: unknown, name: string): Record<string, number> {
+  const candidate = field(value, name);
+  if (typeof candidate !== 'object' || candidate === null) {
+    throw new StreamValidationFailure(`event field must be an object: ${name}`);
+  }
+  const entries = Object.entries(candidate);
+  if (
+    entries.some(
+      ([, item]) => typeof item !== 'number' || !Number.isFinite(item),
+    )
+  ) {
+    throw new StreamValidationFailure(
+      `event field values must be finite numbers: ${name}`,
+    );
+  }
+  return Object.fromEntries(entries);
+}
+
+function usageScope(value: unknown, name: string): Schemas['UsageWindowScope'] {
+  const candidate = stringValue(value, name);
+  if (candidate === 'account' || candidate === 'model') return candidate;
+  throw new StreamValidationFailure(
+    `event field has an unknown usage scope: ${name}`,
+  );
+}
+
+function decodeUsageRow(value: unknown): Schemas['UsageRowResponse'] {
+  const limit = field(value, 'limit');
+  return {
+    harness: stringValue(value, 'harness'),
+    account_id: nullableString(value, 'account_id'),
+    display_name: stringValue(value, 'display_name'),
+    switchable: booleanValue(value, 'switchable'),
+    default_for_launch: booleanValue(value, 'default_for_launch'),
+    plan: nullableString(value, 'plan'),
+    windows: arrayValue(value, 'windows').map((window) => ({
+      key: stringValue(window, 'key'),
+      label: stringValue(window, 'label'),
+      used_percent: stringValue(window, 'used_percent'),
+      resets_at: nullableNumber(window, 'resets_at'),
+      duration_minutes: nullableNumber(window, 'duration_minutes'),
+      scope: usageScope(window, 'scope'),
+      model_id: nullableString(window, 'model_id'),
+    })),
+    scheduling_score: nullableString(value, 'scheduling_score'),
+    scheduling_allowed: booleanValue(value, 'scheduling_allowed'),
+    limit:
+      limit === null
+        ? null
+        : {
+            model_id: nullableString(limit, 'model_id'),
+            message: nullableString(limit, 'message'),
+            resets_at: nullableNumber(limit, 'resets_at'),
+          },
+    authentication_error: nullableString(value, 'authentication_error'),
+    collection_error: optionalNullableString(value, 'collection_error'),
+  };
+}
+
+function decodeGlobalApplication(
+  value: unknown,
+): Schemas['GlobalApplicationResponse'] {
+  const notifications = field(value, 'notifications');
+  const latest = field(notifications, 'latest');
+  const preferences = field(value, 'preferences');
+  const newSession = field(preferences, 'new_session');
+  const limits = field(preferences, 'limits');
+  return {
+    usage_rows: arrayValue(value, 'usage_rows').map(decodeUsageRow),
+    notifications: {
+      enabled: booleanValue(notifications, 'enabled'),
+      latest:
+        latest === null
+          ? null
+          : {
+              revision: numberValue(latest, 'revision'),
+              session_id: stringValue(latest, 'session_id'),
+              kind: stringValue(latest, 'kind'),
+              project: stringValue(latest, 'project'),
+              title: stringValue(latest, 'title'),
+            },
+    },
+    preferences: {
+      new_session: {
+        working_directory: nullableString(newSession, 'working_directory'),
+        harness: nullableString(newSession, 'harness'),
+        model: nullableString(newSession, 'model'),
+        effort: nullableString(newSession, 'effort'),
+      },
+      new_session_drafts: arrayValue(preferences, 'new_session_drafts').map(
+        (draft) => ({
+          working_directory: stringValue(draft, 'working_directory'),
+          text: stringValue(draft, 'text'),
+          sequence: numberValue(draft, 'sequence'),
+        }),
+      ),
+      hidden_directories: numberRecord(preferences, 'hidden_directories'),
+      limits: {
+        upload_bytes: numberValue(limits, 'upload_bytes'),
+        rename_characters: numberValue(limits, 'rename_characters'),
+        presence_seconds: numberValue(limits, 'presence_seconds'),
+      },
+    },
+  };
 }
 
 function lifecycleState(
@@ -314,6 +433,10 @@ export function decodeGlobalStreamFrame(text: string): GlobalStreamDelta {
       translateActor(decodeActor(actor)),
     ),
   };
+}
+
+export function decodeGlobalApplicationFrame(text: string): GlobalApplication {
+  return translateGlobalApplication(decodeGlobalApplication(parsedJson(text)));
 }
 
 export function decodeSessionStreamFrame(text: string): SessionStreamDelta {

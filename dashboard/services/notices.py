@@ -8,6 +8,7 @@ that already saw revision N wants to know only whether there is an N+1.
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from domain.ids import SessionId
@@ -25,10 +26,11 @@ class DashboardNotificationNotice:
 class DashboardNotificationState:
     """Hold only the latest current notices; there are no subscriptions or queues."""
 
-    def __init__(self) -> None:
+    def __init__(self, changed: Callable[[], None] | None = None) -> None:
         self._lock = threading.Lock()
         self._revision = 0
         self._notification: DashboardNotificationNotice | None = None
+        self.changed = changed
 
     def publish_notification(
         self,
@@ -46,6 +48,8 @@ class DashboardNotificationState:
                 project,
                 title,
             )
+        if self.changed is not None:
+            self.changed()
 
     def notification(self) -> DashboardNotificationNotice | None:
         with self._lock:

@@ -17,6 +17,7 @@ from typing import Protocol
 from core.daemon import contract as daemon_contract
 from core.repository import RepositoryQueries
 from dashboard import config
+from dashboard.services.application_updates import ApplicationUpdateState
 from dashboard.services.notices import DashboardNotificationNotice, DashboardNotificationState
 from domain.ids import DeviceId, HarnessName, SessionId
 from domain.preferences import (
@@ -124,6 +125,7 @@ class ApplicationPreferenceService:
         hidden_directory_repository: HiddenDirectoryRepository,
         push_subscription_repository: PushSubscriptionRepository,
         presence: Presence,
+        application_update_state: ApplicationUpdateState,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self.session_data_repository = session_data_repository
@@ -137,6 +139,7 @@ class ApplicationPreferenceService:
         self.hidden_directory_repository = hidden_directory_repository
         self.push_subscription_repository = push_subscription_repository
         self.presence = presence
+        self.application_update_state = application_update_state
         self.clock = clock
 
     def snapshot(self) -> ApplicationPreferences:
@@ -174,7 +177,10 @@ class ApplicationPreferenceService:
         )
 
     def set_notifications_enabled(self, enabled: bool) -> None:
+        previous = self.notification_setting_repository.alerting_enabled()
         self.notification_setting_repository.set_alerting_enabled(enabled)
+        if enabled != previous:
+            self.application_update_state.publish()
 
     def save_new_session_preferences(
         self,
@@ -183,14 +189,16 @@ class ApplicationPreferenceService:
         model: str | None,
         effort: str | None,
     ) -> None:
-        self.new_session_repository.save_preferences(
-            StoredNewSessionPreferences(
-                working_directory=working_directory or None,
-                harness=harness or None,
-                model=model or None,
-                effort=effort or None,
-            )
+        preferences = StoredNewSessionPreferences(
+            working_directory=working_directory or None,
+            harness=harness or None,
+            model=model or None,
+            effort=effort or None,
         )
+        previous = self.new_session_repository.preferences()
+        self.new_session_repository.save_preferences(preferences)
+        if preferences != previous:
+            self.application_update_state.publish()
 
     def save_new_session_draft(
         self,
@@ -206,6 +214,8 @@ class ApplicationPreferenceService:
             ),
             NEW_SESSION_DRAFT_LIMIT,
         )
+        if not written.stale:
+            self.application_update_state.publish()
         return not written.stale
 
     def hide_directory(self, working_directory: str) -> dict[str, float]:
@@ -223,6 +233,7 @@ class ApplicationPreferenceService:
         if live:
             raise ValueError("cannot hide a directory with an active session")
         self.hidden_directory_repository.hide(working_directory, self.clock())
+        self.application_update_state.publish()
         return {entry.working_directory: entry.hidden_at for entry in self.hidden_directory_repository.hidden()}
 
     def _project_directory(

@@ -183,7 +183,7 @@ def build_web_application(
     web.include_router(hooks.router)
     web.include_router(harness_telemetry.router)
     web.include_router(panes.router)
-    # The read surface: three GETs and two streams, over the read model only.
+    # The read surface: the global stream also carries application state.
     # The streams go FIRST, deliberately: `/sessionData/stream` and
     # `/sessionData/{session_id}` both match the same path, and the first router
     # registered wins.

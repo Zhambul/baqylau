@@ -345,6 +345,7 @@ def test_global_application_routes_replace_field_specific_preferences_routes(tmp
             presence_calls.append(("away", device, session_id))
 
     application = _application()
+    updates = application.application_update_state
     server, thread = _server(application, {providers.presence: RecordingPresence()})
     try:
         status, body = _post(
@@ -359,6 +360,7 @@ def test_global_application_routes_replace_field_specific_preferences_routes(tmp
         )
         assert status == 200
         assert json.loads(body) == {"saved": True}
+        assert updates.revision() == 1
 
         status, body = _post(
             server,
@@ -371,6 +373,7 @@ def test_global_application_routes_replace_field_specific_preferences_routes(tmp
         )
         assert status == 200
         assert json.loads(body) == {"saved": True}
+        assert updates.revision() == 2
 
         status, body = _post(
             server,
@@ -379,6 +382,7 @@ def test_global_application_routes_replace_field_specific_preferences_routes(tmp
         )
         assert status == 200
         assert "/parked" in json.loads(body)["hidden"]
+        assert updates.revision() == 3
 
         # Read back from the store the writes landed in: what a preference IS
         # is a row, and the service that used to answer with all of them at once
@@ -426,6 +430,7 @@ def test_global_application_routes_replace_field_specific_preferences_routes(tmp
         assert [item.endpoint for item in application.push_subscriptions.subscriptions()] == [
             "https://push.example/replacement"
         ]
+        assert updates.revision() == 3
 
         status, body = _post(
             server,
@@ -449,6 +454,7 @@ def test_global_application_routes_replace_field_specific_preferences_routes(tmp
             ("viewing", "session-one"),
             ("away", "browser-one", "session-one"),
         ]
+        assert updates.revision() == 3
 
         for legacy_path in (
             "/api/ns-prefs",

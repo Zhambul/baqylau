@@ -1,10 +1,10 @@
 # api/sessiondata/streams.py — the two SSE surfaces, and they are one loop twice.
 #
-# Every 0.25 s: ask the read model what changed after the client's cursor, and
-# if anything did, send one frame carrying all of it with the highest cursor as
-# its id. No broker, no subscription registry, no per-client buffer — a slow
-# client delays only its own generator, and its next poll returns a bigger
-# batch.
+# Every 0.25 s: ask the read model what changed after the client's cursor. The
+# global stream also checks one in-memory application revision. It reads the
+# application snapshot on connect and only after that revision changes. There
+# is no broker, subscription registry, or per-client buffer. A slow client
+# delays only its own generator, and its next poll returns current state.
 #
 # The batching is the same mechanism as the cursor: ten context reports inside
 # one poll window are one committed row by the time the poll reads it, so they
@@ -22,6 +22,7 @@ from collections.abc import AsyncIterator
 from fastapi import APIRouter, Header
 from fastapi.responses import StreamingResponse
 
+from api.application.mapper import preferences as application_mapper
 from api.common.models.fields import SessionIdPath
 from api.common.models.streams.error_frame import ErrorFrame
 from api.common.models.streams.ready_frame import ReadyFrame
@@ -37,7 +38,12 @@ from api.sse import (
     off_loop,
     sse_frame,
 )
-from app.providers import Recorder, SessionDataStore
+from app.providers import (
+    ApplicationPreferences,
+    ApplicationUpdates,
+    Recorder,
+    SessionDataStore,
+)
 from audit.recorder import AuditRecorder
 from domain.ids import SessionId
 from repository.contract.session_data import SessionDataRepository
@@ -79,6 +85,8 @@ def global_stream(
     read_model: SessionDataStore,
     audit: Recorder,
     policy: Policy,
+    application_preferences: ApplicationPreferences,
+    application_updates: ApplicationUpdates,
     after_cursor: int = 0,
     last_event_id: str | None = Header(None, alias="Last-Event-ID"),
 ) -> StreamingResponse:
@@ -88,6 +96,8 @@ def global_stream(
             audit,
             _from_cursor(last_event_id, after_cursor),
             policy.boot_id,
+            application_preferences,
+            application_updates,
         ),
         media_type=EVENT_STREAM,
         headers=NO_STORE,
@@ -142,9 +152,17 @@ async def _global_frames(
     audit_recorder: AuditRecorder,
     cursor: int,
     boot_id: str,
+    application_preferences: ApplicationPreferences,
+    application_updates: ApplicationUpdates,
 ) -> AsyncIterator[str]:
     yield sse_frame("ready", ReadyFrame(boot_id=boot_id))
     try:
+        application_revision = application_updates.revision()
+        application = await off_loop(application_preferences.snapshot)
+        yield sse_frame(
+            "application",
+            application_mapper.global_application(application),
+        )
         heartbeat_at = asyncio.get_running_loop().time()
         while True:
             delta = await off_loop(session_data_repository.changed_after, cursor)
@@ -160,12 +178,21 @@ async def _global_frames(
                 )
                 cursor = delta.cursor
                 heartbeat_at = now
-            elif now - heartbeat_at >= STREAM_HEARTBEAT_SECONDS:
+            next_application_revision = application_updates.revision()
+            if next_application_revision != application_revision:
+                application_revision = next_application_revision
+                application = await off_loop(application_preferences.snapshot)
+                yield sse_frame(
+                    "application",
+                    application_mapper.global_application(application),
+                )
+                heartbeat_at = now
+            elif delta.empty and now - heartbeat_at >= STREAM_HEARTBEAT_SECONDS:
                 yield BEAT
                 heartbeat_at = now
             await asyncio.sleep(STREAM_POLL_SECONDS)
     except (asyncio.CancelledError, GeneratorExit):
         raise
     except Exception:
-        audit_recorder.error("", "session data stream", {"path": "/sessionData/stream"})
+        audit_recorder.error("", "global stream", {"path": "/sessionData/stream"})
         yield sse_frame("error", ErrorFrame(error="stream failed"))

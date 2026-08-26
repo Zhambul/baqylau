@@ -12,6 +12,7 @@ import os
 import tempfile
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -154,19 +155,26 @@ class ApplicationUsageState:
         usage_source: UsageSource,
         initial_delay_seconds: float = 0.0,
         refresh_seconds: float = USAGE_REFRESH_SECONDS,
+        changed: Callable[[], None] | None = None,
     ) -> None:
         self.source = usage_source
         self.initial_delay_seconds = initial_delay_seconds
         self.refresh_seconds = refresh_seconds
+        self.changed = changed
         self._lock = threading.Lock()
         self._rows: tuple[UsageRow, ...] = ()
 
     @classmethod
-    def configured(cls, usage_source: UsageSource) -> ApplicationUsageState:
+    def configured(
+        cls,
+        usage_source: UsageSource,
+        changed: Callable[[], None] | None = None,
+    ) -> ApplicationUsageState:
         return cls(
             usage_source,
             _configured_seconds(USAGE_INITIAL_DELAY_VARIABLE, 0.0),
             _configured_seconds(USAGE_REFRESH_VARIABLE, USAGE_REFRESH_SECONDS),
+            changed,
         )
 
     def usage_rows(self) -> tuple[UsageRow, ...]:
@@ -176,7 +184,10 @@ class ApplicationUsageState:
     def refresh(self) -> tuple[UsageRow, ...]:
         rows = self.source.read()
         with self._lock:
+            changed = rows != self._rows
             self._rows = rows
+        if changed and self.changed is not None:
+            self.changed()
         return rows
 
     def run(self, stop_event: threading.Event) -> None:

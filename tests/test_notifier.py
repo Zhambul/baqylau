@@ -58,3 +58,14 @@ def test_notification_scan_reads_one_terminal_snapshot_for_all_sessions():
 
     assert terminal.calls == 1
     assert terminal.requested == (SessionId("session-one"), SessionId("session-two"))
+
+
+def test_dashboard_notification_state_publishes_each_new_notice():
+    changes = []
+    state = DashboardNotificationState(lambda: changes.append("changed"))
+
+    state.publish_notification(SessionId("session-one"), "done", "baqylau", "finished")
+    state.publish_notification(SessionId("session-two"), "asking", "api", "needs you")
+
+    assert changes == ["changed", "changed"]
+    assert state.notification().revision == 2

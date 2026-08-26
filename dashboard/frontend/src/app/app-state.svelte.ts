@@ -179,19 +179,8 @@ export class AppState {
     this.applicationState = 'loading';
     try {
       const application = await readGlobalApplication(signal);
-      const hadApplication = this.application !== null;
-      const previousNotice = this.application?.notifications.latest ?? null;
-      this.application = application;
-      this.notificationsEnabled = application.notifications.enabled;
-      this.presence.setLifetime(application.preferences.limits.presenceSeconds);
+      this.applyApplication(application);
       this.applicationState = 'ready';
-      const notice = application.notifications.latest;
-      if (
-        hadApplication &&
-        notice !== null &&
-        previousNotice?.revision !== notice.revision
-      )
-        this.announceNotice(notice);
     } catch {
       this.applicationState = 'failed';
     }
@@ -317,6 +306,10 @@ export class AppState {
       delta: (frame) => {
         this.applyGlobalDelta(frame);
       },
+      application: (application) => {
+        this.applyApplication(application);
+        this.applicationState = 'ready';
+      },
       ready: (bootId) => {
         if (this.bootId === null) {
           this.bootId = bootId;
@@ -373,6 +366,21 @@ export class AppState {
       void this.adoptSession(id);
     }
     this.resolvePendingLaunch();
+  }
+
+  private applyApplication(application: GlobalApplication): void {
+    const hadApplication = this.application !== null;
+    const previousNotice = this.application?.notifications.latest ?? null;
+    this.application = application;
+    this.notificationsEnabled = application.notifications.enabled;
+    this.presence.setLifetime(application.preferences.limits.presenceSeconds);
+    const notice = application.notifications.latest;
+    if (
+      hadApplication &&
+      notice !== null &&
+      previousNotice?.revision !== notice.revision
+    )
+      this.announceNotice(notice);
   }
 
   async requestSessionClose(
@@ -673,7 +681,6 @@ export class AppState {
 
   private refreshWhenVisible = (): void => {
     if (document.visibilityState !== 'visible') return;
-    void this.loadApplication();
     void this.activeSession?.refreshApplication();
     if (this.connection !== 'connected') this.recoverGlobalStream();
   };
