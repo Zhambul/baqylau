@@ -538,6 +538,9 @@ class QueueOperationRecord(BaseModel):
     content: str | ForeignMetadata | None = None
     sessionId: str | None = None
     timestamp: str | None = None
+    # Claude Code adds this to `remove` records (currently
+    # `absorbed_mid_turn`) when a queued prompt is consumed during a turn.
+    reason: str | None = None
 
 
 # `document["type"]` dispatches to one of UserRecord/AssistantRecord/

@@ -2775,6 +2775,24 @@ def test_claude_lead_start_uses_the_first_root_record_with_a_working_directory()
     ]
 
 
+def test_claude_queue_remove_accepts_native_absorption_reason():
+    translation = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "queue-operation",
+                "operation": "remove",
+                "content": "follow-up",
+                "reason": "absorbed_mid_turn",
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="queue-remove",
+        )
+    )
+
+    assert translation.decision == "ignored_nonsemantic"
+
+
 def test_claude_teammate_hook_and_transcript_share_one_actor_identity(monkeypatch, tmp_path):
     main_path = tmp_path / "session-one.jsonl"
     main_path.write_text('{"type":"user","uuid":"lead"}\n')

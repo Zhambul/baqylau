@@ -11,8 +11,16 @@ from tests.e2e.testkit.references import TurnRef
 
 
 def matches_final_answer(observed: str, expected: str) -> bool:
-    """Match a marker despite one optional sentence-final period."""
+    """Match a marker despite harmless native-model presentation wrappers."""
     answer = observed.strip()
+    lines = answer.splitlines()
+    if (
+        len(lines) >= 3
+        and lines[0].startswith("```")
+        and lines[0][3:].strip() in ("", "text", "txt")
+        and lines[-1].strip() == "```"
+    ):
+        answer = "\n".join(lines[1:-1]).strip()
     return answer in (expected, f"{expected}.")
 
 

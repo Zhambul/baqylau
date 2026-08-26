@@ -112,6 +112,11 @@ def _question(
     return states[0], prompts[0]
 
 
+def choice_label_matches(observed: str, expected: str) -> bool:
+    """Ignore only the recommendation badge native question tools may append."""
+    return observed in (expected, f"{expected} (Recommended)")
+
+
 @when(parsers.parse(
     'I name the pending question in turn "{turn_name}" containing '
     '\'{prompt}\' "{question_name}"'
@@ -346,7 +351,9 @@ def question_offers_option(
     reference = questions.get(name)
     _state, prompt = _question(client.sessions.snapshot(reference.session), reference)
     labels = [item.label for item in prompt.choices]
-    assert option in labels, f"question {name!r} offers {labels}"
+    assert any(choice_label_matches(label, option) for label in labels), (
+        f"question {name!r} offers {labels}"
+    )
 
 
 @then(parsers.parse('question "{name}" records option \'{option}\''))

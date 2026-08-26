@@ -473,10 +473,11 @@
   }
 </script>
 
+<svelte:window onkeydown={trapKeys} />
+
 <div
   class="nsback"
   role="presentation"
-  onkeydown={trapKeys}
   onclick={(event) => {
     if (event.target === event.currentTarget) close();
   }}

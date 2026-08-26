@@ -147,6 +147,7 @@ bin/         the repository's own CLIs (audit, dashboard). Every entry an
 make test        # frontend unit/browser gates + hermetic Python suite
 make test-frontend # formatting, strict checks, and Vitest coverage
 make test-browser  # isolated production daemon; Chromium and WebKit
+make e2e         # live harness, live browser, and static Playwright E2E
 make test-seq    # Python suite, sequential (debugging / no xdist)
 make test-all    # + opt-in real-kitty smoke tests
 ```

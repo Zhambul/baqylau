@@ -63,6 +63,7 @@ make test-drift E2E="-k codex"                         # one harness
 make test-drift E2E="--e2e-model claude-opus-5"        # every scenario, one model
 make test-drift E2E="--e2e-data-dir /tmp/drift"        # keep the databases after
 make test-drift E2E_WORKERS=20                          # stress concurrent scenarios
+make e2e                                                # every live + browser E2E layer
 ```
 
 Each worker has one private data directory, one automatic port, one Codex home,
@@ -88,6 +89,17 @@ tails when one provider alone is saturated. Override `E2E_WORKERS` to measure a
 different concurrency level. Use `E2E_WORKERS=1` for real-terminal or
 installed-daemon cases because those explicit opt-in suites control one
 machine-level resource.
+
+`make e2e` is the complete end-to-end gate. It runs the live scenarios, the
+live-browser scenarios, and then static Playwright against one compiled
+production application. Every suite uses its measured maximum reliable
+parallelism: 20 workers for each live suite and up to the 16 static Playwright
+tests at once. The suite boundaries are intentionally serial. Both a shared
+24-worker load and a mixed 20-worker xdist pool caused native CLI stalls and
+long drain tails on the reference 8-core/16-GiB machine; perfect per-test state
+isolation cannot isolate the external harness account and backend. Override
+`E2E_WORKERS` when benchmarking another machine. Cases do not share ports, data
+directories, harness homes, or workspaces.
 
 `make test-drift` collects only `tests/e2e/test_scenarios.py`, the active live
 matrix. Browser drift, real-Kitty, and installed-daemon tests remain separate

@@ -20,7 +20,9 @@ test-frontend: frontend-install
 	cd $(FRONTEND_DIR) && $(NPM) run check
 	cd $(FRONTEND_DIR) && $(NPM) run test:coverage
 
-test-browser: build-frontend
+test-browser: build-frontend browser-static-e2e
+
+browser-static-e2e:
 	cd $(FRONTEND_DIR) && BAQYLAU_E2E_PYTHON=$(abspath $(PY)) BAQYLAU_E2E_WORKERS=$(BROWSER_E2E_WORKERS) $(NPM) run test:browser
 
 lint-frontend: frontend-install
@@ -56,8 +58,19 @@ test-all:
 test-drift:
 	$(PY) -m pytest tests/e2e/test_scenarios.py -q -x -n $(E2E_WORKERS) --dist $(E2E_DIST) --maxschedchunk 1 $(E2E)
 
-test-browser-drift: build-frontend
-	BAQYLAU_E2E_BROWSER=1 $(PY) -m pytest tests/e2e/browser -q -x -n $(E2E_WORKERS) --dist $(E2E_DIST) $(E2E)
+test-browser-drift: build-frontend browser-live-e2e
+
+browser-live-e2e:
+	BAQYLAU_E2E_BROWSER=1 $(PY) -m pytest tests/e2e/browser -q -x -n $(E2E_WORKERS) --dist $(E2E_DIST) --maxschedchunk 1 $(E2E)
+
+# Complete end-to-end gate. Every suite uses its measured maximum reliable
+# parallelism; suite boundaries remain serial because mixing browser-live and
+# API-live workloads overloads the native harnesses even when worker count is
+# capped. The frontend is built only once.
+e2e: build-frontend
+	$(MAKE) --no-print-directory test-drift
+	$(MAKE) --no-print-directory browser-live-e2e
+	$(MAKE) --no-print-directory browser-static-e2e
 
 # Alias for the (now default-parallel) suite; kept for muscle memory.
 test-par: test
@@ -125,4 +138,4 @@ deadcode-backlog:
 		--exclude "$(DEADCODE_EXCLUDES)" \
 		--ignore-decorators "$(DEADCODE_DECORATORS)" || true
 
-.PHONY: frontend-install build-frontend test-frontend test-browser test-python test test-seq test-all test-drift test-browser-drift test-par lint lint-fix typecheck deadcode deadcode-backlog
+.PHONY: frontend-install build-frontend test-frontend test-browser browser-static-e2e test-python test test-seq test-all e2e test-drift test-browser-drift browser-live-e2e test-par lint lint-fix typecheck deadcode deadcode-backlog
