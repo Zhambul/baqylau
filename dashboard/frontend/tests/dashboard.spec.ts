@@ -4,6 +4,8 @@ import type { Page } from '@playwright/test';
 import { expect, test } from './fixtures';
 
 const FIXTURE_TIME = 1_700_000_000_000;
+// macOS patch releases can rasterize the same text with small edge differences.
+const SCREENSHOT_MAX_DIFF_PIXEL_RATIO = 0.001;
 
 test.beforeEach(async ({ page }) => {
   await page.clock.setFixedTime(FIXTURE_TIME);
@@ -93,6 +95,7 @@ test('loads the production shell and session list without browser failures', asy
   await expectAccessible(page);
   await expect(page).toHaveScreenshot('session-list.png', {
     fullPage: true,
+    maxDiffPixelRatio: SCREENSHOT_MAX_DIFF_PIXEL_RATIO,
   });
   expect(failures).toEqual([]);
 });
@@ -498,7 +501,7 @@ test('preserves the session, agent, monitor, and statistics routes', async ({
   ).toBeVisible();
   await expect(page).toHaveScreenshot('session-mirror.png', {
     fullPage: true,
-    maxDiffPixels: 10,
+    maxDiffPixelRatio: SCREENSHOT_MAX_DIFF_PIXEL_RATIO,
   });
 
   await page.getByRole('link', { name: /Audit the old router/ }).click();
