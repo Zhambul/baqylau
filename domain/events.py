@@ -311,6 +311,15 @@ class WebFetched(EventPayload):
 
 
 @dataclass(frozen=True)
+class BrowserInteracted(EventPayload):
+    """One browser action and the observation that it returned."""
+
+    action: str
+    result: Content | None
+    outcome: Outcome
+
+
+@dataclass(frozen=True)
 class WorktreeChanged(EventPayload):
     """A worktree was entered or left. No harness exposes a path for this
     today, so the call's own arguments ride along verbatim rather than a
@@ -508,6 +517,7 @@ EVENT_TYPES: dict[type[EventPayload], str] = {
     SkillStarted: "skill.started",
     SkillFinished: "skill.finished",
     WebFetched: "web.fetched",
+    BrowserInteracted: "browser.interacted",
     WorktreeChanged: "worktree.changed",
     TaskChanged: "task.changed",
     TaskListChanged: "task.list_changed",

@@ -1,4 +1,4 @@
-# The feed, as both frontends receive it: one stored event and twenty-four bodies.
+# The feed, as both frontends receive it: one stored event and twenty-five bodies.
 #
 # All in one module, like the control outcomes: this is ONE closed vocabulary,
 # and a reader deciding what to draw needs to see the whole of it at once. The
@@ -97,6 +97,12 @@ class SearchBodyResponse(BaseModel):
 
 class WebBodyResponse(BaseModel):
     url: str | None
+    state: FileState
+    result: ContentResponse | None
+
+
+class BrowserBodyResponse(BaseModel):
+    action: str
     state: FileState
     result: ContentResponse | None
 
@@ -213,6 +219,7 @@ EntryBodyResponse: TypeAlias = (
     | FileBodyResponse
     | SearchBodyResponse
     | WebBodyResponse
+    | BrowserBodyResponse
     | WorktreeBodyResponse
     | SkillStartedBodyResponse
     | SkillFinishedBodyResponse

@@ -64,6 +64,7 @@ from domain.events import (
     ActorStarted,
     ActorAssignmentFinished,
     ActorAssignmentStarted,
+    BrowserInteracted,
     CompactionFinished,
     CompactionStarted,
     ContextReported,
@@ -9477,6 +9478,48 @@ def test_codex_node_repl_file_read_uses_the_native_mcp_failure_state():
     accessed = payloads(answered, FileAccessed)[0].payload
     assert accessed.path == "/work/missing.txt"
     assert accessed.outcome == "failed"
+
+
+def test_codex_browser_mcp_completion_is_a_named_expandable_fact():
+    translated = CodexCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "item": {
+                        "type": "McpToolCall",
+                        "id": "browser-refresh",
+                        "server": "node_repl",
+                        "tool": "js",
+                        "arguments": {
+                            "title": "Refresh the fixture application",
+                            "code": "await fixtureTab.reload()",
+                        },
+                        "status": "completed",
+                        "result": {
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": '- banner:\n  - link "baqylau"',
+                                }
+                            ],
+                            "isError": False,
+                            "_meta": {"codex/browserUse": True},
+                        },
+                    },
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="browser-refresh-completed",
+        )
+    )
+
+    interacted = payloads(translated, BrowserInteracted)[0].payload
+    assert interacted.action == "Refresh the fixture application"
+    assert interacted.result.text == '- banner:\n  - link "baqylau"'
+    assert interacted.outcome == "succeeded"
 
 
 def test_codex_builtin_resource_call_matches_its_native_mcp_completion():

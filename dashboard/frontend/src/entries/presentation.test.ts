@@ -113,4 +113,36 @@ describe('entry presentation', () => {
       label: 'lead',
     });
   });
+
+  it('shows a browser interaction as an expandable tool block', () => {
+    const entry: Entry = {
+      type: 'browser',
+      entryId: entryId('browser-refresh'),
+      cursor: 2,
+      actorId: actorId('lead'),
+      parentActorId: null,
+      turnId: 'turn-one',
+      occurredAt: 2,
+      summary: null,
+      body: {
+        action: 'Refresh the fixture application',
+        state: 'succeeded',
+        result: {
+          text: '- banner:\n  - link "baqylau"',
+          mediaType: 'text/plain',
+        },
+      },
+    };
+
+    expect(presentEntry(entry, new Map())).toMatchObject({
+      kind: 'block',
+      header: { kind: 'chip', label: 'Browser' },
+      summary: 'Refresh the fixture application',
+      summaryKind: 'tool',
+      body: {
+        kind: 'content',
+        content: { text: '- banner:\n  - link "baqylau"' },
+      },
+    });
+  });
 });

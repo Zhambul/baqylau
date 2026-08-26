@@ -40,11 +40,11 @@ HARNESS = HarnessName.CODEX
 ROLLOUT_NAME = re.compile(r"rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-(.+)\.jsonl$")
 EVENT_BATCH_SIZE = 100
 CATALOG_REFRESH_SECONDS = 1.0
-# A source-identity revision is a data migration. Version 3 re-observes live
-# rollouts so command completions that the older ambiguous correlation skipped
-# can add their missing canonical finish facts and their final settled state.
+# A source-identity revision is a data migration. Version 4 re-observes live
+# rollouts so browser completions that version 3 classified as tool plumbing
+# can add their missing browser facts and feed entries.
 # Stable canonical identities deduplicate every fact that was already correct.
-ROLLOUT_OBSERVATION_VERSION = 3
+ROLLOUT_OBSERVATION_VERSION = 4
 
 
 def codex_session_id(path: str) -> CodexSessionId:

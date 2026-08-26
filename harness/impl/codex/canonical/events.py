@@ -249,11 +249,20 @@ def _ev_item_completed(item_completed_payload: ItemCompletedPayload) -> RolloutR
         # outcome for the outer custom-tool result.
         if not item.server or not item.tool or not item.status:
             return CoveredItemRecord()
+        result = item.result
+        result_text = "\n".join(
+            part if isinstance(part, str) else part.text or ""
+            for part in ((result.content or ()) if result else ())
+        ).strip()
         return McpToolCompletedRecord(
             server=item.server,
             tool=item.tool,
             status=item.status,
             item_id=item.id or "",
+            title=item.arguments.title if item.arguments else None,
+            result=result_text or None,
+            result_is_error=result.is_error if result else False,
+            browser_use=bool(result and result.metadata and result.metadata.browser_use),
         )
     # item: PlanItem — the only member left in records.ItemCompletedItem.
     text = (item.text or "").strip()

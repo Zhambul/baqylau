@@ -66,6 +66,7 @@ class EntryTypeName(StrEnum):
     FILE = "file"
     SEARCH = "search"
     WEB = "web"
+    BROWSER = "browser"
     WORKTREE = "worktree"
     SKILL_STARTED = "skill_started"
     SKILL_FINISHED = "skill_finished"
@@ -207,6 +208,13 @@ class WebBody(EntryBody):
 
 
 @dataclass(frozen=True)
+class BrowserBody(EntryBody):
+    action: str
+    state: FileState
+    result: Content | None = None
+
+
+@dataclass(frozen=True)
 class WorktreeBody(EntryBody):
     action: WorktreeAction
     state: FileState
@@ -311,6 +319,7 @@ ENTRY_TYPES: dict[type[EntryBody], EntryTypeName] = {
     FileBody: EntryTypeName.FILE,
     SearchBody: EntryTypeName.SEARCH,
     WebBody: EntryTypeName.WEB,
+    BrowserBody: EntryTypeName.BROWSER,
     WorktreeBody: EntryTypeName.WORKTREE,
     SkillStartedBody: EntryTypeName.SKILL_STARTED,
     SkillFinishedBody: EntryTypeName.SKILL_FINISHED,

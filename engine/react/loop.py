@@ -32,6 +32,7 @@ from pydantic import JsonValue
 from audit.failures import CoalescingFailureRecorder
 from audit.recorder import AuditRecorder
 from domain.entries import (
+    BrowserBody,
     EntryBody,
     EntryTypeName,
     FileBody,
@@ -72,6 +73,7 @@ EMPTY_BODY_SUSPECT: Final[Mapping[EntryTypeName, str]] = {
     EntryTypeName.FILE: "content",            # the diff, or the file's text
     EntryTypeName.SEARCH: "result",           # what the search found
     EntryTypeName.WEB: "result",              # what the fetch returned
+    EntryTypeName.BROWSER: "result",          # what the browser observed
 }
 
 
@@ -90,6 +92,8 @@ def _content_field(entry_body: EntryBody) -> Content | None:
     if isinstance(entry_body, SearchBody):
         return entry_body.result
     if isinstance(entry_body, WebBody):
+        return entry_body.result
+    if isinstance(entry_body, BrowserBody):
         return entry_body.result
     return None
 

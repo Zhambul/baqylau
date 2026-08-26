@@ -771,6 +771,8 @@ def _tool_rows(entry: dict[str, Any], width: int) -> list[str]:
         chip, summary = body.get("tool") or "search", _entry_text(body.get("query"))
     elif kind == "web":
         chip, summary = "WebFetch", body.get("url") or ""
+    elif kind == "browser":
+        chip, summary = "Browser", body.get("action") or ""
     elif kind == "worktree":
         chip = "EnterWorktree" if body.get("action") == "entered" else "ExitWorktree"
         summary = _entry_text(body.get("arguments"))
@@ -914,7 +916,14 @@ def entry_rows(
         return _said("THINK", _entry_text(entry["body"].get("content")), width, MUTED)
     if kind == "file":
         return _file_rows(entry, view, width, entry["entry_id"] in opened)
-    if kind in ("search", "web", "worktree", "skill_started", "skill_finished"):
+    if kind in (
+        "search",
+        "web",
+        "browser",
+        "worktree",
+        "skill_started",
+        "skill_finished",
+    ):
         return _tool_rows(entry, width)
     if kind in ("question_asked", "question_answered", "plan_proposed", "plan_resolved"):
         return _attention_rows(entry, width)

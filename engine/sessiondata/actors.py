@@ -20,6 +20,7 @@ from domain.events import (
     ActorFinished,
     ActorNameChanged,
     ActorStarted,
+    BrowserInteracted,
     CompactionFinished,
     CompactionStarted,
     ContextReported,
@@ -294,7 +295,15 @@ def _is_finished_work(event_payload: EventPayload) -> bool:
     branch they used to land on twice."""
     return isinstance(
         event_payload,
-        (ShellFinished, SkillFinished, FileAccessed, SearchPerformed, WebFetched, WorktreeChanged),
+        (
+            ShellFinished,
+            SkillFinished,
+            FileAccessed,
+            SearchPerformed,
+            WebFetched,
+            BrowserInteracted,
+            WorktreeChanged,
+        ),
     )
 
 
@@ -513,6 +522,8 @@ def _counted(actor_statistics: ActorStatistics, event_payload: EventPayload) -> 
         return _tool_counted(actor_statistics, event_payload.tool)
     if isinstance(event_payload, WebFetched):
         return _tool_counted(actor_statistics, "WebFetch")
+    if isinstance(event_payload, BrowserInteracted):
+        return _tool_counted(actor_statistics, "Browser")
     if isinstance(event_payload, WorktreeChanged):
         return _tool_counted(
             actor_statistics,

@@ -1352,6 +1352,13 @@ export interface components {
             /** Request Id */
             request_id: string;
         };
+        /** BrowserBodyResponse */
+        BrowserBodyResponse: {
+            /** Action */
+            action: string;
+            state: components["schemas"]["FileState"];
+            result: components["schemas"]["ContentResponse"] | null;
+        };
         /** BrowserEventBody */
         BrowserEventBody: {
             /** Name */
@@ -1679,7 +1686,7 @@ export interface components {
             /** Summary */
             summary: string | null;
             /** Body */
-            body: components["schemas"]["TurnStartedBodyResponse"] | components["schemas"]["TurnFinishedBodyResponse"] | components["schemas"]["MessageBodyResponse"] | components["schemas"]["ReasoningBodyResponse"] | components["schemas"]["ShellStartedBodyResponse"] | components["schemas"]["ShellOutputBodyResponse"] | components["schemas"]["ShellBackgroundedBodyResponse"] | components["schemas"]["ShellFinishedBodyResponse"] | components["schemas"]["FileBodyResponse"] | components["schemas"]["SearchBodyResponse"] | components["schemas"]["WebBodyResponse"] | components["schemas"]["WorktreeBodyResponse"] | components["schemas"]["SkillStartedBodyResponse"] | components["schemas"]["SkillFinishedBodyResponse"] | components["schemas"]["QuestionAskedBodyResponse"] | components["schemas"]["QuestionAnsweredBodyResponse"] | components["schemas"]["PlanProposedBodyResponse"] | components["schemas"]["PlanResolvedBodyResponse"] | components["schemas"]["CompactionStartedBodyResponse"] | components["schemas"]["CompactionFinishedBodyResponse"] | components["schemas"]["AssignmentStartedBodyResponse"] | components["schemas"]["AssignmentFinishedBodyResponse"] | components["schemas"]["ModelChangeBodyResponse"] | components["schemas"]["EffortChangeBodyResponse"];
+            body: components["schemas"]["TurnStartedBodyResponse"] | components["schemas"]["TurnFinishedBodyResponse"] | components["schemas"]["MessageBodyResponse"] | components["schemas"]["ReasoningBodyResponse"] | components["schemas"]["ShellStartedBodyResponse"] | components["schemas"]["ShellOutputBodyResponse"] | components["schemas"]["ShellBackgroundedBodyResponse"] | components["schemas"]["ShellFinishedBodyResponse"] | components["schemas"]["FileBodyResponse"] | components["schemas"]["SearchBodyResponse"] | components["schemas"]["WebBodyResponse"] | components["schemas"]["BrowserBodyResponse"] | components["schemas"]["WorktreeBodyResponse"] | components["schemas"]["SkillStartedBodyResponse"] | components["schemas"]["SkillFinishedBodyResponse"] | components["schemas"]["QuestionAskedBodyResponse"] | components["schemas"]["QuestionAnsweredBodyResponse"] | components["schemas"]["PlanProposedBodyResponse"] | components["schemas"]["PlanResolvedBodyResponse"] | components["schemas"]["CompactionStartedBodyResponse"] | components["schemas"]["CompactionFinishedBodyResponse"] | components["schemas"]["AssignmentStartedBodyResponse"] | components["schemas"]["AssignmentFinishedBodyResponse"] | components["schemas"]["ModelChangeBodyResponse"] | components["schemas"]["EffortChangeBodyResponse"];
         };
         /**
          * EntryTypeName
@@ -1689,7 +1696,7 @@ export interface components {
          *     moment they do not.
          * @enum {string}
          */
-        EntryTypeName: "turn_started" | "turn_finished" | "message" | "reasoning" | "shell_started" | "shell_output" | "shell_backgrounded" | "shell_finished" | "file" | "search" | "web" | "worktree" | "skill_started" | "skill_finished" | "question_asked" | "question_answered" | "plan_proposed" | "plan_resolved" | "compaction_started" | "compaction_finished" | "assignment_started" | "assignment_finished" | "model_change" | "effort_change";
+        EntryTypeName: "turn_started" | "turn_finished" | "message" | "reasoning" | "shell_started" | "shell_output" | "shell_backgrounded" | "shell_finished" | "file" | "search" | "web" | "browser" | "worktree" | "skill_started" | "skill_finished" | "question_asked" | "question_answered" | "plan_proposed" | "plan_resolved" | "compaction_started" | "compaction_finished" | "assignment_started" | "assignment_finished" | "model_change" | "effort_change";
         /** ErrorResponse */
         ErrorResponse: {
             /** Error */

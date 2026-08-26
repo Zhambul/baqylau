@@ -19,6 +19,7 @@ from api.common.mapper import values
 from api.sessiondata.models.entry import (
     AssignmentFinishedBodyResponse,
     AssignmentStartedBodyResponse,
+    BrowserBodyResponse,
     CompactionFinishedBodyResponse,
     CompactionStartedBodyResponse,
     EffortChangeBodyResponse,
@@ -268,6 +269,12 @@ def entry_body(entry_body: EntryBody) -> EntryBodyResponse:
     if isinstance(entry_body, bodies.WebBody):
         return WebBodyResponse(
             url=entry_body.url, state=entry_body.state, result=values.maybe_content(entry_body.result)
+        )
+    if isinstance(entry_body, bodies.BrowserBody):
+        return BrowserBodyResponse(
+            action=entry_body.action,
+            state=entry_body.state,
+            result=values.maybe_content(entry_body.result),
         )
     if isinstance(entry_body, bodies.WorktreeBody):
         return WorktreeBodyResponse(

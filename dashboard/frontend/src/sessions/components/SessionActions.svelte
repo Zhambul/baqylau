@@ -47,6 +47,7 @@
   let handledDismissSequence = $state(0);
 
   const caps = $derived(view.capabilities);
+  const connected = $derived(appState.connection === 'connected');
   const actor = $derived(view.scopedActor);
   const actorScope = $derived(view.actorId !== undefined);
   const busy = $derived(BUSY.has(actor?.status ?? ''));
@@ -206,6 +207,7 @@
       class="sstop"
       type="button"
       disabled={caps?.model !== true ||
+        !connected ||
         !live ||
         waitingForAttention ||
         active !== null}
@@ -232,6 +234,7 @@
       class="sstop"
       type="button"
       disabled={caps?.effort !== true ||
+        !connected ||
         !live ||
         waitingForAttention ||
         active !== null}
@@ -259,7 +262,7 @@
     class:arm={armed === 'compact'}
     class="sstop actses"
     type="button"
-    disabled={!compactReady || active !== null}
+    disabled={!connected || !compactReady || active !== null}
     title={caps?.compact === true ? 'compact the conversation' : CAPABILITY_OFF}
     onclick={requestCompact}
     >{armed === 'compact' ? 'compact now?' : '⊜ compact'}</button
@@ -271,7 +274,7 @@
     <button
       class="sstop"
       type="button"
-      disabled={caps?.rename !== true || active !== null}
+      disabled={caps?.rename !== true || !connected || active !== null}
       title={caps?.rename === true ? 'rename this session' : CAPABILITY_OFF}
       onclick={openRename}>✎ rename</button
     >
@@ -316,6 +319,7 @@
     class="sstop actses"
     type="button"
     disabled={caps?.rewind !== true ||
+      !connected ||
       !live ||
       busy ||
       waitingForAttention ||
@@ -330,6 +334,7 @@
     class="sstop actses"
     type="button"
     disabled={caps?.background !== true ||
+      !connected ||
       !live ||
       actor?.status !== 'executing' ||
       active !== null}
@@ -342,7 +347,11 @@
     class:hidden={actorScope && !canStop}
     class="sstop actstop"
     type="button"
-    disabled={caps?.interrupt !== true || !live || !canStop || active !== null}
+    disabled={caps?.interrupt !== true ||
+      !connected ||
+      !live ||
+      !canStop ||
+      active !== null}
     title={caps?.interrupt === true ? 'stop the turn' : CAPABILITY_OFF}
     onclick={stop}>■ stop</button
   >
@@ -351,7 +360,7 @@
     class:arm={armed === 'close'}
     class="sstop actses"
     type="button"
-    disabled={caps?.close !== true || !live || active !== null}
+    disabled={caps?.close !== true || !connected || !live || active !== null}
     title={caps?.close === true
       ? "close this session's terminal tab"
       : CAPABILITY_OFF}

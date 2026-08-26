@@ -46,10 +46,13 @@
   window.addEventListener('pagehide', persistDraft);
 
   const canSend = $derived(
-    view.live === true && view.capabilities?.send === true,
+    appState.connection === 'connected' &&
+      view.live === true &&
+      view.capabilities?.send === true,
   );
   const canResume = $derived(
-    view.live === false &&
+    appState.connection === 'connected' &&
+      view.live === false &&
       (view.session?.workingDirectory.trim().length ?? 0) > 0,
   );
   const usable = $derived(canSend || canResume);
@@ -67,9 +70,11 @@
           ? ipad
             ? 'message this parked session — sending resumes it'
             : 'message this parked session — sending resumes it  (Enter to resume & send)'
-          : view.capabilities?.send === false
-            ? "this session's tool can't be messaged from here"
-            : 'session is not live',
+          : appState.connection !== 'connected'
+            ? 'dashboard is reconnecting…'
+            : view.capabilities?.send === false
+              ? "this session's tool can't be messaged from here"
+              : 'session is not live',
   );
   const promptHistory = $derived(
     view.entries

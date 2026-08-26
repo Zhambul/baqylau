@@ -18,6 +18,7 @@ from domain.entries import (
     CompactionFinishedBody,
     EffortChangeBody,
     AssignmentStartedBody,
+    BrowserBody,
     FileBody,
     FileState,
     MessageBody,
@@ -36,6 +37,7 @@ from domain.events import (
     ActorAssignmentStarted,
     ActorFinished,
     ActorStarted,
+    BrowserInteracted,
     CanonicalEvent,
     CompactionFinished,
     CompactionStarted,
@@ -474,6 +476,7 @@ def test_work_being_done_is_executing(payload):
         FileAccessed("/work/a.py", FileAction.UPDATED, Outcome.SUCCEEDED),
         SearchPerformed("Grep", TextContent("q"), None, Outcome.SUCCEEDED),
         WebFetched("https://x.dev", None, Outcome.SUCCEEDED),
+        BrowserInteracted("Refresh the fixture", TextContent("snapshot"), Outcome.SUCCEEDED),
     ),
 )
 def test_work_that_ended_is_working_again(payload):
@@ -801,11 +804,18 @@ def test_the_scoreboard_counts_distinct_files_and_names_a_tool_per_action():
         FileAccessed("/work/b.py", FileAction.READ, Outcome.SUCCEEDED),
         SearchPerformed("Grep", TextContent("shell_id"), None, Outcome.SUCCEEDED),
         WebFetched("https://x.dev", None, Outcome.SUCCEEDED),
+        BrowserInteracted("Refresh the fixture", TextContent("snapshot"), Outcome.SUCCEEDED),
     )
     statistics = state.actor(LEAD).statistics
     assert statistics.file_count == 2
     assert (statistics.lines_added, statistics.lines_removed) == (13, 3)
-    assert dict(statistics.tool_counts) == {"Edit": 2, "Read": 1, "Grep": 1, "WebFetch": 1}
+    assert dict(statistics.tool_counts) == {
+        "Edit": 2,
+        "Read": 1,
+        "Grep": 1,
+        "WebFetch": 1,
+        "Browser": 1,
+    }
 
 
 def test_commands_are_counted_once_and_their_failures_separately():
@@ -918,6 +928,24 @@ def test_a_finished_compaction_entry_carries_expandable_context():
     entry = entry_of(CompactionFinished(61_000, 4_000, context))
 
     assert entry.body == CompactionFinishedBody(61_000, 4_000, context)
+
+
+def test_a_browser_entry_keeps_its_title_and_expandable_result():
+    result = TextContent('- banner:\n  - link "baqylau"')
+    entry = entry_of(
+        BrowserInteracted(
+            "Refresh the fixture application",
+            result,
+            Outcome.SUCCEEDED,
+        )
+    )
+
+    assert entry.entry_type == "browser"
+    assert entry.body == BrowserBody(
+        "Refresh the fixture application",
+        FileState.SUCCEEDED,
+        result,
+    )
 
 
 @pytest.mark.parametrize(

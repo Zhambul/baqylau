@@ -371,6 +371,18 @@ export function presentEntry(
         finishedAt: entry.occurredAt,
         exitCode: null,
       };
+    case 'browser':
+      return {
+        ...metadata(entry, 'commands', 'tool', '', entry.body.state),
+        kind: 'block',
+        header: { kind: 'chip', chipKind: 'tool', label: 'Browser' },
+        summary: entry.body.action,
+        body: contentBody(entry.body.result),
+        note: false,
+        quiet: true,
+        finishedAt: entry.occurredAt,
+        exitCode: null,
+      };
     case 'worktree':
       return {
         ...metadata(entry, 'commands', 'workspace', '', entry.body.state),

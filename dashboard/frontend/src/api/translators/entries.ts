@@ -166,6 +166,7 @@ function entryType(value: unknown, name: string): EntryContent['type'] {
     case 'file':
     case 'search':
     case 'web':
+    case 'browser':
     case 'worktree':
     case 'skill_started':
     case 'skill_finished':
@@ -292,6 +293,15 @@ function entryContent(wire: EntryWireContent): EntryContent {
         type: wire.type,
         body: {
           url: optionalText(body, 'url'),
+          state: oneOf(body, 'state', ['succeeded', 'failed']),
+          result: optionalContent(body, 'result'),
+        },
+      };
+    case 'browser':
+      return {
+        type: wire.type,
+        body: {
+          action: text(body, 'action'),
           state: oneOf(body, 'state', ['succeeded', 'failed']),
           result: optionalContent(body, 'result'),
         },

@@ -12,7 +12,7 @@ from audit.recorder import AuditRecorder
 from domain.ids import HarnessName
 from harness.models import UsageRow, UsageWindow, UsageWindowScope
 from inference import DefaultModelFactory, ModelPromptRequest, ModelUnavailableError
-from inference.default import INTERNAL_MODEL_VARIABLE
+from inference.default import CODEX_EXECUTABLE_VARIABLE, INTERNAL_MODEL_VARIABLE
 from terminal.models import ScreenReadRequest, ScreenReadResponse, TabCloseRequest, TabCloseResponse
 from terminal.models import TabOpenRequest, TabOpenResponse
 from terminal.models.values import WindowId
@@ -139,6 +139,25 @@ def test_small_model_prefers_the_provider_with_more_remaining_capacity() -> None
     assert terminal.closed_tabs == ["model-1"]
 
 
+def test_configured_executable_does_not_depend_on_the_daemon_path() -> None:
+    terminal = InferenceTerminal(('{"title":"Configured executable session title"}',))
+    model_factory = DefaultModelFactory(
+        terminal.plugin(),
+        Usage(),
+        cast(AuditRecorder, Audit()),
+        executable_resolver=lambda name: "/private/model-bin/codex" if name == "codex" else None,
+    )
+
+    response = model_factory.small().send(ModelPromptRequest("name this"))
+
+    assert response.text == "Configured executable session title"
+    launch = terminal.opened_tabs[0]
+    assert launch.command[0] == "/private/model-bin/codex"
+    assert launch.environment[0] == (INTERNAL_MODEL_VARIABLE, "1")
+    assert launch.environment[1][0] == "PATH"
+    assert launch.environment[1][1].startswith("/private/model-bin:")
+
+
 def test_capacity_uses_the_most_exhausted_known_window() -> None:
     codex = usage_row(HarnessName.CODEX, Decimal(5))
     codex = replace(
@@ -261,7 +280,8 @@ def test_timeout_closes_every_attempted_provider_window() -> None:
         )
 
     assert terminal.closed_tabs == ["model-1", "model-2", "model-3", "model-4"]
-    assert audit.errors == []
+    assert len(audit.errors) == 1
+    assert audit.errors[0][1] == "small model (unavailable)"
 
 
 def test_exhausted_known_quotas_do_not_open_any_provider() -> None:
@@ -280,4 +300,28 @@ def test_exhausted_known_quotas_do_not_open_any_provider() -> None:
         )
 
     assert terminal.opened_tabs == []
-    assert audit.errors == []
+    assert len(audit.errors) == 1
+    assert audit.errors[0][1] == "small model (unavailable)"
+
+
+def test_missing_executables_report_the_configuration_names() -> None:
+    audit = Audit()
+    terminal = InferenceTerminal(())
+    model_factory = DefaultModelFactory(
+        terminal.plugin(),
+        Usage(),
+        cast(AuditRecorder, audit),
+        executable_resolver=lambda _name: None,
+    )
+
+    with pytest.raises(ModelUnavailableError):
+        model_factory.small().send(ModelPromptRequest("name this", "session-one"))
+
+    assert terminal.opened_tabs == []
+    context = cast(dict[str, object], audit.errors[0][2])
+    providers = cast(list[dict[str, str]], context["providers"])
+    assert providers[0] == {
+        "provider": "codex",
+        "status": "executable unavailable",
+        "configuration": CODEX_EXECUTABLE_VARIABLE,
+    }

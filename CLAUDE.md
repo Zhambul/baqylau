@@ -10,36 +10,6 @@ It watches sessions from several harnesses (Claude Code, Codex), interprets what
 into one canonical event model, and presents it in a kitty terminal pane and a localhost
 web dashboard.
 
-## Commands
-
-Two databases: `<data_dir>/main.db` holds everything the application owns and
-reads back, `<data_dir>/audit.db` what the machinery did. There is no third:
-the daemon is a singleton because it binds a port, not because it holds a lock.
-**Nothing outside `repository/impl/sqlite/` opens a database** — the one
-exception is `harness/impl/codex/canonical/title.py`, which is itself a
-repository implementation and lives there only because a shared package may not
-contain a harness's name.
-
-```sh
-python3 bin/baqylau-raw-events-audit.py session <sid>  # every raw event + interpretation
-python3 bin/baqylau-raw-events-audit.py raw <raw_id>   # one raw event, exact bytes
-
-python3 bin/baqylau-dashboard.py serve|start|stop|status
-python3 bin/baqylau-dashboard.py rebuild  # re-derive the read model from the fact log
-
-# A second daemon, beside your own: three flags, honoured by every command
-# (so `status`/`stop --port N` address that one and not yours). The flags win
-# over the matching env vars, which remain the defaults' source.
-python3 bin/baqylau-dashboard.py serve --port 8791 --data-dir /tmp/d --log /tmp/d/daemon.log
-python3 bin/baqylau-dashboard.py status --port 8791
-
-make test        # full suite
-make lint        # must stay clean (ruff, encodes docs/styleguide.md)
-make lint-fix
-
-pip3 install -r requirements.txt   # fastapi + uvicorn — the api/ layer's
-                                   # runtime dependencies (the rest is stdlib)
-```
 
 To debug a session bug, use the **`audit-debug` skill**
 (`.claude/skills/audit-debug/SKILL.md`) — it has the schema and the known bug shapes.
@@ -55,3 +25,15 @@ Do not just focus on the hacky quickest solution. Think about the future and how
 Comunicate with the user and ask for feedback. If you are not sure about a design or a solution, ask for help.
 Do not overengineer. Do not add features which are not needed. Do not add features which are not asked for.
 Do not reinvent the wheel. If a library or a package exists which does what you need, use it. Do not write your own implementation unless it is ix explicitly asked for.
+
+
+## How restart a daemon/dashboard
+
+The main dashboard is owned by its macOS LaunchAgent. Do not use `stop` and
+`start` because the LaunchAgent can race the manual process.
+
+```sh
+make build-frontend
+launchctl kickstart -k gui/$(id -u)/top.zhambyl.baqylau-dashboard
+python3 bin/baqylau-dashboard.py status --port 8377
+```

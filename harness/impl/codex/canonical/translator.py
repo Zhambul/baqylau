@@ -29,6 +29,7 @@ from domain.records import RecordedTranslationDecision
 from domain.events import (
     ActorAssignmentFinished,
     ActorAssignmentStarted,
+    BrowserInteracted,
     ActorStarted,
     CanonicalEvent,
     CompactionFinished,
@@ -1897,6 +1898,43 @@ class CodexCanonicalTranslator(HarnessTranslator):
         if isinstance(record, McpToolCompletedRecord):
             source_key = self._source_key(raw_event)
             native_name = f"mcp__{record.server}__{record.tool}"
+            if record.browser_use:
+                pending_browser_calls = [
+                    call_id
+                    for (known_source, call_id), call_record in self._call_records.items()
+                    if known_source == source_key
+                    and isinstance(call_record, ToolRecord)
+                    and call_record.name == native_name
+                    and (source_key, call_id) not in self._finished_tool_calls
+                ]
+                if pending_browser_calls:
+                    self._finished_tool_calls.add(
+                        (source_key, pending_browser_calls[0])
+                    )
+                browser_action = (record.title or "").strip()
+                if not browser_action:
+                    raise TranslationError("Codex browser interaction has no title")
+                if record.status == "failed" or record.result_is_error:
+                    outcome = Outcome.FAILED
+                elif record.status == "completed":
+                    outcome = Outcome.SUCCEEDED
+                else:
+                    raise TranslationError(
+                        f"unknown Codex browser interaction state: {record.status!r}"
+                    )
+                payload = BrowserInteracted(
+                    browser_action,
+                    content(record.result) if record.result else None,
+                    outcome,
+                )
+                return [event(
+                    raw_event,
+                    "browser",
+                    record.item_id or native_identity,
+                    "interacted",
+                    payload,
+                    occurred_at=occurred_at,
+                )]
             # Codex exposes built-in resource operations without an MCP prefix
             # in the JavaScript wrapper. The native completion can attribute
             # the same call to an internal server such as `codex` or

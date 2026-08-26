@@ -523,6 +523,7 @@ def _sample(body_type):
         "FileBody": lambda: body_type("/p", FileAction.READ, FileState.SUCCEEDED),
         "SearchBody": lambda: body_type("Grep", TextContent("q"), FileState.SUCCEEDED),
         "WebBody": lambda: body_type("https://x", FileState.SUCCEEDED),
+        "BrowserBody": lambda: body_type("Refresh the fixture", FileState.SUCCEEDED),
         "WorktreeBody": lambda: body_type(WorktreeAction.ENTERED, FileState.SUCCEEDED),
         "SkillStartedBody": lambda: body_type("k", "audit-debug"),
         "SkillFinishedBody": lambda: body_type("k", RunState.SUCCEEDED),

@@ -30,6 +30,7 @@ def _seed(data_directory: Path, port: int) -> dict[Any, Any]:
         ActorDescriptionChanged,
         ActorFinished,
         ActorStarted,
+        BrowserInteracted,
         CanonicalEvent,
         CompactionFinished,
         ContextReported,
@@ -355,6 +356,16 @@ def _seed(data_directory: Path, port: int) -> dict[Any, Any]:
         ),
         turn_id=turn,
         seconds_ago=672.6,
+    )
+    add(
+        "active-browser",
+        BrowserInteracted(
+            "Refresh the fixture application",
+            TextContent('- banner:\n  - link "baqylau"'),
+            Outcome.SUCCEEDED,
+        ),
+        turn_id=turn,
+        seconds_ago=672.5,
     )
     add(
         "active-compaction",

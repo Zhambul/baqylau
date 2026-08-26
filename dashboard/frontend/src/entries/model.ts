@@ -111,6 +111,14 @@ export type EntryContent =
       };
     }
   | {
+      readonly type: 'browser';
+      readonly body: {
+        readonly action: string;
+        readonly state: 'succeeded' | 'failed';
+        readonly result: Content | null;
+      };
+    }
+  | {
       readonly type: 'worktree';
       readonly body: {
         readonly action: 'entered' | 'exited';

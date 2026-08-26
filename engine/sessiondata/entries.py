@@ -16,6 +16,7 @@ from __future__ import annotations
 from domain.entries import (
     AssignmentFinishedBody,
     AssignmentStartedBody,
+    BrowserBody,
     CompactionFinishedBody,
     CompactionStartedBody,
     EffortChangeBody,
@@ -47,6 +48,7 @@ from domain.entries import (
 from domain.events import (
     ActorAssignmentFinished,
     ActorAssignmentStarted,
+    BrowserInteracted,
     CanonicalEvent,
     CompactionFinished,
     CompactionStarted,
@@ -174,6 +176,12 @@ def _body(event_payload: EventPayload, harness: HarnessName, model_naming: Model
         )
     if isinstance(event_payload, WebFetched):
         return WebBody(event_payload.url, file_state(event_payload.outcome), event_payload.result)
+    if isinstance(event_payload, BrowserInteracted):
+        return BrowserBody(
+            event_payload.action,
+            file_state(event_payload.outcome),
+            event_payload.result,
+        )
     if isinstance(event_payload, WorktreeChanged):
         return WorktreeBody(
             event_payload.action, file_state(event_payload.outcome), event_payload.arguments
@@ -265,4 +273,3 @@ def _diff(file_accessed: FileAccessed) -> TextContent:
     field of its own — which is what lets the entry body have ONE content field
     instead of two that are never both filled."""
     return TextContent(file_accessed.unified_diff or "", MediaType.TEXT_PLAIN)
-

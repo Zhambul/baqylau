@@ -43,6 +43,7 @@ import type {
 import { OptimisticActionTracker } from '../shared/browser/optimistic-action';
 import { reportClientFailure } from '../shared/browser/optimistic-action';
 import { newRequestId } from '../shared/browser/identity';
+import { StreamRecovery } from '../shared/browser/stream-recovery';
 import { sortedChildActors } from './agent-presentation';
 import {
   appendOlderEntries,
@@ -106,6 +107,12 @@ function cancelled(signal: AbortSignal): boolean {
 
 export class SessionViewState {
   private stream: SessionStream | null = null;
+  private streamSignal: AbortSignal | null = null;
+  private readonly streamRecovery = new StreamRecovery(() => {
+    const signal = this.streamSignal;
+    if (signal === null || signal.aborted) return;
+    this.connect(this.cursor, signal);
+  });
   private readonly pendingActions = new SvelteMap<
     string,
     OptimisticActionTracker
@@ -257,6 +264,8 @@ export class SessionViewState {
   }
 
   destroy(): void {
+    this.streamRecovery.destroy();
+    this.streamSignal = null;
     this.stream?.close();
     this.stream = null;
     for (const prompt of this.pendingPrompts) prompt.tracker.cancel();
@@ -547,10 +556,12 @@ export class SessionViewState {
 
   private connect(cursor: number, signal: AbortSignal): void {
     if (typeof EventSource === 'undefined') return;
+    this.streamSignal = signal;
     this.stream?.close();
     this.streamState = 'loading';
     this.stream = new SessionStream(this.sessionId, cursor, {
       opened: () => {
+        this.streamRecovery.opened();
         this.streamState = 'ready';
         this.streamFailure = null;
         this.appState.audit.markStream(
@@ -568,6 +579,7 @@ export class SessionViewState {
           this.sessionId,
           { actor_id: this.actorId ?? null },
         );
+        this.streamRecovery.disconnected();
       },
       delta: (frame, nextCursor) => {
         this.applyDelta(frame, nextCursor);

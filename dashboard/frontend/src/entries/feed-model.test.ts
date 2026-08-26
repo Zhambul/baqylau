@@ -89,6 +89,36 @@ function skillEntry(
 }
 
 describe('feed density', () => {
+  it('includes browser interactions in a focused run summary', () => {
+    const browser: Entry = {
+      type: 'browser',
+      entryId: entryId('browser-refresh'),
+      cursor: 1,
+      actorId: actorId('lead'),
+      parentActorId: null,
+      turnId: 'turn',
+      occurredAt: 1,
+      summary: null,
+      body: {
+        action: 'Refresh the fixture application',
+        state: 'succeeded',
+        result: { text: 'snapshot', mediaType: 'text/plain' },
+      },
+    };
+    const items = buildFeedItems([browser], new Map(), []);
+
+    expect(planDensity(items, 'focus', false, new Set())).toMatchObject([
+      {
+        kind: 'summary',
+        summary: {
+          fragments: [
+            { verb: 'Used', count: 1, singular: 'tool', plural: 'tools' },
+          ],
+        },
+      },
+    ]);
+  });
+
   it('shows question text for each recorded answer', () => {
     const common = {
       actorId: actorId('lead'),

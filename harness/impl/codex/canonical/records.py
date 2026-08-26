@@ -393,6 +393,29 @@ class PlanItem(BaseModel):
     id: str | None = None
 
 
+class McpToolCallArguments(BaseModel):
+    model_config = OPEN_FOREIGN
+    title: str | None = None
+
+
+class McpToolResultContent(BaseModel):
+    model_config = OPEN_FOREIGN
+    type: str | None = None
+    text: str | None = None
+
+
+class McpToolResultMetadata(BaseModel):
+    model_config = OPEN_FOREIGN
+    browser_use: bool = Field(default=False, alias="codex/browserUse")
+
+
+class McpToolCallResult(BaseModel):
+    model_config = OPEN_FOREIGN
+    content: list[McpToolResultContent | str] | None = None
+    is_error: bool = Field(default=False, alias="isError")
+    metadata: McpToolResultMetadata | None = Field(default=None, alias="_meta")
+
+
 class McpToolCallItem(BaseModel):
     """The authoritative completion state for one MCP call.
 
@@ -407,6 +430,8 @@ class McpToolCallItem(BaseModel):
     server: str | None = None
     tool: str | None = None
     status: str | None = None
+    arguments: McpToolCallArguments | None = None
+    result: McpToolCallResult | None = None
 
 
 class CoveredItem(BaseModel):
@@ -1271,6 +1296,10 @@ class McpToolCompletedRecord:
     tool: str
     status: str
     item_id: str
+    title: str | None = None
+    result: str | None = None
+    result_is_error: bool = False
+    browser_use: bool = False
 
 
 @dataclass(frozen=True, kw_only=True)

@@ -8,7 +8,7 @@ import shutil
 import tempfile
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import Protocol
 
@@ -22,6 +22,8 @@ from terminal.contract import TerminalPlugin
 from terminal.models import ScreenReadRequest, TabCloseRequest, TabOpenRequest
 
 INTERNAL_MODEL_VARIABLE = "BAQYLAU_INTERNAL_MODEL"
+CODEX_EXECUTABLE_VARIABLE = "BAQYLAU_CODEX_EXECUTABLE"
+CLAUDE_EXECUTABLE_VARIABLE = "BAQYLAU_CLAUDE_EXECUTABLE"
 DEFAULT_TIMEOUT_SECONDS = 45.0
 PROVIDER_ATTEMPT_TIMEOUT_SECONDS = 30.0
 POLL_SECONDS = 0.05
@@ -41,6 +43,8 @@ UNAVAILABLE_MARKERS = (
 )
 ESCAPED_TITLE = re.compile(r'\\?"title\\?"\s*:\s*\\?"((?:\\.|[^"\\])*)\\?"')
 MINIMUM_TITLE_WORDS = 3
+
+
 class _TitleDocument(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -124,6 +128,19 @@ CANDIDATES = (
     _Candidate(HarnessName.CODEX, "codex", _codex_command),
     _Candidate(HarnessName.CLAUDE_CODE, "claude", _claude_command),
 )
+EXECUTABLE_VARIABLES = {
+    "codex": CODEX_EXECUTABLE_VARIABLE,
+    "claude": CLAUDE_EXECUTABLE_VARIABLE,
+}
+
+
+def _configured_executable(name: str) -> str | None:
+    variable = EXECUTABLE_VARIABLES[name]
+    configured = os.environ.get(variable)
+    if configured:
+        path = os.path.abspath(os.path.expanduser(configured))
+        return path if os.path.isfile(path) and os.access(path, os.X_OK) else None
+    return shutil.which(name)
 
 
 class DefaultModelFactory:
@@ -135,12 +152,19 @@ class DefaultModelFactory:
         *,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         executable_available: Callable[[str], bool] | None = None,
+        executable_resolver: Callable[[str], str | None] | None = None,
     ) -> None:
         self.terminal = terminal_plugin
         self.usage = usage_reader
         self.audit = audit_recorder
         self.timeout_seconds = timeout_seconds
-        self.executable_available = executable_available or (lambda name: shutil.which(name) is not None)
+        if executable_available is not None and executable_resolver is not None:
+            raise ValueError("configure executable availability or resolution, not both")
+        self.executable_resolver = executable_resolver or (
+            (lambda name: name if executable_available(name) else None)
+            if executable_available is not None
+            else _configured_executable
+        )
 
     def big(self) -> Model:
         raise NotImplementedError
@@ -154,7 +178,7 @@ class DefaultModelFactory:
             self.usage,
             self.audit,
             self.timeout_seconds,
-            self.executable_available,
+            self.executable_resolver,
         )
 
 
@@ -165,17 +189,17 @@ class _SmallModel:
         usage_reader: UsageReader,
         audit_recorder: AuditRecorder,
         timeout_seconds: float,
-        executable_available: Callable[[str], bool],
+        executable_resolver: Callable[[str], str | None],
     ) -> None:
         self.terminal = terminal_plugin
         self.usage = usage_reader
         self.audit = audit_recorder
         self.timeout_seconds = timeout_seconds
-        self.executable_available = executable_available
+        self.executable_resolver = executable_resolver
 
     def send(self, model_prompt_request: ModelPromptRequest) -> ModelPromptResponse:
         try:
-            candidates = self._candidates()
+            candidates, provider_states = self._candidates()
         except Exception as error:
             self.audit.error(
                 model_prompt_request.session_id,
@@ -218,32 +242,66 @@ class _SmallModel:
                 )
                 raise
         reason = "; ".join(failures) if failures else "no provider is available"
-        raise ModelUnavailableError(reason)
+        error = ModelUnavailableError(reason)
+        self.audit.error(
+            model_prompt_request.session_id,
+            "small model (unavailable)",
+            {
+                **_error_context(error),
+                "providers": provider_states,
+                "attempt_failures": failures,
+            },
+        )
+        raise error
 
-    def _candidates(self) -> tuple[_Candidate, ...]:
+    def _candidates(self) -> tuple[tuple[_Candidate, ...], list[JsonValue]]:
         rows = self.usage.usage_rows()
         ranked: list[tuple[Decimal, int, _Candidate]] = []
+        states: list[JsonValue] = []
         for order, candidate in enumerate(CANDIDATES):
-            if not self.executable_available(candidate.executable):
+            executable = self.executable_resolver(candidate.executable)
+            if executable is None:
+                states.append(
+                    {
+                        "provider": str(candidate.harness),
+                        "status": "executable unavailable",
+                        "configuration": EXECUTABLE_VARIABLES[candidate.executable],
+                    }
+                )
                 continue
             capacity = _remaining_capacity(candidate.harness, rows)
             if capacity <= 0:
+                states.append(
+                    {
+                        "provider": str(candidate.harness),
+                        "status": "capacity unavailable",
+                        "remaining_capacity_percent": str(capacity),
+                    }
+                )
                 continue
-            ranked.append((capacity, -order, candidate))
+            states.append(
+                {
+                    "provider": str(candidate.harness),
+                    "status": "available",
+                    "remaining_capacity_percent": str(capacity),
+                }
+            )
+            ranked.append((capacity, -order, replace(candidate, executable=executable)))
         ranked.sort(reverse=True, key=lambda item: (item[0], item[1]))
-        return tuple(candidate for _capacity, _order, candidate in ranked)
+        return tuple(candidate for _capacity, _order, candidate in ranked), states
 
     def _send(self, candidate: _Candidate, request: ModelPromptRequest) -> ModelPromptResponse:
         with tempfile.TemporaryDirectory(prefix="baqylau-model-") as directory:
             schema_path = os.path.join(directory, "title-schema.json")
             with open(schema_path, "w", encoding="utf-8") as schema_file:
                 schema_file.write(TITLE_SCHEMA_JSON)
+            command = candidate.command(request.prompt, schema_path)
             opened = self.terminal.tabs.open_tab(
                 TabOpenRequest(
                     working_directory=directory,
-                    command=candidate.command(request.prompt, schema_path),
+                    command=(candidate.executable, *command[1:]),
                     title="Baqylau internal model",
-                    environment=((INTERNAL_MODEL_VARIABLE, "1"),),
+                    environment=_model_environment(candidate.executable),
                 )
             )
             if not opened.succeeded or opened.window_id is None:
@@ -283,6 +341,15 @@ class _SmallModel:
                     ) from error
             finally:
                 self.terminal.tabs.close_tab(TabCloseRequest(window_id))
+
+
+def _model_environment(executable: str) -> tuple[tuple[str, str], ...]:
+    directory = os.path.dirname(executable)
+    if not directory:
+        return ((INTERNAL_MODEL_VARIABLE, "1"),)
+    inherited = os.environ.get("PATH", os.defpath)
+    path = os.pathsep.join((directory, inherited))
+    return ((INTERNAL_MODEL_VARIABLE, "1"), ("PATH", path))
 
 
 def _error_context(error: Exception) -> dict[str, JsonValue]:

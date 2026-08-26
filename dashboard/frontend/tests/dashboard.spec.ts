@@ -350,6 +350,17 @@ test('keeps activity details readable and expandable', async ({ page }) => {
   await webFetch.locator('.bhead').click();
   await expect(webFetch.locator('.bbody')).toContainText('Example Domain page');
 
+  const browser = page.locator('.blk').filter({
+    has: page.locator('.operation-label', { hasText: 'Browser' }),
+  });
+  await expect(browser.locator('.bsum')).toContainText(
+    'Refresh the fixture application',
+  );
+  await expect(browser).toHaveAttribute('data-open', '0');
+  await browser.locator('.bhead').click();
+  await expect(browser).toHaveAttribute('data-open', '1');
+  await expect(browser.locator('.bbody')).toContainText('link "baqylau"');
+
   const compaction = page
     .locator('.blk')
     .filter({ hasText: 'Context compacted · 82,000 → 12,000 tokens' });

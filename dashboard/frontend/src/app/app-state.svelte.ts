@@ -33,6 +33,7 @@ import {
   browserNotificationPermission,
   PushNotificationController,
 } from '../shared/browser/push-notifications';
+import { StreamRecovery } from '../shared/browser/stream-recovery';
 import { formatRoute, isSessionRoute, parseHash } from './route';
 import type { Route } from './route';
 
@@ -65,6 +66,14 @@ export type PendingLaunch = {
 export class AppState {
   private globalStream: GlobalStream | null = null;
   private globalRecovery: Promise<void> | null = null;
+  private readonly streamRecovery = new StreamRecovery(() => {
+    const signal = this.lifecycleSignal;
+    if (signal === null || signal.aborted) return;
+    this.openGlobalStream(
+      this.listState === 'ready' ? this.sessionCursor : 0,
+      signal,
+    );
+  });
   private lifecycleSignal: AbortSignal | null = null;
   private bootId: string | null = null;
   private readonly adoptingSessions = new SvelteSet<string>();
@@ -296,12 +305,14 @@ export class AppState {
     this.connection = 'connecting';
     this.globalStream = new GlobalStream(cursor, {
       opened: () => {
+        this.streamRecovery.opened();
         this.connection = 'connected';
         this.audit.markStream('global', true);
       },
       disconnected: () => {
         this.connection = 'disconnected';
         this.audit.markStream('global', false);
+        this.streamRecovery.disconnected();
       },
       delta: (frame) => {
         this.applyGlobalDelta(frame);
@@ -601,6 +612,7 @@ export class AppState {
 
   destroy(): void {
     this.lifecycleSignal = null;
+    this.streamRecovery.destroy();
     this.clearLaunchTimer();
     this.globalStream?.close();
     this.globalStream = null;
