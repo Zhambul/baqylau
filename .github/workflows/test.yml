@@ -58,6 +58,9 @@ jobs:
       - run: make test
         if: runner.os == 'macOS'
         env:
+          # Each browser test owns one Python fixture server. The shared macOS
+          # runner cannot run all 18 browser/server pairs at the same time.
+          BROWSER_E2E_WORKERS: 4
           PYTEST_TIMEOUT: 180
       - run: make test-frontend test-python
         if: runner.os == 'Linux'

@@ -31,7 +31,7 @@ lint-frontend: frontend-install
 # The hermetic e2e suite (fake kitten, per-test tmp dirs). See docs/testing.md.
 # Parallel by default (pytest-xdist) — every test is tmpdir-isolated so this is
 # safe; use test-seq for debugging or where xdist is unavailable.
-test-python:
+test-python: build-frontend
 	$(PY) -m pytest -q -m "not kitty" -n auto --ignore=tests/e2e
 
 test: test-frontend test-browser test-python
