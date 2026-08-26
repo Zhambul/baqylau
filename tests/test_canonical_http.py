@@ -18,6 +18,7 @@ from fastapi.routing import APIRoute
 from pydantic import TypeAdapter
 
 from api.app import build_web_application
+from api.application import static as static_routes
 from api.controls.models.send_text_request import SendTextRequest
 from api.server import build_server
 from app import providers
@@ -1384,6 +1385,44 @@ def test_every_plane_carries_the_security_headers(tmp_path):
         thread.join(timeout=2)
 
 
+def test_installed_app_versions_follow_content_not_daemon_restarts(tmp_path, monkeypatch):
+    """Chrome treats an icon URL change as an application identity update."""
+    manifest = b'{"icons":[{"src":"/static/icon-192.png"}]}'
+    index = (
+        b'<link rel="manifest" href="/static/manifest.webmanifest">'
+        b'<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">'
+        b'<!-- vite-assets -->'
+    )
+    (tmp_path / "index.html").write_bytes(index)
+    (tmp_path / "manifest.webmanifest").write_bytes(manifest)
+    (tmp_path / "icon-192.png").write_bytes(b"icon-one")
+    (tmp_path / "apple-touch-icon.png").write_bytes(b"apple-icon")
+    monkeypatch.setattr(static_routes, "STATIC_DIR", str(tmp_path))
+    monkeypatch.setattr(static_routes, "manifest_tags", lambda: b"build assets")
+
+    first_policy = SimpleNamespace(boot_id="boot-one", cache_static="immutable")
+    second_policy = SimpleNamespace(boot_id="boot-two", cache_static="immutable")
+    first = static_routes._serve(first_policy, "index.html", "").body
+    after_restart = static_routes._serve(second_policy, "index.html", "").body
+    assert after_restart == first
+
+    (tmp_path / "icon-192.png").write_bytes(b"icon-two")
+    after_icon_change = static_routes._serve(second_policy, "index.html", "").body
+    assert after_icon_change != first
+
+    manifest_reference = re.search(
+        rb'/static/manifest\.webmanifest\?v=([a-f0-9]{64})', after_icon_change
+    )
+    assert manifest_reference is not None
+    response = static_routes._serve(
+        second_policy,
+        "manifest.webmanifest",
+        manifest_reference.group(1).decode("ascii"),
+    )
+    assert response.headers["Cache-Control"] == "immutable"
+    assert re.search(rb'/static/icon-192\.png\?v=[a-f0-9]{64}', response.body)
+
+
 def test_every_asset_the_document_references_is_served_as_its_own_type():
     """The browser's boot, from the document outward.
 
@@ -1411,8 +1450,8 @@ def test_every_asset_the_document_references_is_served_as_its_own_type():
             name = path.split("?")[0].rsplit("/", 1)[1]
             if path.startswith("/static/build/"):
                 build_references.add(path.removeprefix("/static/build/"))
-                # Vite's content hash is the cache key. BOOT_ID is for the
-                # unbundled icons and web manifest only.
+                # Vite's content hash is the cache key. The unbundled icons and
+                # web manifest have their own content versions.
                 assert "?v=" not in path, path
             status, content_type, body = _get(server, path)
             assert status == 200, path

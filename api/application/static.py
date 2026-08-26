@@ -2,10 +2,11 @@
 #
 # This is policy, not plumbing, so it stays hand-written: no user-path
 # resolution ever. FastAPI owns the document and reads Vite's manifest to add
-# content-addressed CSS and module tags. BOOT_ID still stamps the icons and web
-# manifest because Vite does not own those files.
+# content-addressed CSS and module tags. The unbundled icons and web manifest
+# use their own content digests because Vite does not own those files.
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from pathlib import Path
@@ -32,49 +33,72 @@ _BUILD_TYPES = {
     ".css": "text/css; charset=utf-8",
     ".js": "text/javascript; charset=utf-8",
 }
+_INDEX_ICON_REFERENCE = re.compile(
+    rb"(/static/(?P<name>(?:apple-touch-icon|icon-[a-z0-9-]+)\.png))"
+)
+_MANIFEST_ICON_REFERENCE = re.compile(
+    rb"(/static/(?P<name>icon-[a-z0-9-]+\.png))"
+)
 
 
-def _stamped_index(data: bytes, boot_id: bytes) -> bytes:
-    # Cache-bust the icons. A regenerated icon is new bytes at
-    # an unchanged URL, and mobile browsers keep a persistent favicon cache a
-    # hard reload does not evict. The manifest URL is stamped too so a changed
-    # icon list is re-read.
-    data = re.sub(rb"(/static/(?:apple-touch-icon|icon-[a-z0-9-]+)\.png)",
-                  rb"\1?v=" + boot_id, data)
-    return data.replace(b"/static/manifest.webmanifest",
-                        b"/static/manifest.webmanifest?v=" + boot_id)
+def _read_static(name: str) -> bytes:
+    try:
+        with open(os.path.join(STATIC_DIR, name), "rb") as static_file:
+            return static_file.read()
+    except OSError as error:
+        raise HTTPException(500, "unreadable") from error
 
 
-def _index_document(data: bytes, boot_id: bytes) -> bytes:
+def _content_version(data: bytes) -> bytes:
+    return hashlib.sha256(data).hexdigest().encode("ascii")
+
+
+def _versioned_static_reference(match: re.Match[bytes]) -> bytes:
+    name = match.group("name").decode("ascii")
+    return match.group(1) + b"?v=" + _content_version(_read_static(name))
+
+
+def _manifest_document(data: bytes) -> bytes:
+    # Chrome treats an icon URL change as an application identity change. The
+    # URL must therefore change only when the icon bytes change, not each time
+    # the daemon starts.
+    return _MANIFEST_ICON_REFERENCE.sub(_versioned_static_reference, data)
+
+
+def _stamped_index(data: bytes) -> bytes:
+    # Persistent browser icon caches need a new URL when an icon changes. The
+    # manifest version covers both its source and the versioned icon references
+    # that the browser receives from it.
+    data = _INDEX_ICON_REFERENCE.sub(_versioned_static_reference, data)
+    manifest = _manifest_document(_read_static("manifest.webmanifest"))
+    return data.replace(
+        b"/static/manifest.webmanifest",
+        b"/static/manifest.webmanifest?v=" + _content_version(manifest),
+    )
+
+
+def _index_document(data: bytes) -> bytes:
     if data.count(_VITE_MARKER) != 1:
         raise FrontendBuildError("index.html must contain one Vite asset marker")
-    return _stamped_index(data.replace(_VITE_MARKER, manifest_tags()), boot_id)
+    return _stamped_index(data.replace(_VITE_MARKER, manifest_tags()))
 
 
 def _serve(policy: Policy, name: str, version: str) -> Response:
     content_type = STATIC.get(name)
     if not content_type:
         raise HTTPException(404, "not found")
-    try:
-        with open(os.path.join(STATIC_DIR, name), "rb") as static_file:
-            data = static_file.read()
-    except OSError as error:
-        raise HTTPException(500, "unreadable") from error
+    data = _read_static(name)
     if name == "index.html":
         try:
-            data = _index_document(data, policy.boot_id.encode())
+            data = _index_document(data)
         except FrontendBuildError as error:
             raise HTTPException(500, str(error)) from error
     if name == "manifest.webmanifest":
-        # the manifest's own icon URLs — the installed-app glyph comes from
-        # here, not from index.html.
-        data = re.sub(rb"(/static/icon-[a-z0-9-]+\.png)",
-                      rb"\1?v=" + policy.boot_id.encode(), data)
-    # A fetch under the CURRENT boot's ?v=<BOOT_ID> stamp may be cached hard:
-    # the URL changes on every restart, and the bytes behind it only change
-    # via a restart (the "does NOT hot-reload" contract). index.html and
-    # sw.js are fetched un-stamped, so they stay no-store.
-    cache = policy.cache_static if version == policy.boot_id else "no-store"
+        data = _manifest_document(data)
+    # A fetch under the content's current version may be cached for a year.
+    # Unversioned files, index.html, and sw.js stay no-store.
+    expected_version = _content_version(data).decode("ascii")
+    cache = policy.cache_static if version and version == expected_version else "no-store"
     return Response(content=data, media_type=content_type,
                     headers={"Cache-Control": cache})
 

@@ -451,9 +451,9 @@ script origin and hot-reload WebSocket. The configuration must have these proper
 - a production smoke test opens the built page with the real CSP and fails on any CSP
   console error.
 
-Vite hot reload applies only in explicit development mode. Content hashes replace
-`BOOT_ID` query stamps for generated production assets. Keep the existing `BOOT_ID`
-stamping for the hand-authored icons, `manifest.webmanifest`, and its icon URLs.
+Vite hot reload applies only in explicit development mode. Content hashes version
+generated production assets, the hand-authored icons, `manifest.webmanifest`, and its
+icon URLs. A daemon restart must not change an installed application's identity URLs.
 
 Asset versioning and live-page compatibility are separate. The global stream's first
 `ready` event anchors its `boot_id` and writes the `hello` audit event. If a later
@@ -685,8 +685,8 @@ prevent, but defect count is not the only reason for the rewrite.
   source root in the same change. A source move must not make a gate match zero files.
 - Replace the current document-reference test with a manifest-aware test. Replace the
   app-part filename rule and generated-file `BOOT_ID` substitution deliberately; do not
-  leave them as patterns that silently match nothing. Keep the current icon and web
-  manifest stamping unchanged.
+  leave them as patterns that silently match nothing. Keep the icon and web manifest
+  versioning content-based.
 - Add the development CSP and prove that production never permits the Vite origins.
 - Retain the current index/service-worker cache policy and `/sw.js` URL.
 - Add development integration between FastAPI and the Vite dev server.

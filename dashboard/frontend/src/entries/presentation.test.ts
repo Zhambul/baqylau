@@ -5,6 +5,36 @@ import type { Entry } from './model';
 import { presentEntry } from './presentation';
 
 describe('entry presentation', () => {
+  it('passes a file path to the source highlighter', () => {
+    const entry: Entry = {
+      type: 'file',
+      entryId: entryId('file-one'),
+      cursor: 1,
+      actorId: actorId('lead'),
+      parentActorId: null,
+      turnId: 'turn-one',
+      occurredAt: 1,
+      summary: null,
+      body: {
+        path: 'frontend/state.ts',
+        action: 'created',
+        state: 'succeeded',
+        previousPath: null,
+        linesAdded: 1,
+        linesRemoved: 0,
+        content: { text: 'const ready = true;', mediaType: 'text/plain' },
+      },
+    };
+
+    expect(presentEntry(entry, new Map())).toMatchObject({
+      kind: 'file',
+      body: {
+        kind: 'source',
+        path: 'frontend/state.ts',
+      },
+    });
+  });
+
   it('does not expose stored compaction text for an unsupported harness', () => {
     const entry: Entry = {
       type: 'compaction_finished',

@@ -41,6 +41,7 @@ from harness.services.controls import HarnessControlService
 from inference.contract import ModelFactory, ModelPromptRequest, ModelPromptResponse
 from inference.errors import ModelUnavailableError
 from naming.jobs import AutomaticNamingReaction, NamingJobWorker
+from naming.renamer import SessionRenamer
 from naming.service import AutomaticSessionNamer, normalize_title
 from repository.contract.facts import RawEventRepository
 from repository.contract.session_data import SessionDataRepository
@@ -48,8 +49,9 @@ from repository.contract.sessions import SessionRepository
 from repository.impl.sqlite.databases import main_database
 from repository.impl.sqlite.naming import SqliteNamingJobRepository
 from repository.impl.sqlite.schema import MAIN_SCHEMA_VERSION
-from terminal.adapter import TerminalAdapter
-from tests.fake_terminal import FakeTerminal
+from terminal.adapter import SessionTerminalResult, TerminalAdapter
+from terminal.models import SESSION_WINDOW_TAG
+from tests.fake_terminal import FakeTerminal, window
 
 SESSION_ID = SessionId("session-one")
 ACTOR_ID = ActorId("actor-one")
@@ -134,6 +136,20 @@ class Adapter:
     def window_for_session(self, session_id: SessionId) -> WindowId | None:
         del session_id
         return cast(WindowId | None, None)
+
+
+class RecordingTitleAdapter:
+    def __init__(self, result: SessionTerminalResult | None = None) -> None:
+        self.calls: list[tuple[SessionId, str]] = []
+        self.result = result or SessionTerminalResult(True)
+
+    def rename_session_tab(
+        self,
+        session_id: SessionId,
+        title: str,
+    ) -> SessionTerminalResult:
+        self.calls.append((session_id, title))
+        return self.result
 
 
 class ControlReadModel:
@@ -480,7 +496,11 @@ def control_service(
     stored_session: Session,
     automatic_namer: RecordingNamer,
     effects: Effects,
+    title_adapter: RecordingTitleAdapter | None = None,
 ) -> HarnessControlService:
+    titles = SessionRenamer(
+        cast(TerminalAdapter, title_adapter or RecordingTitleAdapter())
+    )
     return HarnessControlService(
         cast(SessionRepository, Sessions(stored_session)),
         cast(TerminalAdapter, Adapter()),
@@ -490,6 +510,7 @@ def control_service(
         InterruptRegistry(),
         cast(ControlEffectRecorder, effects),
         cast(AutomaticSessionNamer, automatic_namer),
+        titles,
     )
 
 
@@ -504,8 +525,14 @@ def test_codex_auto_name_routes_through_generic_generation_and_existing_rename()
     stored_session = replace(session(), plugin=plugin)
     automatic_namer = RecordingNamer()
     effects = Effects()
+    title_adapter = RecordingTitleAdapter()
 
-    outcome = control_service(stored_session, automatic_namer, effects).auto_name_session(
+    outcome = control_service(
+        stored_session,
+        automatic_namer,
+        effects,
+        title_adapter,
+    ).auto_name_session(
         AutoNameSession(SESSION_ID, RequestId("generic"))
     )
 
@@ -515,6 +542,86 @@ def test_codex_auto_name_routes_through_generic_generation_and_existing_rename()
         RenameSession(SESSION_ID, RequestId("generic"), "Generated generic control title")
     ]
     assert effects.renames == handler.requests
+    assert title_adapter.calls == [
+        (SESSION_ID, "Generated generic control title"),
+    ]
+
+
+def test_terminal_rename_failure_makes_the_control_indeterminate() -> None:
+    handler = AcknowledgingHandler()
+    plugin = replace(
+        codex_plugin,
+        controller=HarnessController(
+            {ControlName.RENAME_SESSION: cast(ControlHandler, handler)}
+        ),
+    )
+    stored_session = replace(session(), plugin=plugin)
+    title_adapter = RecordingTitleAdapter(
+        SessionTerminalResult(False, "terminal title failed")
+    )
+
+    outcome = control_service(
+        stored_session,
+        RecordingNamer(),
+        Effects(),
+        title_adapter,
+    ).rename_session(
+        RenameSession(SESSION_ID, RequestId("rename"), "Central title")
+    )
+
+    assert outcome.status == ControlAcknowledgement.INDETERMINATE
+    assert outcome.reason == "terminal title failed"
+    assert title_adapter.calls == [(SESSION_ID, "Central title")]
+
+
+def test_each_canonical_title_change_uses_the_same_session_renamer() -> None:
+    adapter = RecordingTitleAdapter()
+    renamer = SessionRenamer(cast(TerminalAdapter, adapter))
+    title_event = replace(
+        prompt_event(),
+        payload=SessionTitleChanged(
+            "Canonical automatic title",
+            TitleOrigin.AUTOMATIC,
+        ),
+    )
+
+    renamer.react(title_event)
+    renamer.react(prompt_event())
+
+    assert adapter.calls == [(SESSION_ID, "Canonical automatic title")]
+
+
+def test_session_renamer_resolves_and_renames_the_live_session_tab() -> None:
+    live_session = replace(
+        session(),
+        terminal_window_id=WindowId("window-one"),
+    )
+    terminal = FakeTerminal(
+        windows=(
+            window(
+                "window-one",
+                tags={SESSION_WINDOW_TAG: str(SESSION_ID)},
+            ),
+        )
+    )
+    renamer = SessionRenamer(
+        TerminalAdapter(
+            terminal.plugin(),
+            cast(SessionRepository, Sessions(live_session)),
+        )
+    )
+
+    renamer.react(
+        replace(
+            prompt_event(),
+            payload=SessionTitleChanged(
+                "Live terminal title",
+                TitleOrigin.CUSTOM,
+            ),
+        )
+    )
+
+    assert terminal.renamed_tabs == [("window-one", "Live terminal title")]
 
 
 def test_claude_auto_name_stays_on_its_native_handler() -> None:

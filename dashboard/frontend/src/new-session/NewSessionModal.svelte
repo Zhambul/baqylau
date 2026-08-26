@@ -84,9 +84,12 @@
     appState.harnesses.filter((harness) => harness.launchable),
   );
   let directoryChoices = $state<readonly string[]>([]);
+  let directoryQuery = $state('');
   const matchingDirectories = $derived(
-    directoryChoices.filter((choice) =>
-      choice.toLowerCase().includes(workingDirectory.toLowerCase()),
+    directoryChoices.filter(
+      (choice) =>
+        !appState.hiddenDirectories.has(choice) &&
+        choice.toLowerCase().includes(directoryQuery.toLowerCase()),
     ),
   );
 
@@ -503,8 +506,14 @@
         autocapitalize="none"
         spellcheck="false"
         placeholder="/path/to/project"
-        onfocus={() => (directoryMenu = true)}
-        oninput={() => (directoryMenu = true)}
+        onfocus={() => {
+          directoryQuery = '';
+          directoryMenu = true;
+        }}
+        oninput={() => {
+          directoryQuery = workingDirectory;
+          directoryMenu = true;
+        }}
         onblur={settleDirectory}
       />
       {#if directoryMenu && matchingDirectories.length > 0}

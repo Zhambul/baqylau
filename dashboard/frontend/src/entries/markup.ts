@@ -1,5 +1,12 @@
 /* eslint-disable no-control-regex -- ANSI input and private HTML placeholders use control characters by design. */
 
+import type { ElementContent, Root, RootContent, Text } from 'hast';
+import { toHtml } from 'hast-util-to-html';
+import { refractor } from 'refractor';
+import tsx from 'refractor/tsx';
+
+refractor.register(tsx);
+
 const HEADING = /^(#{1,4})\s+(.*?)\s*#*\s*$/;
 const HORIZONTAL_RULE = /^ {0,3}([-*_])(?:\s*\1){2,}\s*$/;
 const UNORDERED_ITEM = /^ {0,3}[-*+]\s+(.*)$/;
@@ -19,6 +26,52 @@ const ANSI_SGR = /\u001b\[([0-9;]*)m/g;
 const ANSI_NOISE =
   /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)|\u001b[[?][0-9;]*[A-Za-z]|\u001b[()][0-9A-Za-z]|[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
 const DIFF_HUNK = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+
+const LANGUAGE_BY_EXTENSION: Readonly<Record<string, string>> = {
+  bash: 'bash',
+  c: 'c',
+  cc: 'cpp',
+  cpp: 'cpp',
+  cs: 'csharp',
+  css: 'css',
+  go: 'go',
+  h: 'cpp',
+  hpp: 'cpp',
+  htm: 'markup',
+  html: 'markup',
+  ini: 'ini',
+  java: 'java',
+  js: 'javascript',
+  json: 'json',
+  jsonl: 'json',
+  jsx: 'jsx',
+  kt: 'kotlin',
+  less: 'less',
+  lua: 'lua',
+  md: 'markdown',
+  php: 'php',
+  py: 'python',
+  rb: 'ruby',
+  rs: 'rust',
+  sass: 'sass',
+  scss: 'scss',
+  sh: 'bash',
+  sql: 'sql',
+  svg: 'markup',
+  swift: 'swift',
+  toml: 'ini',
+  ts: 'typescript',
+  tsx: 'tsx',
+  xml: 'markup',
+  yaml: 'yaml',
+  yml: 'yaml',
+  zsh: 'bash',
+};
+
+const LANGUAGE_BY_NAME: Readonly<Record<string, string>> = {
+  dockerfile: 'bash',
+  makefile: 'makefile',
+};
 
 type Rgb = readonly [number, number, number];
 
@@ -380,32 +433,115 @@ function diffRows(value: string): DiffRow[] {
   return rows;
 }
 
-function changedCode(row: Exclude<DiffRow, { readonly kind: 'separator' }>) {
-  if (row.changed === null) return escapeText(row.text);
-  const [from, to] = row.changed;
-  return `${escapeText(row.text.slice(0, from))}<mark class="changed">${escapeText(row.text.slice(from, to))}</mark>${escapeText(row.text.slice(to))}`;
+function languageFor(path: string, value: string): string | null {
+  const name = path.split(/[\\/]/).at(-1)?.toLowerCase() ?? '';
+  const namedLanguage = LANGUAGE_BY_NAME[name];
+  if (namedLanguage !== undefined) return namedLanguage;
+  const extension = name.slice(name.lastIndexOf('.') + 1);
+  if (extension === 'svelte' || extension === 'vue')
+    return /<\/?[a-z]|{[#/:@]/i.test(value) ? 'markup' : 'typescript';
+  return LANGUAGE_BY_EXTENSION[extension] ?? null;
 }
 
-export function unifiedDiffHtml(value: string): EscapedHtml {
+function text(value: string): Text {
+  return { type: 'text', value };
+}
+
+function markedText(
+  node: Text,
+  range: readonly [number, number],
+  position: { value: number },
+): ElementContent[] {
+  const start = position.value;
+  const end = start + node.value.length;
+  position.value = end;
+  const markedStart = Math.max(start, range[0]);
+  const markedEnd = Math.min(end, range[1]);
+  if (markedStart >= markedEnd) return [node];
+  const children: ElementContent[] = [];
+  if (start < markedStart)
+    children.push(text(node.value.slice(0, markedStart - start)));
+  children.push({
+    type: 'element',
+    tagName: 'mark',
+    properties: { className: ['changed'] },
+    children: [text(node.value.slice(markedStart - start, markedEnd - start))],
+  });
+  if (markedEnd < end) children.push(text(node.value.slice(markedEnd - start)));
+  return children;
+}
+
+function markRange(
+  children: ElementContent[],
+  range: readonly [number, number],
+  position: { value: number },
+): ElementContent[] {
+  return children.flatMap((node) => {
+    if (node.type === 'text') return markedText(node, range, position);
+    if (node.type !== 'element') return [node];
+    return [
+      {
+        ...node,
+        children: markRange(node.children, range, position),
+      },
+    ];
+  });
+}
+
+function markRootRange(
+  children: RootContent[],
+  range: readonly [number, number],
+): RootContent[] {
+  const position = { value: 0 };
+  const marked: RootContent[] = [];
+  for (const node of children) {
+    if (node.type === 'doctype') marked.push(node);
+    else marked.push(...markRange([node], range, position));
+  }
+  return marked;
+}
+
+function highlightedCode(
+  value: string,
+  path: string,
+  changed: readonly [number, number] | null = null,
+): string {
+  const language = languageFor(path, value);
+  const tree: Root =
+    language === null
+      ? { type: 'root', children: [text(value)] }
+      : refractor.highlight(value, language);
+  if (changed !== null) tree.children = markRootRange(tree.children, changed);
+  return toHtml(tree);
+}
+
+function changedCode(
+  row: Exclude<DiffRow, { readonly kind: 'separator' }>,
+  path: string,
+): string {
+  return highlightedCode(row.text, path, row.changed);
+}
+
+export function unifiedDiffHtml(value: string, path: string): EscapedHtml {
   const rows = diffRows(value).map((row) => {
     if (row.kind === 'separator')
       return '<div class="dl sep"><span class="ln"></span><span class="tx">⋮</span></div>';
     if (row.kind === 'context')
-      return `<div class="dl context"><span class="ln">${String(row.number)}</span><span class="tx">${changedCode(row)}</span></div>`;
+      return `<div class="dl context"><span class="ln">${String(row.number)}</span><span class="tx">${changedCode(row, path)}</span></div>`;
     const marker = row.kind === 'removed' ? '−' : '+';
     const label = `${row.kind} line ${String(row.number)}`;
-    return `<div class="dl ${row.kind}" aria-label="${label}"><span class="ln"><span class="dm" aria-hidden="true">${marker}</span>${String(row.number)}</span><span class="tx">${changedCode(row)}</span></div>`;
+    return `<div class="dl ${row.kind}" aria-label="${label}"><span class="ln"><span class="dm" aria-hidden="true">${marker}</span>${String(row.number)}</span><span class="tx">${changedCode(row, path)}</span></div>`;
   });
   return escapedHtml(`<div class="tdiff">${rows.join('')}</div>`);
 }
 
-export function sourceHtml(value: string): EscapedHtml {
+export function sourceHtml(value: string, path: string): EscapedHtml {
   const lines = value.split(/\r?\n/);
   const rows = lines
     .filter((line, index) => index < lines.length - 1 || line.length > 0)
     .map(
       (line, index) =>
-        `<div class="dl context"><span class="ln">${String(index + 1)}</span><span class="tx">${escapeText(line)}</span></div>`,
+        `<div class="dl context"><span class="ln">${String(index + 1)}</span><span class="tx">${highlightedCode(line, path)}</span></div>`,
     );
   return escapedHtml(`<div class="tdiff">${rows.join('')}</div>`);
 }

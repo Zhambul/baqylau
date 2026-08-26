@@ -28,10 +28,9 @@ REQUEST_QUEUE_SIZE = 128
 
 GZIP_MIN = 1024                    # compress a response body only at/above this size
 
-# Versioned static assets (?v=<BOOT_ID>, api/routes/static.py) are immutable AT
-# THAT URL: the stamp changes on every restart, and static bytes only change
-# via a restart, so a browser may keep them for the max year. Everything else
-# stays no-store.
+# Versioned static assets use a content digest and are immutable at that URL.
+# A changed file gets a new URL, so a browser can keep the old URL for the
+# maximum year. Everything else stays no-store.
 CACHE_STATIC = "public, max-age=31536000, immutable"
 
 # The origin the BROWSER opens its own socket to. Dictation audio never touches

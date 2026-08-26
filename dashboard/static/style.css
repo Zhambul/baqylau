@@ -218,7 +218,7 @@ body.in-session.fs-on #fsbtn { display: revert; }
 .attn-pill {
   display: inline-flex; align-items: center; gap: 6px; flex: none;
   padding: 2px 11px; border-radius: 999px; max-width: 260px;
-  font-size: 12px; color: var(--text-soft);
+  font-size: 12px; color: var(--text-soft); opacity: .5;
   box-shadow: inset 0 0 0 1px var(--hair);
   background: color-mix(in srgb, var(--mid) 5%, transparent);
   transition: box-shadow .15s, color .15s, opacity .15s;
@@ -236,8 +236,8 @@ body.in-session.fs-on #fsbtn { display: revert; }
 .attn-pill.run .adot { background: var(--exec); }
 .attn-pill.idle { color: var(--dim); }
 .attn-pill.idle .adot { background: var(--idle); }
-.attn-pill:hover { color: var(--text); box-shadow: var(--card-hover); }
-.attn-pill.self { opacity: .5; }        /* the session you're already viewing */
+.attn-pill:hover { color: var(--text); box-shadow: var(--card-hover); opacity: 1; }
+.attn-pill.self { opacity: 1; }         /* the session you're viewing */
 
 /* ---- layout ----------------------------------------------------------- */
 #view { max-width: 1500px; margin: 0 auto;
@@ -2043,6 +2043,20 @@ body.attn-on .rail { top: calc(101px + var(--sat)); max-height: calc(100vh - 114
 .tdiff .dl .ln { flex: none; width: 3.5em; text-align: right; color: var(--dim2);
   user-select: none; }
 .tdiff .dl .tx { min-width: 0; color: var(--text-soft); }
+.tdiff .token.comment, .tdiff .token.prolog, .tdiff .token.doctype,
+.tdiff .token.cdata { color: var(--dim); }
+.tdiff .token.punctuation, .tdiff .token.operator { color: var(--dim); }
+.tdiff .token.property, .tdiff .token.tag, .tdiff .token.constant,
+.tdiff .token.symbol, .tdiff .token.deleted { color: var(--red); }
+.tdiff .token.boolean, .tdiff .token.number { color: var(--amber); }
+.tdiff .token.selector, .tdiff .token.attr-name, .tdiff .token.string,
+.tdiff .token.char, .tdiff .token.builtin, .tdiff .token.inserted {
+  color: var(--green); }
+.tdiff .token.atrule, .tdiff .token.attr-value, .tdiff .token.keyword {
+  color: rgb(198, 120, 221); }
+.tdiff .token.function, .tdiff .token.class-name { color: var(--blue); }
+.tdiff .token.regex, .tdiff .token.important, .tdiff .token.variable {
+  color: var(--orange); }
 .tdiff .removed, .tdiff .added { border-left: 2px solid transparent; }
 .tdiff .removed {
   border-left-color: var(--red);

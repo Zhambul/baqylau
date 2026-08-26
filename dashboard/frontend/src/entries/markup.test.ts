@@ -42,11 +42,12 @@ describe('trusted entry markup', () => {
   });
 
   it('renders source and unified diffs with escaped content', () => {
-    expect(sourceHtml('first\n<tag>\n').value).toContain(
-      '<span class="ln">2</span><span class="tx">&lt;tag&gt;</span>',
+    expect(sourceHtml('first\n<tag>\n', 'notes.txt').value).toContain(
+      '<span class="ln">2</span><span class="tx">&#x3C;tag></span>',
     );
     const diff = unifiedDiffHtml(
       '@@ -1,1 +1,1 @@\n-old <tag>\n+new <tag>\n',
+      'notes.txt',
     ).value;
     expect(diff).toContain('class="dl removed"');
     expect(diff).toContain('class="dl added"');
@@ -54,7 +55,36 @@ describe('trusted entry markup', () => {
     expect(diff).toContain('aria-label="added line 1"');
     expect(diff).toContain('<span class="dm" aria-hidden="true">−</span>');
     expect(diff).toContain('<span class="dm" aria-hidden="true">+</span>');
-    expect(diff).toContain('&lt;tag&gt;');
+    expect(diff).toContain('&#x3C;tag>');
     expect(diff).not.toContain('<tag>');
+  });
+
+  it('colors source and diff code from the file path', () => {
+    const source = sourceHtml(
+      'const ready: boolean = true;\n',
+      'frontend/state.ts',
+    ).value;
+    const diff = unifiedDiffHtml(
+      '@@ -1,1 +1,1 @@\n-const ready = false;\n+const ready = true;\n',
+      'frontend/state.ts',
+    ).value;
+
+    expect(source).toContain('<span class="token keyword">const</span>');
+    expect(source).toContain('<span class="token boolean">true</span>');
+    expect(diff).toContain('<span class="token keyword">const</span>');
+    expect(diff).toContain('<mark class="changed">fals</mark>');
+    expect(diff).toContain('<mark class="changed">tru</mark>');
+  });
+
+  it('colors script lines from a Svelte diff', () => {
+    const diff = unifiedDiffHtml(
+      '@@ -1,1 +1,1 @@\n-let open = false;\n+let open = true;\n',
+      'frontend/App.svelte',
+    ).value;
+
+    expect(diff).toContain('<span class="token keyword">let</span>');
+    expect(diff).toContain(
+      '<span class="token boolean"><mark class="changed">tru</mark>e</span>',
+    );
   });
 });

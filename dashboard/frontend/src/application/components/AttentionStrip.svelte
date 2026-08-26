@@ -6,12 +6,12 @@
 
   const BASE_TITLE = 'baqylau';
   const APPEARANCE = new Map([
-    ['awaiting_attention', { className: 'ask', rank: 0 }],
-    ['awaiting_response', { className: 'done', rank: 1 }],
-    ['thinking', { className: 'busy', rank: 2 }],
-    ['working', { className: 'busy', rank: 2 }],
-    ['executing', { className: 'run', rank: 3 }],
-    ['awaiting_background', { className: 'run', rank: 3 }],
+    ['awaiting_attention', 'ask'],
+    ['awaiting_response', 'done'],
+    ['thinking', 'busy'],
+    ['working', 'busy'],
+    ['executing', 'run'],
+    ['awaiting_background', 'run'],
   ]);
   const ASK_FAVICON = `data:image/svg+xml,${encodeURIComponent(
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
@@ -35,27 +35,12 @@
     );
   }
 
-  function appearance(snapshot: SessionSnapshot): {
-    readonly className: string;
-    readonly rank: number;
-  } {
-    return (
-      APPEARANCE.get(sessionStatus(snapshot) ?? '') ?? {
-        className: 'idle',
-        rank: 4,
-      }
-    );
+  function appearance(snapshot: SessionSnapshot): string {
+    return APPEARANCE.get(sessionStatus(snapshot) ?? '') ?? 'idle';
   }
 
   const live = $derived.by(() =>
-    appState.sessions
-      .filter((snapshot) => snapshot.live)
-      .sort(
-        (left, right) =>
-          appearance(left).rank - appearance(right).rank ||
-          label(left).localeCompare(label(right)) ||
-          left.session.sessionId.localeCompare(right.session.sessionId),
-      ),
+    appState.sessions.filter((snapshot) => snapshot.live),
   );
   const asking = $derived(
     live.filter((snapshot) => sessionStatus(snapshot) === 'awaiting_attention')
@@ -83,7 +68,7 @@
     <a
       class={[
         'attn-pill',
-        appearance(snapshot).className,
+        appearance(snapshot),
         {
           self:
             appState.route.kind === 'session' &&

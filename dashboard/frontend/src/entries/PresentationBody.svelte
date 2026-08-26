@@ -23,9 +23,9 @@
 {:else if body.kind === 'ansi'}
   <pre class="opo"><TrustedHtml html={ansiHtml(body.text)} /></pre>
 {:else if body.kind === 'source'}
-  <TrustedHtml html={sourceHtml(body.text)} />
+  <TrustedHtml html={sourceHtml(body.text, body.path)} />
 {:else if body.kind === 'diff'}
-  <TrustedHtml html={unifiedDiffHtml(body.text)} />
+  <TrustedHtml html={unifiedDiffHtml(body.text, body.path)} />
 {:else if body.kind === 'answers'}
   {#if body.answers.length > 0}
     <div class="ansqa">

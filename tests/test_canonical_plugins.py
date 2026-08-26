@@ -4692,7 +4692,7 @@ def test_live_codex_rename_also_updates_the_native_title_store(monkeypatch):
 
     assert outcome.status == "acknowledged"
     assert calls == [(session.source_reference, "New title")]
-    assert terminal.renamed_tabs == [("window-one", "New title")]
+    assert terminal.renamed_tabs == []
 
 
 def test_claude_prompt_and_codex_prompt_share_the_message_model():

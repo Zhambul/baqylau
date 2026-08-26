@@ -95,6 +95,7 @@ from harness.services.usage import ApplicationUsageState, HarnessUsageService
 from inference.contract import ModelFactory
 from inference.default import DefaultModelFactory
 from naming.jobs import AutomaticNamingReaction, NamingJobWorker
+from naming.renamer import SessionRenamer
 from naming.service import AutomaticSessionNamer
 from notify.presence import Presence
 from repository.contract.audit import (
@@ -410,6 +411,14 @@ Terminal = Annotated[TerminalAdapter, Depends(terminal)]
 
 
 @singleton
+def session_renamer(adapter: Terminal) -> SessionRenamer:
+    return SessionRenamer(adapter)
+
+
+SessionTitles = Annotated[SessionRenamer, Depends(session_renamer)]
+
+
+@singleton
 def pane_width_service(widths: PaneWidthStorage) -> PaneWidthService:
     return PaneWidthService(widths)
 
@@ -523,6 +532,7 @@ def controls(
     interrupts: InterruptTracking,
     effects: ControlEffects,
     namer: AutomaticNamer,
+    titles: SessionTitles,
 ) -> HarnessControlService:
     return HarnessControlService(
         session_storage,
@@ -533,6 +543,7 @@ def controls(
         interrupts,
         effects,
         namer,
+        titles,
     )
 
 
@@ -746,10 +757,12 @@ def reactions(
     harnesses: Registry,
     jobs: NamingJobs,
     control_service: Controls,
+    titles: SessionTitles,
 ) -> tuple[CanonicalEventReaction, ...]:
     """What a committed fact CAUSES, in dependency order, on the reaction loop."""
     return (
         AutomaticNamingReaction(harnesses, jobs),
+        titles,
         PaneCanonicalEventReaction(adapter, session_storage, widths),
         QueuedPromptCanonicalEventReaction(workspaces, control_service),
         InterruptCanonicalEventReaction(interrupts),

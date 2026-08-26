@@ -606,6 +606,65 @@ test('preserves the session, agent, monitor, and statistics routes', async ({
   expect(failures).toEqual([]);
 });
 
+test('shows all visible directories on focus and filters after input', async ({
+  page,
+}) => {
+  const hiddenDirectory = '/work/hidden';
+  await page.addInitScript(() => {
+    Object.defineProperty(window, 'EventSource', {
+      configurable: true,
+      value: undefined,
+    });
+  });
+  await page.route('**/api/application', async (route) => {
+    const response = await route.fetch();
+    const application: unknown = await response.json();
+    if (!isRecord(application) || !isRecord(application.preferences))
+      throw new Error('the application fixture has no preferences');
+    await route.fulfill({
+      response,
+      json: {
+        ...application,
+        preferences: {
+          ...application.preferences,
+          hidden_directories: {
+            [hiddenDirectory]: FIXTURE_TIME / 1_000,
+          },
+        },
+      },
+    });
+  });
+  await page.route('**/sessionData/directories', async (route) => {
+    await route.fulfill({
+      json: ['/work/current', '/work/other', hiddenDirectory],
+    });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: '+ session' }).click();
+  const dialog = page.getByRole('dialog', { name: 'new session' });
+  const directory = dialog.getByLabel('directory');
+
+  await directory.focus();
+  await expect(
+    dialog.getByRole('option', { name: '/work/current' }),
+  ).toBeVisible();
+  await expect(
+    dialog.getByRole('option', { name: '/work/other' }),
+  ).toBeVisible();
+  await expect(
+    dialog.getByRole('option', { name: hiddenDirectory }),
+  ).toHaveCount(0);
+
+  await directory.fill('other');
+  await expect(
+    dialog.getByRole('option', { name: '/work/current' }),
+  ).toHaveCount(0);
+  await expect(
+    dialog.getByRole('option', { name: '/work/other' }),
+  ).toBeVisible();
+});
+
 test('keeps the new-session and resume-preview modal boundaries', async ({
   page,
 }) => {

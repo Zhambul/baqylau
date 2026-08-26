@@ -35,6 +35,7 @@ from terminal.models import (
     TabAppearance,
     TabColorClearRequest,
     TabColorSetRequest,
+    TabRenameRequest,
     WindowFocusRequest,
     WindowInfo,
     WindowTagRequest,
@@ -325,6 +326,23 @@ class TerminalAdapter:
         return self.resize_activity_pane(session_id, target_columns - current_columns)
 
     # --- tabs ----------------------------------------------------------------
+    def rename_session_tab(
+        self,
+        session_id: SessionId,
+        title: str,
+    ) -> SessionTerminalResult:
+        """Set the explicit title of a live session tab.
+
+        A parked session has no tab to update. That is a completed no-op, not
+        a terminal failure.
+        """
+        window_id = self.window_for_session(session_id)
+        if window_id is None:
+            return SessionTerminalResult(True)
+        request = TabRenameRequest(NativeWindowId(str(window_id)), title)
+        response = self._plugin.tabs.rename_tab(request)
+        return SessionTerminalResult(response.succeeded, response.reason)
+
     def paint_session_tab(
         self,
         session_id: SessionId,

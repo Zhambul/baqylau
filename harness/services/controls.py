@@ -34,6 +34,7 @@ from harness.models import (
     SendText,
 )
 from harness.services.control_effects import ControlEffectRecorder
+from naming.renamer import SessionRenamer
 from naming.service import AutomaticSessionNamer
 from repository.contract.session_data import SessionDataRepository
 from repository.contract.sessions import SessionRepository
@@ -100,6 +101,7 @@ class HarnessControlService(HarnessReactorContext):
         interrupt_registry: InterruptRegistry,
         control_effect_recorder: ControlEffectRecorder,
         automatic_session_namer: AutomaticSessionNamer,
+        session_renamer: SessionRenamer,
     ) -> None:
         self.sessions = session_repository
         self.terminal = terminal_adapter
@@ -109,6 +111,7 @@ class HarnessControlService(HarnessReactorContext):
         self.interrupts = interrupt_registry
         self.control_effects = control_effect_recorder
         self.automatic_namer = automatic_session_namer
+        self.session_renamer = session_renamer
 
     # One typed public method per gesture — the request type IS the parameter,
     # so a caller never builds a bare `ControlRequest` and this class never
@@ -327,6 +330,8 @@ class HarnessControlService(HarnessReactorContext):
                 request.request_id,
                 lambda title: self._apply_generated_title(request, context, title),
             )
+        if isinstance(request, RenameSession):
+            return self.session_renamer.rename(plugin.controller, request, context)
         return plugin.controller.execute(request, context)
 
     def _apply_generated_title(
@@ -348,7 +353,11 @@ class HarnessControlService(HarnessReactorContext):
             auto_name_session.request_id,
             title,
         )
-        outcome = plugin.controller.execute(rename, control_context)
+        outcome = self.session_renamer.rename(
+            plugin.controller,
+            rename,
+            control_context,
+        )
         if (
             isinstance(outcome, DurableTitleResult)
             and outcome.status == ControlAcknowledgement.ACKNOWLEDGED

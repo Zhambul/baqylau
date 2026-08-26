@@ -38,7 +38,6 @@ from terminal.models import (
     KeySendRequest,
     ScreenReadRequest,
     TabCloseRequest,
-    TabRenameRequest,
     TextSubmitMode,
     TextSubmitRequest,
 )
@@ -235,7 +234,6 @@ class CloseSessionHandler(ControlHandler):
 class RenameSessionHandler(ControlHandler):
     def __call__(self, request: ControlRequest, control_context: ControlContext) -> ControlResult:
         session = control_context.session
-        terminal = control_context.terminal
         if not isinstance(request, RenameSession):
             raise TypeError("rename_session handler requires RenameSession")
         if control_context.terminal_window_id is None:
@@ -267,9 +265,6 @@ class RenameSessionHandler(ControlHandler):
                     ControlAcknowledgement.REJECTED,
                     "session source is not renameable",
                 )
-            window_id = control_context.terminal_window_id
-            if window_id is not None:
-                terminal.tabs.rename_tab(TabRenameRequest(NativeWindowId(str(window_id)), request.name))
         return result
 
 

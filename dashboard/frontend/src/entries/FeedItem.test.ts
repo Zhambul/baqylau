@@ -21,7 +21,11 @@ const EDIT: VisibleEntryPresentation = {
   kind: 'file',
   action: 'updated',
   path: 'dashboard/frontend/src/app/App.svelte',
-  body: { kind: 'diff', text: '@@ -1 +1 @@\n-old\n+new' },
+  body: {
+    kind: 'diff',
+    text: '@@ -1 +1 @@\n-const oldValue = false;\n+const newValue = true;',
+    path: 'dashboard/frontend/src/app/App.svelte',
+  },
 };
 
 describe('feed item', () => {
@@ -45,7 +49,7 @@ describe('feed item', () => {
     if (!(header instanceof HTMLElement)) throw new Error('header is missing');
     await user.click(header);
     expect(block).toHaveAttribute('data-open', '1');
-    expect(screen.getByText('new')).toBeVisible();
+    expect(screen.getByText('newValue', { exact: false })).toBeVisible();
     expect(container.querySelector('.removed')).toHaveAttribute(
       'aria-label',
       'removed line 1',
@@ -56,5 +60,8 @@ describe('feed item', () => {
     );
     expect(container.querySelector('.removed .dm')).toHaveTextContent('−');
     expect(container.querySelector('.added .dm')).toHaveTextContent('+');
+    expect(container.querySelector('.added .token.keyword')).toHaveTextContent(
+      'const',
+    );
   });
 });

@@ -53,9 +53,15 @@ type ContentBody = {
   readonly content: Content;
 };
 
-type TextBody = {
-  readonly kind: 'ansi' | 'source' | 'diff';
+type AnsiBody = {
+  readonly kind: 'ansi';
   readonly text: string;
+};
+
+type CodeBody = {
+  readonly kind: 'source' | 'diff';
+  readonly text: string;
+  readonly path: string;
 };
 
 type EmptyBody = { readonly kind: 'empty' };
@@ -89,7 +95,8 @@ type SkillBody = {
 
 export type PresentationBody =
   | ContentBody
-  | TextBody
+  | AnsiBody
+  | CodeBody
   | EmptyBody
   | AnswersBody
   | PlanResolutionBody
@@ -342,6 +349,7 @@ export function presentEntry(
                     ? 'source'
                     : 'diff',
                 text: entry.body.content.text,
+                path: entry.body.path,
               },
       };
     case 'search':
