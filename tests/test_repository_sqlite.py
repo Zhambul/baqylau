@@ -779,6 +779,83 @@ def test_version_eighteen_reprocesses_structured_claude_search_results(tmp_path)
     assert version["version"] == MAIN_SCHEMA_VERSION
 
 
+def test_version_nineteen_normalizes_canonical_model_references(tmp_path):
+    path = str(tmp_path / "main.db")
+    old_database = main_database(path)
+    raw_events = SqliteRawEventRepository(old_database)
+    canonical = SqliteCanonicalEventRepository(old_database)
+    model_raw = a_raw_event("legacy-model", "1")
+    context_raw = a_raw_event("legacy-context", "2")
+    usage_raw = a_raw_event("legacy-usage", "3")
+    raw_events.record([model_raw, context_raw, usage_raw])
+    for raw_event, event_id in (
+        (model_raw, "legacy-model-event"),
+        (context_raw, "legacy-context-event"),
+        (usage_raw, "legacy-usage-event"),
+    ):
+        canonical.record_translation(
+            raw_event,
+            "1",
+            TranslationResult((a_started_event(event_id),), "translated"),
+            1001.0,
+        )
+    legacy_model = (
+        '{"native_id":"claude-fable-5","display_name":"fable-5",'
+        '"selection_id":"fable"}'
+    )
+    with old_database.write() as connection:
+        connection.execute(
+            "UPDATE canonical_events SET event_type='model.changed', "
+            "payload=json_object("
+            "'previous', json(?), 'current', json(?), "
+            "'reason', 'reported_by_harness') WHERE event_id='legacy-model-event'",
+            (legacy_model, legacy_model),
+        )
+        connection.execute(
+            "UPDATE canonical_events SET event_type='context.reported', "
+            "payload=json_object('used_tokens', 1, 'window_tokens', 2, "
+            "'model', json(?)) WHERE event_id='legacy-context-event'",
+            (legacy_model,),
+        )
+        connection.execute(
+            "UPDATE canonical_events SET event_type='usage.reported', "
+            "payload=json_object('scope', 'session', 'subject_id', 'actor-one', "
+            "'model', json(?), 'tokens', json_object(), 'cumulative', false) "
+            "WHERE event_id='legacy-usage-event'",
+            (legacy_model,),
+        )
+        connection.execute("UPDATE schema_version SET version = 19 WHERE id = 1")
+
+    upgraded = main_database(path)
+    upgraded.initialize()
+
+    with upgraded.read() as connection:
+        rows = connection.execute(
+            "SELECT event_type, "
+            "json_extract(payload, '$.current.name') AS current_name, "
+            "json_extract(payload, '$.previous.name') AS previous_name, "
+            "json_extract(payload, '$.model.name') AS model_name, "
+            "json_extract(payload, '$.current.native_id') AS current_native, "
+            "json_extract(payload, '$.model.native_id') AS model_native "
+            "FROM canonical_events "
+            "WHERE event_id LIKE 'legacy-%-event' ORDER BY event_type"
+        ).fetchall()
+        version = connection.execute(
+            "SELECT version FROM schema_version WHERE id = 1"
+        ).fetchone()
+    assert len(rows) == 3
+    for row in rows:
+        name_field = "current_name" if row["event_type"] == "model.changed" else "model_name"
+        native_field = (
+            "current_native" if row["event_type"] == "model.changed" else "model_native"
+        )
+        assert row[name_field] == "claude-fable-5"
+        assert row[native_field] is None
+    model_row = next(row for row in rows if row["event_type"] == "model.changed")
+    assert model_row["previous_name"] == "claude-fable-5"
+    assert version["version"] == MAIN_SCHEMA_VERSION
+
+
 def test_version_nine_builds_the_pending_raw_event_queue(tmp_path):
     path = str(tmp_path / "main.db")
     old_database = main_database(path)

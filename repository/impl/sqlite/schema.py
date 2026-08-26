@@ -25,7 +25,7 @@ columns, half of them null, and none of them queried.
 
 from __future__ import annotations
 
-MAIN_SCHEMA_VERSION = 19
+MAIN_SCHEMA_VERSION = 20
 AUDIT_SCHEMA_VERSION = 1
 
 # Version 4 rewrote the canonical vocabulary, so files older than that remain
@@ -573,6 +573,54 @@ MAIN_MIGRATIONS: dict[int, tuple[str, ...]] = {
         "DELETE FROM sqlite_sequence WHERE name='session_entries' "
         "AND EXISTS (SELECT 1 FROM tool_result_repairs)",
         "DROP TABLE tool_result_repairs",
+    ),
+    20: (
+        # Version 5 normalized the actor projection's ModelReference, but the
+        # canonical log intentionally remained untouched at the time. A later
+        # full projection rebuild reads that durable log through today's closed
+        # payload models, so normalize the three canonical event fields that
+        # carried the same legacy `{native_id, selection_id}` shape.
+        """
+        UPDATE canonical_events
+        SET payload = json_set(
+            json_remove(
+                payload,
+                '$.current.native_id',
+                '$.current.selection_id'
+            ),
+            '$.current.name', json_extract(payload, '$.current.native_id')
+        )
+        WHERE event_type = 'model.changed'
+          AND json_type(payload, '$.current') = 'object'
+          AND json_type(payload, '$.current.name') IS NULL
+          AND json_type(payload, '$.current.native_id') = 'text'
+        """,
+        """
+        UPDATE canonical_events
+        SET payload = json_set(
+            json_remove(
+                payload,
+                '$.previous.native_id',
+                '$.previous.selection_id'
+            ),
+            '$.previous.name', json_extract(payload, '$.previous.native_id')
+        )
+        WHERE event_type = 'model.changed'
+          AND json_type(payload, '$.previous') = 'object'
+          AND json_type(payload, '$.previous.name') IS NULL
+          AND json_type(payload, '$.previous.native_id') = 'text'
+        """,
+        """
+        UPDATE canonical_events
+        SET payload = json_set(
+            json_remove(payload, '$.model.native_id', '$.model.selection_id'),
+            '$.model.name', json_extract(payload, '$.model.native_id')
+        )
+        WHERE event_type IN ('context.reported', 'usage.reported')
+          AND json_type(payload, '$.model') = 'object'
+          AND json_type(payload, '$.model.name') IS NULL
+          AND json_type(payload, '$.model.native_id') = 'text'
+        """,
     ),
 }
 
