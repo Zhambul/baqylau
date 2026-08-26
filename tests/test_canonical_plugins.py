@@ -2947,7 +2947,7 @@ def test_claude_teammate_hook_and_transcript_share_one_actor_identity(monkeypatc
     assert [actor.role for actor in started if actor.name == "worker-one"] == ["teammate"]
 
 
-def test_codex_hook_maps_unique_compaction_lifecycle():
+def test_codex_encrypted_compaction_maps_unique_non_expandable_lifecycle():
     translator = CodexCanonicalTranslator()
     before = translator.translate(
         raw_event(
@@ -2996,9 +2996,7 @@ def test_codex_hook_maps_unique_compaction_lifecycle():
     assert after.canonical_events == ()
     assert isinstance(boundary.canonical_events[0].payload, CompactionFinished)
     finished = boundary.canonical_events[0].payload
-    assert finished.context is not None
-    assert "Remember amber circle." in finished.context.text
-    assert "encrypted in the native context" in finished.context.text
+    assert finished.context is None
 
 
 def test_codex_rollout_compaction_boundary_carries_direct_context():

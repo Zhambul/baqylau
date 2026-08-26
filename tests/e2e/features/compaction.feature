@@ -24,7 +24,7 @@ Feature: session compaction has a complete lifecycle
     When I name the compaction in session "primary" after control "compact context" "context compaction"
     Then compaction "context compaction" finishes
     And compaction "context compaction" has one finished feed entry
-    And compaction "context compaction" has expandable compacted context
+    And compaction "context compaction" has <compacted context>
     And compaction "context compaction" leaves its actor ready
     When I send prompt to session "primary" as turn "after compaction"
       """
@@ -36,8 +36,8 @@ Feature: session compaction has a complete lifecycle
     And turn "after compaction" has final answer 'amber circle, blue square'
 
     Examples:
-      | harness     | model        | worker   |
-      | codex       | gpt-5.6-luna | lead     |
-      | codex       | gpt-5.6-luna | subagent |
-      | claude_code | haiku        | lead     |
-      | claude_code | haiku        | subagent |
+      | harness     | model        | worker   | compacted context                |
+      | codex       | gpt-5.6-luna | lead     | no expandable compacted context |
+      | codex       | gpt-5.6-luna | subagent | no expandable compacted context |
+      | claude_code | haiku        | lead     | expandable compacted context    |
+      | claude_code | haiku        | subagent | expandable compacted context    |

@@ -352,13 +352,21 @@ test('keeps activity details readable and expandable', async ({ page }) => {
 
   const compaction = page
     .locator('.blk')
-    .filter({ hasText: 'Context compacted' });
+    .filter({ hasText: 'Context compacted · 82,000 → 12,000 tokens' });
   await expect(compaction).toHaveAttribute('data-open', '0');
   await compaction.locator('.bhead').click();
   await expect(compaction).toHaveAttribute('data-open', '1');
   await expect(compaction.locator('.bbody')).toContainText(
     'Retained compacted context: amber circle, blue square',
   );
+
+  const opaqueCompaction = page
+    .locator('.blk')
+    .filter({ hasText: 'Context compacted · 42,000 → 9,000 tokens' });
+  await expect(opaqueCompaction).toHaveAttribute('data-open', '0');
+  await opaqueCompaction.locator('.bhead').click();
+  await expect(opaqueCompaction).toHaveAttribute('data-open', '0');
+  await expect(opaqueCompaction.locator('.bbody')).toBeEmpty();
 
   const webSearchLabel = webSearch.locator('.operation-label');
   const background = page.locator('.operation-label', {

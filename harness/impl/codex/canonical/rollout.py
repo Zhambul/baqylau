@@ -170,50 +170,18 @@ def _top_compacted(compacted_payload: CompactedPayload) -> CompactBoundaryRecord
     p = compacted_payload
     # The TOP-LEVEL compaction record (distinct from the event_msg
     # `context_compacted` notice the mirror paints as ⟳): it is the boundary
-    # itself, and `message` is usually "" because the summary is encrypted.
-    # The encrypted summary itself cannot be decrypted outside Codex, but the
-    # replacement history is the exact context Codex retained: readable
-    # user/developer/agent messages plus an encrypted compaction marker.
+    # itself. Current Codex writes an empty `message` and an opaque encrypted
+    # compaction item. Replacement history is continuation input, not the
+    # readable native summary, so it must not make the dashboard entry
+    # expandable. Preserve an explicit plaintext message if a Codex version
+    # supplies one.
     hist = p.replacement_history
     return CompactBoundaryRecord(
         message=p.message or "",
-        context=_compacted_context(p),
+        context=(p.message or "").strip(),
         replaced=len(hist) if hist is not None else 0,
         window_id=p.window_id, previous_window_id=p.previous_window_id,
     )
-
-
-def _compacted_context(compacted_payload: CompactedPayload) -> str:
-    direct = (compacted_payload.message or "").strip()
-    if direct:
-        return direct
-    sections: list[str] = []
-    for item in compacted_payload.replacement_history or ():
-        texts: list[str] = []
-        if isinstance(item.content, str):
-            if item.content.strip():
-                texts.append(item.content.strip())
-        else:
-            for part in item.content or ():
-                text = part if isinstance(part, str) else part.text
-                if text and text.strip():
-                    texts.append(text.strip())
-        if item.type == "compaction" and item.encrypted_content:
-            sections.append(
-                "### Compaction summary\n"
-                "Codex retains this summary encrypted in the native context."
-            )
-            continue
-        if not texts:
-            continue
-        if item.type == "agent_message":
-            author = item.author or "agent"
-            recipient = f" → {item.recipient}" if item.recipient else ""
-            label = f"Agent {author}{recipient}"
-        else:
-            label = (item.role or item.type or "context").replace("_", " ").title()
-        sections.append(f"### {label}\n" + "\n\n".join(texts))
-    return "\n\n".join(sections)
 
 
 def _top_world_state(_world_state_payload: WorldStatePayload) -> WorldStateRecord:

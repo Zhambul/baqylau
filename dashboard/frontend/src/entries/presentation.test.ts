@@ -5,6 +5,26 @@ import type { Entry } from './model';
 import { presentEntry } from './presentation';
 
 describe('entry presentation', () => {
+  it('does not give a compaction an expandable body without readable context', () => {
+    const entry: Entry = {
+      type: 'compaction_finished',
+      entryId: entryId('opaque-compaction'),
+      cursor: 1,
+      actorId: actorId('lead'),
+      parentActorId: null,
+      turnId: null,
+      occurredAt: 1,
+      summary: null,
+      body: { beforeTokens: 100, afterTokens: 20, context: null },
+    };
+
+    expect(presentEntry(entry, new Map())).toMatchObject({
+      kind: 'block',
+      header: { kind: 'note', label: 'Context compacted · 100 → 20 tokens' },
+      body: { kind: 'empty' },
+    });
+  });
+
   it('shows a child actor first prompt as a parent-agent message', () => {
     const entry: Entry = {
       type: 'message',
