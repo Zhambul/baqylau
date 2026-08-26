@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from dataclasses import replace
 from decimal import Decimal
+from typing import cast
 
 import pytest
 
+from audit.recorder import AuditRecorder
 from domain.ids import HarnessName
 from harness.models import UsageRow, UsageWindow, UsageWindowScope
 from inference import DefaultModelFactory, ModelPromptRequest, ModelUnavailableError
@@ -23,6 +25,14 @@ class Usage:
 
     def usage_rows(self) -> tuple[UsageRow, ...]:
         return self.rows
+
+
+class Audit:
+    def __init__(self) -> None:
+        self.errors: list[tuple[str, str, object]] = []
+
+    def error(self, session_or_log="", func="", context=None) -> None:
+        self.errors.append((session_or_log, func, context))
 
 
 class InferenceTerminal(FakeTerminal):
@@ -80,10 +90,17 @@ def usage_row(harness: HarnessName, used_percent: Decimal) -> UsageRow:
     )
 
 
-def factory(terminal: InferenceTerminal, usage: Usage | None = None, *, timeout: float = 1) -> DefaultModelFactory:
+def factory(
+    terminal: InferenceTerminal,
+    usage: Usage | None = None,
+    audit: Audit | None = None,
+    *,
+    timeout: float = 1,
+) -> DefaultModelFactory:
     return DefaultModelFactory(
         terminal.plugin(),
         usage or Usage(),
+        cast(AuditRecorder, audit or Audit()),
         timeout_seconds=timeout,
         executable_available=lambda _name: True,
     )
@@ -151,6 +168,7 @@ def test_authentication_failure_excludes_that_provider() -> None:
 
 
 def test_rate_limited_provider_falls_back_to_a_fresh_other_provider_window() -> None:
+    audit = Audit()
     terminal = InferenceTerminal(
         (
             "rate limit exceeded",
@@ -158,7 +176,9 @@ def test_rate_limited_provider_falls_back_to_a_fresh_other_provider_window() -> 
         )
     )
 
-    response = factory(terminal).small().send(ModelPromptRequest("name this"))
+    response = factory(terminal, audit=audit).small().send(
+        ModelPromptRequest("name this", "session-one")
+    )
 
     assert response.text == "Fallback provider session title"
     assert [launch.command[0] for launch in terminal.opened_tabs] == ["codex", "claude"]
@@ -171,6 +191,20 @@ def test_rate_limited_provider_falls_back_to_a_fresh_other_provider_window() -> 
     assert "read-only" in codex.command
     assert "resume" not in codex.command
     assert terminal.opened_tabs[0].working_directory != terminal.opened_tabs[1].working_directory
+    assert audit.errors == [
+        (
+            "session-one",
+            "small model (provider attempt)",
+            {
+                "error_type": "ProviderUnavailableError",
+                "error": "provider reported an availability limit",
+                "provider": "codex",
+                "attempt": 1,
+                "stage": "parse output",
+                "output": "rate limit exceeded",
+            },
+        )
+    ]
 
 
 def test_title_that_violates_the_requested_shape_falls_back() -> None:
@@ -231,15 +265,26 @@ def test_a_valid_title_about_rate_limits_is_not_mistaken_for_provider_failure() 
 
 
 def test_timeout_closes_every_attempted_provider_window() -> None:
+    audit = Audit()
     terminal = InferenceTerminal(("", "", ""), stays_open=True)
 
     with pytest.raises(ModelUnavailableError):
-        factory(terminal, timeout=-1).small().send(ModelPromptRequest("name this"))
+        factory(terminal, audit=audit, timeout=-1).small().send(
+            ModelPromptRequest("name this", "session-one")
+        )
 
     assert terminal.closed_tabs == ["model-1", "model-2", "model-3"]
+    assert [error[1] for error in audit.errors] == [
+        "small model (provider attempt)",
+        "small model (provider attempt)",
+        "small model (provider attempt)",
+        "small model (unavailable)",
+    ]
+    assert all(error[0] == "session-one" for error in audit.errors)
 
 
 def test_exhausted_known_quotas_do_not_open_any_provider() -> None:
+    audit = Audit()
     terminal = InferenceTerminal(())
     exhausted = Usage(
         (
@@ -249,6 +294,31 @@ def test_exhausted_known_quotas_do_not_open_any_provider() -> None:
     )
 
     with pytest.raises(ModelUnavailableError):
-        factory(terminal, exhausted).small().send(ModelPromptRequest("name this"))
+        factory(terminal, exhausted, audit).small().send(
+            ModelPromptRequest("name this", "session-one")
+        )
 
     assert terminal.opened_tabs == []
+    assert audit.errors == [
+        (
+            "session-one",
+            "small model (unavailable)",
+            {
+                "error_type": "ModelUnavailableError",
+                "error": "no provider is available",
+                "providers": [
+                    {
+                        "provider": "codex",
+                        "status": "capacity exhausted",
+                        "remaining_capacity_percent": "0",
+                    },
+                    {
+                        "provider": "claude_code",
+                        "status": "capacity exhausted",
+                        "remaining_capacity_percent": "0",
+                    },
+                ],
+                "attempt_failures": [],
+            },
+        )
+    ]

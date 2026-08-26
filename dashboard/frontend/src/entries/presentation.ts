@@ -81,8 +81,19 @@ type PlanResolutionBody = {
   readonly feedback: string | null;
 };
 
+type SkillBody = {
+  readonly kind: 'skill';
+  readonly arguments: Content | null;
+  readonly output: Content | null;
+};
+
 export type PresentationBody =
-  ContentBody | TextBody | EmptyBody | AnswersBody | PlanResolutionBody;
+  | ContentBody
+  | TextBody
+  | EmptyBody
+  | AnswersBody
+  | PlanResolutionBody
+  | SkillBody;
 
 type HiddenEntryPresentation = { readonly kind: 'hidden' };
 
@@ -294,6 +305,8 @@ export function presentEntry(
     case 'shell_output':
     case 'shell_backgrounded':
     case 'shell_finished':
+    case 'skill_started':
+    case 'skill_finished':
       return HIDDEN;
     case 'message':
       return message(entry, actors);
@@ -374,22 +387,6 @@ export function presentEntry(
         finishedAt: entry.occurredAt,
         exitCode: null,
       };
-    case 'skill_started':
-      return note(
-        entry,
-        `Skill(${entry.body.name})`,
-        contentBody(entry.body.arguments),
-        null,
-        'skill',
-      );
-    case 'skill_finished':
-      return note(
-        entry,
-        `Skill finished${entry.body.state === 'succeeded' ? '' : ` (${entry.body.state})`}`,
-        contentBody(entry.body.result),
-        entry.body.state,
-        'skill',
-      );
     case 'question_asked':
       return {
         ...metadata(entry, 'messages', 'attention', 'question'),
@@ -501,6 +498,30 @@ export function presentEntry(
         'state',
       );
   }
+}
+
+export function presentSkill(
+  started: Extract<Entry, { readonly type: 'skill_started' }>,
+  finished: Extract<Entry, { readonly type: 'skill_finished' }> | undefined,
+  output: Content | null = finished?.body.result ?? null,
+): BlockEntryPresentation {
+  const state = finished?.body.state ?? null;
+  const arguments_ = started.body.arguments;
+  return {
+    ...metadata(started, 'commands', 'skill', '', state),
+    key: `skill:${started.body.skillId}`,
+    kind: 'block',
+    header: { kind: 'note', label: 'Skill' },
+    summary: started.body.name,
+    body:
+      arguments_ === null && output === null
+        ? EMPTY
+        : { kind: 'skill', arguments: arguments_, output },
+    note: true,
+    quiet: true,
+    finishedAt: finished?.occurredAt ?? null,
+    exitCode: null,
+  };
 }
 
 export function presentShell(fold: ShellFold): BlockEntryPresentation {

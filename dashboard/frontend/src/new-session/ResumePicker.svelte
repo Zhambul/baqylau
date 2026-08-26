@@ -37,6 +37,7 @@
   let previewItems = $state<readonly FeedItemModel[]>([]);
   let previewLoading = $state(false);
   let previewFailure = $state<string | null>(null);
+  let resumeList = $state<HTMLElement>();
   let previewPanel = $state<HTMLElement>();
   let previewClose = $state<HTMLButtonElement>();
   let previewRequest: AbortController | null = null;
@@ -109,6 +110,7 @@
       if (rows.length === 0) return;
       const delta = event.key === 'ArrowDown' ? 1 : -1;
       activeIndex = (activeIndex + delta + rows.length) % rows.length;
+      void scrollActiveRowIntoView();
       return;
     }
     const row = rows[activeIndex];
@@ -120,6 +122,13 @@
       event.preventDefault();
       void openPreview(row);
     }
+  }
+
+  async function scrollActiveRowIntoView(): Promise<void> {
+    await tick();
+    const row = resumeList?.children.item(activeIndex);
+    if (row instanceof HTMLElement)
+      row.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }
 
   async function openPreview(row: ResumableSession): Promise<void> {
@@ -224,7 +233,12 @@
   onkeydown={keydown}
 />
 <div class="nsreshint">↑/↓ choose · Enter select · Space preview</div>
-<div class="nsreslist" role="listbox" aria-label="sessions to resume">
+<div
+  bind:this={resumeList}
+  class="nsreslist"
+  role="listbox"
+  aria-label="sessions to resume"
+>
   {#if loading}
     <div class="nsresempty">loading sessions…</div>
   {:else if failure !== null}

@@ -85,6 +85,30 @@ BACKGROUND_OUTCOMES: Mapping[str, Outcome] = {
     "stopped": Outcome.CANCELLED,
 }
 
+SKILL_OUTPUT_PREFIX = "Base directory for this skill: "
+SKILL_ARGUMENTS_MARKER = "\nARGUMENTS:"
+
+
+def _loaded_skill(text: str) -> tuple[str, str] | None:
+    """Recognize Claude's injected SKILL.md prompt and separate its args.
+
+    Claude appends ``ARGUMENTS: ...`` to the injected file.  Arguments already
+    belong to ``SkillStarted``; leaving that trailer in the result would show
+    them twice in the folded skill card.
+    """
+    first_line, separator, _rest = text.partition("\n")
+    if not separator or not first_line.startswith(SKILL_OUTPUT_PREFIX):
+        return None
+    directory = first_line[len(SKILL_OUTPUT_PREFIX) :].strip().rstrip("/")
+    if "/.claude/skills/" not in directory:
+        return None
+    name = os.path.basename(directory)
+    if not name:
+        return None
+    marker = text.rfind(SKILL_ARGUMENTS_MARKER)
+    output = text[:marker].rstrip() if marker >= 0 else text.rstrip()
+    return name, output
+
 
 def _assignment_finish_phase(status: str, result: str | None) -> str:
     """Identify one reported revision of a resumable agent's result.
@@ -389,6 +413,13 @@ def translate_transcript(
     occurred_at = timestamp(transcript_document.timestamp)
     if isinstance(record, transcript.PromptTranscriptRecord):
         synthetic = record.meta
+        if synthetic:
+            loaded_skill = _loaded_skill(record.text)
+            if loaded_skill is not None:
+                name, output = loaded_skill
+                finished = tool_call_semantics.skill_loaded(raw_event, name, output)
+                if finished is not None:
+                    return [finished]
         phase: MessagePhase = MessagePhase.SYNTHETIC if synthetic else MessagePhase.PROMPT
         role: MessageRole = (
             MessageRole.SYSTEM
@@ -807,6 +838,21 @@ def translate_transcript(
         return events
     if isinstance(record, transcript.ResultsTranscriptRecord):
         events = []
+        loaded_skill_texts: set[int] = set()
+        if record.meta:
+            # Current Claude Code stores an injected skill as a text block in
+            # a user-shaped results record, not as the plain-string prompt
+            # handled above. Correlate it before the result block can release
+            # the remembered tool call.
+            for text_index, result_text in enumerate(record.texts):
+                loaded_skill = _loaded_skill(result_text)
+                if loaded_skill is None:
+                    continue
+                name, output = loaded_skill
+                finished = tool_call_semantics.skill_loaded(raw_event, name, output)
+                if finished is not None:
+                    events.append(finished)
+                    loaded_skill_texts.add(text_index)
         interrupted_turn_id = (
             turn_semantics.current(raw_event) if record.interrupted else None
         )
@@ -843,8 +889,14 @@ def translate_transcript(
             )
             if declined_attention:
                 events.append(tool_call_semantics.attention_declined(raw_event, call_id, result_text))
-            tool_call_semantics.forget(raw_event, call_id)
+            # A successful Skill result is only the "Launching skill…"
+            # acknowledgement. Its actual result arrives in a following
+            # injected text record, so keep the correlation until then.
+            if not tool_call_semantics.is_skill(raw_event, call_id):
+                tool_call_semantics.forget(raw_event, call_id)
         for text_index, result_text in enumerate(record.texts):
+            if text_index in loaded_skill_texts:
+                continue
             text_identity = f"{native_identity}:text:{text_index}"
             payload = MessageCreated(
                 message_id_from_claude_code(ClaudeCodeMessageId(text_identity)),

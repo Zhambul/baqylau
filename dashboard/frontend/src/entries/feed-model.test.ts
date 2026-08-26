@@ -8,7 +8,7 @@ function message(
   id: string,
   role: 'user' | 'assistant' | 'system',
   phase: 'prompt' | 'intermediate' | 'end_turn' | 'synthetic',
-): Entry {
+): Extract<Entry, { readonly type: 'message' }> {
   return {
     type: 'message',
     entryId: entryId(id),
@@ -48,6 +48,43 @@ function compaction(
         ...common,
         type,
         body: { beforeTokens: 100, afterTokens: 20 },
+      };
+}
+
+function skillEntry(
+  id: string,
+  type: 'skill_started' | 'skill_finished',
+): Entry {
+  const common = {
+    entryId: entryId(id),
+    cursor: Number(id),
+    actorId: actorId('lead'),
+    parentActorId: null,
+    turnId: 'turn',
+    occurredAt: Number(id),
+    summary: null,
+  } as const;
+  return type === 'skill_started'
+    ? {
+        ...common,
+        type,
+        body: {
+          skillId: 'skill-one',
+          name: 'audit-debug',
+          arguments: {
+            text: 'proof',
+            mediaType: 'text/plain',
+          },
+        },
+      }
+    : {
+        ...common,
+        type,
+        body: {
+          skillId: 'skill-one',
+          state: 'succeeded',
+          result: { text: '{}', mediaType: 'text/plain' },
+        },
       };
 }
 
@@ -179,5 +216,83 @@ describe('feed density', () => {
       'Context compacted · 100 → 20 tokens',
       'Compacting the context…',
     ]);
+  });
+
+  it('folds a Claude skill lifecycle and its legacy system output into one Skill item', () => {
+    const loadedSkill = message('4', 'system', 'synthetic');
+    const entries: readonly Entry[] = [
+      {
+        ...loadedSkill,
+        body: {
+          ...loadedSkill.body,
+          content: {
+            text: [
+              'Base directory for this skill: /work/.claude/skills/audit-debug',
+              '---',
+              'name: audit-debug',
+              '---',
+              'Do the audit.',
+              'ARGUMENTS: proof',
+            ].join('\n'),
+            mediaType: 'text/plain',
+          },
+        },
+      },
+      skillEntry('3', 'skill_finished'),
+      skillEntry('1', 'skill_started'),
+    ];
+
+    const items = buildFeedItems(entries, new Map(), []);
+
+    expect(items).toHaveLength(1);
+    const skill = items[0];
+    expect(skill?.kind).toBe('block');
+    if (skill?.kind !== 'block') throw new Error('skill is not a block');
+    expect(skill.header).toEqual({ kind: 'note', label: 'Skill' });
+    expect(skill.summary).toBe('audit-debug');
+    expect(skill.state).toBe('succeeded');
+    expect(skill.body).toEqual({
+      kind: 'skill',
+      arguments: { text: 'proof', mediaType: 'text/plain' },
+      output: {
+        text: [
+          'Base directory for this skill: /work/.claude/skills/audit-debug',
+          '---',
+          'name: audit-debug',
+          '---',
+          'Do the audit.',
+        ].join('\n'),
+        mediaType: 'text/plain',
+      },
+    });
+  });
+
+  it('folds a Codex skill start and loaded file result into the same Skill item', () => {
+    const finished = skillEntry('2', 'skill_finished');
+    if (finished.type !== 'skill_finished')
+      throw new Error('finished skill fixture has the wrong type');
+    const items = buildFeedItems(
+      [
+        {
+          ...finished,
+          body: {
+            ...finished.body,
+            result: {
+              text: '<skill>\nloaded instructions\n</skill>',
+              mediaType: 'text/plain',
+            },
+          },
+        },
+        skillEntry('1', 'skill_started'),
+      ],
+      new Map(),
+      [],
+    );
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.body).toMatchObject({
+      kind: 'skill',
+      output: { text: '<skill>\nloaded instructions\n</skill>' },
+    });
   });
 });

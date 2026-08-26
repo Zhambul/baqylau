@@ -9,6 +9,7 @@
   } from '../api/new-session';
   import type { AppState } from '../app/app-state.svelte';
   import type { SessionId } from '../app/domain-ids';
+  import { readSessionDirectories } from '../api/session-data';
   import AttachmentButton from '../attachments/AttachmentButton.svelte';
   import AttachmentStrip from '../attachments/AttachmentStrip.svelte';
   import {
@@ -82,13 +83,7 @@
   const launchableHarnesses = $derived(
     appState.harnesses.filter((harness) => harness.launchable),
   );
-  const directoryChoices = $derived.by(() => {
-    const directories: string[] = [];
-    for (const snapshot of appState.sessions)
-      if (!directories.includes(snapshot.session.workingDirectory))
-        directories.push(snapshot.session.workingDirectory);
-    return directories;
-  });
+  let directoryChoices = $state<readonly string[]>([]);
   const matchingDirectories = $derived(
     directoryChoices.filter((choice) =>
       choice.toLowerCase().includes(workingDirectory.toLowerCase()),
@@ -204,7 +199,14 @@
 
   onMount(() => {
     document.body.classList.add('modal-open');
+    const controller = new AbortController();
+    void readSessionDirectories(controller.signal)
+      .then((directories) => {
+        directoryChoices = directories;
+      })
+      .catch(() => undefined);
     return () => {
+      controller.abort();
       document.body.classList.remove('modal-open');
     };
   });
@@ -497,6 +499,8 @@
         bind:value={workingDirectory}
         class="nsinput"
         type="text"
+        autocomplete="off"
+        autocapitalize="none"
         spellcheck="false"
         placeholder="/path/to/project"
         onfocus={() => (directoryMenu = true)}
@@ -508,6 +512,8 @@
           {#each matchingDirectories as directory (directory)}
             <button
               class="nsdropitem"
+              role="option"
+              aria-selected={directory === workingDirectory}
               type="button"
               onmousedown={(event) => {
                 event.preventDefault();

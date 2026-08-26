@@ -63,7 +63,7 @@ class AutomaticSessionNamer:
         self.audit = audit_recorder
 
     def initial_name(self, session: Session, first_prompt: str) -> str:
-        title = self._generate(first_prompt)
+        title = self._generate(first_prompt, str(session.session_id))
         key = f"initial:{session.session_id}"
         self._record_automatic_title(session, key, title)
         return title
@@ -89,7 +89,7 @@ class AutomaticSessionNamer:
             )
         try:
             prompt = self._session_prompt(session)
-            title = self._generate(prompt)
+            title = self._generate(prompt, str(session.session_id))
             self.jobs.complete(key, title)
             outcome = apply_title(title)
             self.audit.state_file(
@@ -99,7 +99,16 @@ class AutomaticSessionNamer:
                 {"job_key": key, "title": title, "status": outcome.status},
             )
             return outcome
-        except ModelUnavailableError:
+        except ModelUnavailableError as error:
+            self.audit.error(
+                str(session.session_id),
+                "automatic naming (requested)",
+                {
+                    "job_key": key,
+                    "error_type": type(error).__name__,
+                    "error": str(error),
+                },
+            )
             self.jobs.fail(key, "no small model is currently available")
             self._audit_failure(session, key)
             return ControlResult(
@@ -107,7 +116,16 @@ class AutomaticSessionNamer:
                 ControlAcknowledgement.INDETERMINATE,
                 "no small model is currently available",
             )
-        except Exception:
+        except Exception as error:
+            self.audit.error(
+                str(session.session_id),
+                "automatic naming (requested)",
+                {
+                    "job_key": key,
+                    "error_type": type(error).__name__,
+                    "error": str(error),
+                },
+            )
             self.jobs.fail(key, "automatic title generation failed")
             self._audit_failure(session, key)
             return ControlResult(
@@ -116,10 +134,10 @@ class AutomaticSessionNamer:
                 "automatic title generation failed",
             )
 
-    def _generate(self, first_prompt: str) -> str:
+    def _generate(self, first_prompt: str, session_id: str) -> str:
         bounded = bounded_prompt(first_prompt)
         response = self.models.small().send(
-            ModelPromptRequest(TITLE_PROMPT.format(prompt=bounded))
+            ModelPromptRequest(TITLE_PROMPT.format(prompt=bounded), session_id)
         )
         return normalize_title(response.text)
 

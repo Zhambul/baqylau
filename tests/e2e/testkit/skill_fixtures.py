@@ -122,7 +122,8 @@ class SkillWorkDriver:
                 )
         elif spec.harness == "claude_code":
             prompt = (
-                f"Use the Skill tool exactly once with skill {skill.name} and no arguments. "
+                f"Use the Skill tool exactly once with skill {skill.name} and argument "
+                "baqylau-e2e-argument. "
                 "Then follow the loaded skill instructions."
             )
         else:

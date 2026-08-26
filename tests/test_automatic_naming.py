@@ -40,7 +40,7 @@ from harness.services.control_effects import ControlEffectRecorder
 from harness.services.controls import HarnessControlService
 from inference.contract import ModelFactory, ModelPromptRequest, ModelPromptResponse
 from inference.errors import ModelUnavailableError
-from naming.jobs import AutomaticNamingReaction
+from naming.jobs import AutomaticNamingReaction, NamingJobWorker
 from naming.service import AutomaticSessionNamer, normalize_title
 from repository.contract.facts import RawEventRepository
 from repository.contract.session_data import SessionDataRepository
@@ -202,13 +202,14 @@ def namer(
     jobs: SqliteNamingJobRepository,
     raw_events: RawEvents,
     prompt: str = "Implement automatic concise naming",
+    audit: Audit | None = None,
 ) -> AutomaticSessionNamer:
     return AutomaticSessionNamer(
         cast(ModelFactory, model_factory),
         jobs,
         cast(RawEventRepository, raw_events),
         cast(SessionDataRepository, ReadModel(prompt)),
-        cast(AuditRecorder, Audit()),
+        cast(AuditRecorder, audit or Audit()),
     )
 
 
@@ -357,7 +358,8 @@ def test_each_explicit_request_generates_fresh_then_retries_idempotently(tmp_pat
 
 def test_explicit_failure_keeps_the_current_title_unchanged(tmp_path) -> None:
     jobs = SqliteNamingJobRepository(main_database(str(tmp_path / "main.db")))
-    service = namer(FixedModels(unavailable=True), jobs, RawEvents())
+    audit = Audit()
+    service = namer(FixedModels(unavailable=True), jobs, RawEvents(), audit=audit)
     applied: list[str] = []
 
     def apply(title: str) -> DurableTitleResult:
@@ -375,6 +377,50 @@ def test_explicit_failure_keeps_the_current_title_unchanged(tmp_path) -> None:
     assert applied == []
     stored = jobs.find(f"requested:{SESSION_ID}:failed")
     assert stored is not None and stored.state == NamingJobState.FAILED
+    assert audit.errors == [
+        (
+            str(SESSION_ID),
+            "automatic naming (requested)",
+            {
+                "job_key": f"requested:{SESSION_ID}:failed",
+                "error_type": "ModelUnavailableError",
+                "error": "unavailable",
+            },
+        )
+    ]
+
+
+def test_initial_failure_records_the_model_error_before_it_marks_the_job_failed(
+    tmp_path,
+) -> None:
+    jobs = SqliteNamingJobRepository(main_database(str(tmp_path / "main.db")))
+    job = NamingJob(f"initial:{SESSION_ID}", SESSION_ID, "Name this session")
+    assert jobs.enqueue(job)
+    audit = Audit()
+    service = namer(FixedModels(unavailable=True), jobs, RawEvents(), audit=audit)
+    worker = NamingJobWorker(
+        jobs,
+        cast(SessionRepository, Sessions(session())),
+        service,
+        cast(AuditRecorder, audit),
+    )
+
+    assert worker.tick()
+
+    stored = jobs.find(job.key)
+    assert stored is not None
+    assert stored.state == NamingJobState.FAILED
+    assert audit.errors == [
+        (
+            str(SESSION_ID),
+            "automatic naming (initial)",
+            {
+                "job_key": job.key,
+                "error_type": "ModelUnavailableError",
+                "error": "unavailable",
+            },
+        )
+    ]
 
 
 def test_job_completion_is_durable(tmp_path) -> None:

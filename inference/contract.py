@@ -9,6 +9,7 @@ from typing import Protocol
 @dataclass(frozen=True)
 class ModelPromptRequest:
     prompt: str
+    session_id: str = ""
 
 
 @dataclass(frozen=True)

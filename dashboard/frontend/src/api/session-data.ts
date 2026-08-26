@@ -17,6 +17,16 @@ export async function readSessionList(
   return translateSessionList(wire);
 }
 
+export async function readSessionDirectories(
+  signal?: AbortSignal,
+): Promise<readonly string[]> {
+  return execute(() =>
+    apiClient.GET('/sessionData/directories', {
+      ...(signal === undefined ? {} : { signal }),
+    }),
+  );
+}
+
 export async function readSession(
   id: SessionId,
   signal?: AbortSignal,

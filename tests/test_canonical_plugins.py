@@ -5840,7 +5840,8 @@ def test_codex_loaded_skill_has_the_shared_skill_lifecycle():
     assert finished.turn_id == "turn-one"
     assert finished.payload.skill_id == "skill-message-one"
     assert finished.payload.outcome == Outcome.SUCCEEDED
-    assert finished.payload.result is None
+    assert finished.payload.result is not None
+    assert "instructions" in finished.payload.result.text
 
 
 def test_codex_subagent_skill_read_has_the_shared_skill_lifecycle():
@@ -5887,8 +5888,96 @@ def test_codex_subagent_skill_read_has_the_shared_skill_lifecycle():
     assert skill_started.payload.name == "baqylau-e2e-communication"
     assert skill_finished.turn_id == "turn-one"
     assert skill_finished.payload.outcome == Outcome.SUCCEEDED
+    assert skill_finished.payload.result is not None
+    assert skill_finished.payload.result.text == "skill instructions"
     assert not payloads(started, ShellStarted)
     assert not payloads(finished, ShellFinished)
+
+
+def test_claude_loaded_skill_text_finishes_the_skill_instead_of_becoming_a_system_message():
+    translator = ClaudeCanonicalTranslator()
+    started = translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_use_id": "skill-one",
+                "tool_name": "Skill",
+                "tool_input": {"skill": "audit-debug", "args": "proof"},
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="skill-start",
+        )
+    )
+    empty_result = translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PostToolUse",
+                "tool_use_id": "skill-one",
+                "tool_name": "Skill",
+                "tool_input": {"skill": "audit-debug", "args": "proof"},
+                "tool_response": "Launching skill: audit-debug",
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="skill-empty-result",
+        )
+    )
+    transcript_result = translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "skill-tool-result",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "skill-one",
+                            "content": "Launching skill: audit-debug",
+                        }
+                    ]
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="skill-tool-result",
+        )
+    )
+    loaded = translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "skill-output",
+                "isMeta": True,
+                "message": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                "Base directory for this skill: /work/.claude/skills/audit-debug\n"
+                                "---\nname: audit-debug\n---\nDo the audit.\n"
+                                "ARGUMENTS: proof"
+                            ),
+                        }
+                    ]
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="skill-output",
+        )
+    )
+
+    skill_started = payloads(started, SkillStarted)[0].payload
+    skill_finished = payloads(loaded, SkillFinished)[0].payload
+    assert skill_started.arguments is not None
+    assert skill_started.arguments.text == "proof"
+    assert not payloads(empty_result, SkillFinished)
+    assert not payloads(transcript_result, SkillFinished)
+    assert skill_finished.result is not None
+    assert skill_finished.result.text.endswith("Do the audit.")
+    assert "ARGUMENTS:" not in skill_finished.result.text
+    assert not payloads(loaded, MessageCreated)
 
 
 def test_codex_read_of_a_non_skill_file_remains_a_shell_command():

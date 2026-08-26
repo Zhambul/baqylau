@@ -233,6 +233,10 @@ def test_insights_use_typed_canonical_application_data(tmp_path):
 
         status, _content_type, _body = _get(server, "/api/stats")
         assert status == 404
+
+        status, _content_type, body = _get(server, "/sessionData/directories")
+        assert status == 200
+        assert json.loads(body) == ["/work"]
     finally:
         server.shutdown()
         server.server_close()

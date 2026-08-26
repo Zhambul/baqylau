@@ -82,6 +82,12 @@ def session_data_list(
     )
 
 
+@router.get("/sessionData/directories")
+def session_directories(read_model: SessionDataStore) -> tuple[str, ...]:
+    """Directories from all session history, most recently used first."""
+    return read_model.working_directories()
+
+
 @router.get("/sessionData/{session_id}")
 def session_data(
     session_id: SessionIdPath,

@@ -12,7 +12,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Protocol
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
+from audit.recorder import AuditRecorder
 from domain.ids import HarnessName
 from harness.models import UsageRow
 from inference.contract import Model, ModelPromptRequest, ModelPromptResponse
@@ -40,6 +41,7 @@ UNAVAILABLE_MARKERS = (
 )
 ESCAPED_TITLE = re.compile(r'\\?"title\\?"\s*:\s*\\?"((?:\\.|[^"\\])*)\\?"')
 MINIMUM_TITLE_WORDS = 3
+AUDIT_OUTPUT_LIMIT = 2_000
 
 
 class _TitleDocument(BaseModel):
@@ -132,12 +134,14 @@ class DefaultModelFactory:
         self,
         terminal_plugin: TerminalPlugin,
         usage_reader: UsageReader,
+        audit_recorder: AuditRecorder,
         *,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         executable_available: Callable[[str], bool] | None = None,
     ) -> None:
         self.terminal = terminal_plugin
         self.usage = usage_reader
+        self.audit = audit_recorder
         self.timeout_seconds = timeout_seconds
         self.executable_available = executable_available or (lambda name: shutil.which(name) is not None)
 
@@ -151,6 +155,7 @@ class DefaultModelFactory:
         return _SmallModel(
             self.terminal,
             self.usage,
+            self.audit,
             self.timeout_seconds,
             self.executable_available,
         )
@@ -161,42 +166,116 @@ class _SmallModel:
         self,
         terminal_plugin: TerminalPlugin,
         usage_reader: UsageReader,
+        audit_recorder: AuditRecorder,
         timeout_seconds: float,
         executable_available: Callable[[str], bool],
     ) -> None:
         self.terminal = terminal_plugin
         self.usage = usage_reader
+        self.audit = audit_recorder
         self.timeout_seconds = timeout_seconds
         self.executable_available = executable_available
 
     def send(self, model_prompt_request: ModelPromptRequest) -> ModelPromptResponse:
-        candidates = self._candidates()
+        try:
+            candidates, provider_states = self._candidates()
+        except Exception as error:
+            self.audit.error(
+                model_prompt_request.session_id,
+                "small model (provider selection)",
+                _error_context(error),
+            )
+            raise
         failures: list[str] = []
         # A CLI or remote request can fail transiently even though account
         # capacity remains. Try every provider once, then retry the preferred
         # one in a fresh ephemeral process. Per-attempt time is capped so the
         # extra recovery attempt is still faster than one old 45-second hang.
         attempts = (*candidates, candidates[0]) if candidates else ()
-        for candidate in attempts:
+        for attempt, candidate in enumerate(attempts, start=1):
             try:
                 return self._send(candidate, model_prompt_request)
             except ProviderUnavailableError as error:
                 failures.append(f"{candidate.harness}: {error}")
+                context: dict[str, JsonValue] = {
+                    **_error_context(error),
+                    "provider": str(candidate.harness),
+                    "attempt": attempt,
+                    "stage": error.stage,
+                }
+                if error.output:
+                    context["output"] = error.output[:AUDIT_OUTPUT_LIMIT]
+                self.audit.error(
+                    model_prompt_request.session_id,
+                    "small model (provider attempt)",
+                    context,
+                )
+            except Exception as error:
+                self.audit.error(
+                    model_prompt_request.session_id,
+                    "small model (provider attempt)",
+                    {
+                        **_error_context(error),
+                        "provider": str(candidate.harness),
+                        "attempt": attempt,
+                    },
+                )
+                raise
         reason = "; ".join(failures) if failures else "no provider is available"
-        raise ModelUnavailableError(reason)
+        try:
+            raise ModelUnavailableError(reason)
+        except ModelUnavailableError as error:
+            failure_values: list[JsonValue] = [failure for failure in failures]
+            self.audit.error(
+                model_prompt_request.session_id,
+                "small model (unavailable)",
+                {
+                    **_error_context(error),
+                    "providers": list(provider_states),
+                    "attempt_failures": failure_values,
+                },
+            )
+            raise
 
-    def _candidates(self) -> tuple[_Candidate, ...]:
+    def _candidates(self) -> tuple[tuple[_Candidate, ...], tuple[JsonValue, ...]]:
         rows = self.usage.usage_rows()
         ranked: list[tuple[Decimal, int, _Candidate]] = []
+        states: list[JsonValue] = []
         for order, candidate in enumerate(CANDIDATES):
             if not self.executable_available(candidate.executable):
+                states.append(
+                    {
+                        "provider": str(candidate.harness),
+                        "status": "executable unavailable",
+                    }
+                )
                 continue
             capacity = _remaining_capacity(candidate.harness, rows)
             if capacity <= 0:
+                matching = tuple(row for row in rows if row.harness == candidate.harness)
+                status = (
+                    "authentication error"
+                    if any(row.authentication_error for row in matching)
+                    else "capacity exhausted"
+                )
+                states.append(
+                    {
+                        "provider": str(candidate.harness),
+                        "status": status,
+                        "remaining_capacity_percent": str(capacity),
+                    }
+                )
                 continue
+            states.append(
+                {
+                    "provider": str(candidate.harness),
+                    "status": "available",
+                    "remaining_capacity_percent": str(capacity),
+                }
+            )
             ranked.append((capacity, -order, candidate))
         ranked.sort(reverse=True, key=lambda item: (item[0], item[1]))
-        return tuple(candidate for _capacity, _order, candidate in ranked)
+        return tuple(candidate for _capacity, _order, candidate in ranked), tuple(states)
 
     def _send(self, candidate: _Candidate, request: ModelPromptRequest) -> ModelPromptResponse:
         with tempfile.TemporaryDirectory(prefix="baqylau-model-") as directory:
@@ -212,7 +291,10 @@ class _SmallModel:
                 )
             )
             if not opened.succeeded or opened.window_id is None:
-                raise ProviderUnavailableError(opened.reason or "model process did not start")
+                raise ProviderUnavailableError(
+                    opened.reason or "model process did not start",
+                    stage="start",
+                )
             window_id = opened.window_id
             try:
                 deadline = time.monotonic() + min(
@@ -221,17 +303,37 @@ class _SmallModel:
                 )
                 while any(window.window_id == window_id for window in self.terminal.metadata.windows()):
                     if time.monotonic() >= deadline:
-                        raise ProviderUnavailableError("model response timed out")
+                        raise ProviderUnavailableError(
+                            "model response timed out",
+                            stage="wait",
+                        )
                     time.sleep(POLL_SECONDS)
                 # Let the terminal's drain thread consume the final bytes after
                 # the process disappears from metadata.
                 time.sleep(POLL_SECONDS)
                 screen = self.terminal.viewport.read_screen(ScreenReadRequest(window_id))
                 if not screen.succeeded or screen.text is None:
-                    raise ProviderUnavailableError(screen.reason or "model output was not readable")
-                return ModelPromptResponse(_title_from_output(screen.text))
+                    raise ProviderUnavailableError(
+                        screen.reason or "model output was not readable",
+                        stage="read output",
+                    )
+                try:
+                    return ModelPromptResponse(_title_from_output(screen.text))
+                except ProviderUnavailableError as error:
+                    raise ProviderUnavailableError(
+                        str(error),
+                        stage="parse output",
+                        output=screen.text,
+                    ) from error
             finally:
                 self.terminal.tabs.close_tab(TabCloseRequest(window_id))
+
+
+def _error_context(error: Exception) -> dict[str, JsonValue]:
+    return {
+        "error_type": type(error).__name__,
+        "error": str(error),
+    }
 
 
 def _remaining_capacity(harness: HarnessName, rows: tuple[UsageRow, ...]) -> Decimal:

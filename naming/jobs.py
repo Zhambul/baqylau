@@ -77,7 +77,16 @@ class NamingJobWorker:
                 "automatic_title",
                 {"job_key": job.key, "title": title, "status": "completed"},
             )
-        except Exception:
+        except Exception as error:
+            self.audit.error(
+                str(session.session_id),
+                "automatic naming (initial)",
+                {
+                    "job_key": job.key,
+                    "error_type": type(error).__name__,
+                    "error": str(error),
+                },
+            )
             self.jobs.fail(job.key, "no small model is currently available")
             self.audit.state_file(
                 str(session.session_id),

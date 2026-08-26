@@ -59,7 +59,7 @@ class CapturingWorkDriver:
         (
             "claude_code",
             "Use the Skill tool exactly once with skill "
-            "baqylau-e2e-communication and no arguments. "
+            "baqylau-e2e-communication and argument baqylau-e2e-argument. "
             "Then follow the loaded skill instructions.",
         ),
     ),

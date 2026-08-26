@@ -373,6 +373,7 @@ def _rsp_message(message_payload: MessagePayload) -> RolloutRecord:
     if skill_name:
         return SkillRecord(
             name=skill_name,
+            output=txt,
             turn=(metadata.turn_id if metadata else None) or "",
         )
     # A plan wrapper is the response-register copy of the structured Plan item.

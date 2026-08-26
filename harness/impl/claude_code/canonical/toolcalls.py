@@ -278,6 +278,7 @@ class ToolCallSemantics:
 
     def __init__(self) -> None:
         self.calls: dict[tuple[SessionId, ClaudeCodeCallId], RememberedCall] = {}
+        self.loaded_skills: set[tuple[SessionId, ClaudeCodeCallId]] = set()
         self.agent_assignments: dict[
             tuple[SessionId, ClaudeCodeActorId], AgentAssignmentState
         ] = {}
@@ -326,6 +327,10 @@ class ToolCallSemantics:
     def known(self, raw_event: RawEvent, call_id: ClaudeCodeCallId) -> bool:
         return (raw_event.session_id, call_id) in self.calls
 
+    def is_skill(self, raw_event: RawEvent, call_id: ClaudeCodeCallId) -> bool:
+        remembered = self.calls.get((raw_event.session_id, call_id))
+        return remembered is not None and remembered.native_name == "Skill"
+
     def forget(self, raw_event: RawEvent, call_id: ClaudeCodeCallId) -> None:
         """Release a call after all result channels have used its input."""
         self.calls.pop((raw_event.session_id, call_id), None)
@@ -341,6 +346,43 @@ class ToolCallSemantics:
         for monitor_key in tuple(self.monitors):
             if monitor_key[0] == session_id:
                 del self.monitors[monitor_key]
+        self.loaded_skills = {
+            key for key in self.loaded_skills if key[0] != session_id
+        }
+
+    def skill_loaded(
+        self,
+        raw_event: RawEvent,
+        name: str,
+        output: str,
+    ) -> CanonicalEvent[EventPayload] | None:
+        """Finish the most recent matching Skill call with its loaded file.
+
+        Claude's Skill tool first answers with an empty ``{}``, then injects a
+        synthetic prompt containing the actual SKILL.md text.  The injected
+        prompt is the useful result of the call, not a separate conversation
+        message.  It has no tool-use id, so join it to the newest unclaimed
+        matching call in this session.
+        """
+        for remembered in reversed(tuple(self.calls.values())):
+            key = remembered.session_id, remembered.call_id
+            if (
+                remembered.session_id != raw_event.session_id
+                or remembered.native_name != "Skill"
+                or str(remembered.arguments.skill or "") != name
+                or key in self.loaded_skills
+            ):
+                continue
+            self.loaded_skills.add(key)
+            skill_id = skill_id_from_claude_code_call(remembered.call_id)
+            return event(
+                raw_event,
+                "skill",
+                str(skill_id),
+                "finished",
+                SkillFinished(skill_id, Outcome.SUCCEEDED, content(output)),
+            )
+        return None
 
     def assignment_launched(
         self,
@@ -606,6 +648,16 @@ class ToolCallSemantics:
             )
         if kind == ToolKind.SKILL:
             skill_id = skill_id_from_claude_code_call(call_id)
+            # A successful Claude Skill call normally returns only `{}`.  Its
+            # real answer is the synthetic prompt containing the loaded
+            # SKILL.md, handled by ``skill_loaded`` above.  Keep meaningful
+            # responses and failures for compatibility with older versions.
+            skill_answer = value_content_text(answered).strip()
+            if outcome == Outcome.SUCCEEDED and (
+                skill_answer in ("", "{}")
+                or skill_answer.startswith("Launching skill:")
+            ):
+                return []
             payload: EventPayload = SkillFinished(skill_id, outcome, answered)
             return [event(raw_event, "skill", str(skill_id), "finished", payload)]
         if kind == ToolKind.ASSIGNMENT:

@@ -1293,7 +1293,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     "skill",
                     native_identity,
                     "finished",
-                    SkillFinished(skill_id, Outcome.SUCCEEDED, None),
+                    SkillFinished(skill_id, Outcome.SUCCEEDED, content(record.output)),
                     skill_turn_id,
                     occurred_at,
                 ),
@@ -1618,7 +1618,11 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     "skill",
                     str(skill_id),
                     "finished",
-                    SkillFinished(skill_id, skill_outcome, None),
+                    SkillFinished(
+                        skill_id,
+                        skill_outcome,
+                        content(record.output) if record.output else None,
+                    ),
                     skill_turn_id,
                     occurred_at,
                 )]

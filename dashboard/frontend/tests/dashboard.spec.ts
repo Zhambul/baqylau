@@ -539,7 +539,12 @@ test('keeps the new-session and resume-preview modal boundaries', async ({
 
   const dialog = page.getByRole('dialog', { name: 'new session' });
   await expect(dialog).toBeVisible();
-  await dialog.getByLabel('directory').fill(workingDirectory);
+  const directory = dialog.getByLabel('directory');
+  await expect(directory).toHaveAttribute('autocomplete', 'off');
+  await directory.fill(workingDirectory);
+  await expect(
+    dialog.getByRole('option', { name: workingDirectory }),
+  ).toBeVisible();
   await dialog.getByText('fresh conversation').click();
   await expect(dialog.getByText('resume a conversation')).toBeVisible();
   const search = dialog.getByPlaceholder(
@@ -561,5 +566,68 @@ test('keeps the new-session and resume-preview modal boundaries', async ({
   await page.keyboard.press('Escape');
   await expect(dialog).toHaveCount(0);
 
+  expect(failures).toEqual([]);
+});
+
+test('keeps the active resume row visible during keyboard navigation', async ({
+  page,
+}) => {
+  const failures = watchBrowserFailures(page);
+  await page.addInitScript(() => {
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = async (...arguments_) => {
+      const input = arguments_[0];
+      const requestUrl =
+        input instanceof Request ? input.url : input.toString();
+      const url = new URL(requestUrl, window.location.origin);
+      if (url.pathname !== '/api/resumable-sessions')
+        return nativeFetch(...arguments_);
+      return new Response(
+        JSON.stringify(
+          Array.from({ length: 20 }, (_, index) => ({
+            session_id: `history-${String(index)}`,
+            title: `History ${String(index)}`,
+            last_activity_at: 100 - index,
+            active: false,
+            harness: 'codex',
+            model: null,
+            effort: null,
+            account: null,
+          })),
+        ),
+        { headers: { 'Content-Type': 'application/json' } },
+      );
+    };
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: '+ session' }).click();
+  const dialog = page.getByRole('dialog', { name: 'new session' });
+  await dialog.getByText('fresh conversation').click();
+  const search = dialog.getByPlaceholder(
+    'search all sessions in this directory…',
+  );
+  const list = dialog.getByRole('listbox', { name: 'sessions to resume' });
+  await expect(list.getByRole('option')).toHaveCount(20);
+
+  for (let index = 0; index < 12; index += 1) await search.press('ArrowDown');
+
+  const active = list.locator('.nsresrow.sel');
+  await expect(active).toHaveAttribute('data-session-id', 'history-12');
+  const position = await active.evaluate((row) => {
+    const list = row.parentElement;
+    if (list === null) throw new Error('resume list is missing');
+    const listBounds = list.getBoundingClientRect();
+    const rowBounds = row.getBoundingClientRect();
+    return {
+      scrollTop: list.scrollTop,
+      listTop: listBounds.top,
+      listBottom: listBounds.bottom,
+      rowTop: rowBounds.top,
+      rowBottom: rowBounds.bottom,
+    };
+  });
+  expect(position.scrollTop).toBeGreaterThan(0);
+  expect(position.rowTop).toBeGreaterThanOrEqual(position.listTop - 1);
+  expect(position.rowBottom).toBeLessThanOrEqual(position.listBottom + 1);
   expect(failures).toEqual([]);
 });

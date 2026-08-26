@@ -289,7 +289,14 @@ loop's, where `<step>` is `tick`, `session data` (a WRITER threw, so the read mo
 not advance for that fact), `harness lookup`, or the class name of the failing reaction
 or applied-actor listener; `<harness> hook (deliver)` — a hook that
 could not reach the daemon; `otel delivery (daemon unreachable)` — a metrics export
-with nowhere to go; `statusline capture` — a rate-limit report that never shipped.
+with nowhere to go; `statusline capture` — a rate-limit report that never shipped;
+**`small model (provider selection)`** — usage or executable selection failed;
+**`small model (provider attempt)`** — one Codex or Claude attempt failed, including an
+attempt for which the other provider later succeeded; **`small model (unavailable)`** —
+all attempts failed or no provider was eligible; `automatic naming (initial)` and
+`automatic naming (requested)` — the naming layer caught the final model or title error.
+The context gives the provider, attempt number, failure stage, bounded provider output,
+and provider availability where those fields apply.
 
 `streams.kind` no longer has pane rows. They were written by the daemon's own pane render
 loop, which is deleted — a pane is an independent client of `/sessionData` now and the

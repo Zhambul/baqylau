@@ -139,6 +139,10 @@ class SessionDataRepository(Protocol):
         """Every session's aggregate — the list view, one query per table."""
         ...
 
+    def working_directories(self) -> tuple[str, ...]:
+        """Each directory in session history, most recently used first."""
+        ...
+
     def lead_sessions(self) -> tuple[SessionLead, ...]:
         """Every session with only its lead actor."""
         ...

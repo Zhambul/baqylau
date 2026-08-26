@@ -130,3 +130,25 @@ def skill_has_no_arguments(
 ) -> None:
     reference = skills.get(name)
     assert not _skill(client.sessions.snapshot(reference.session), reference).arguments
+
+
+@then(parsers.parse("skill \"{name}\" has arguments '{arguments}'"))
+def skill_has_arguments(
+    client: BaqylauClient,
+    skills: Skills,
+    name: str,
+    arguments: str,
+) -> None:
+    reference = skills.get(name)
+    assert _skill(client.sessions.snapshot(reference.session), reference).arguments == arguments
+
+
+@then(parsers.parse("skill \"{name}\" has result containing '{text}'"))
+def skill_has_result(
+    client: BaqylauClient,
+    skills: Skills,
+    name: str,
+    text: str,
+) -> None:
+    reference = skills.get(name)
+    assert text in _skill(client.sessions.snapshot(reference.session), reference).result

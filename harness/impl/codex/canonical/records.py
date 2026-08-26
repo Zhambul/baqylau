@@ -1151,6 +1151,7 @@ class PromptRecord:
 class SkillRecord:
     kind: Literal["skill"] = "skill"
     name: str
+    output: str
     turn: str
 
 

@@ -227,6 +227,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/sessionData/directories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Session Directories
+         * @description Directories from all session history, most recently used first.
+         */
+        get: operations["session_directories_sessionData_directories_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/sessionData/{session_id}": {
         parameters: {
             query?: never;
@@ -3227,6 +3247,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionDataListResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    session_directories_sessionData_directories_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
                 };
             };
             /** @description The request names something unknown, or cannot be acted on as posed. */

@@ -192,6 +192,19 @@ class SqliteSessionDataRepository(SessionDataRepository):
             for session_row in session_rows
         )
 
+    def working_directories(self) -> tuple[str, ...]:
+        with self.sqlite_database.read() as connection:
+            rows = connection.execute(
+                "SELECT json_extract(payload, '$.working_directory') AS directory, "
+                "MAX(COALESCE(json_extract(payload, '$.finished_at'), "
+                "json_extract(payload, '$.started_at'), 0)) AS last_used_at "
+                "FROM session_data "
+                "WHERE json_extract(payload, '$.working_directory') != '' "
+                "GROUP BY directory "
+                "ORDER BY last_used_at DESC, directory"
+            ).fetchall()
+        return tuple(str(row["directory"]) for row in rows)
+
     def lead_sessions(self) -> tuple[SessionLead, ...]:
         with self.sqlite_database.read() as connection:
             session_rows = connection.execute(

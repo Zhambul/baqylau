@@ -462,8 +462,12 @@ ModelTerminal = Annotated[TerminalPlugin, Depends(model_terminal)]
 
 
 @singleton
-def model_factory(terminal: ModelTerminal, usage: UsageState) -> ModelFactory:
-    return DefaultModelFactory(terminal, usage)
+def model_factory(
+    terminal: ModelTerminal,
+    usage: UsageState,
+    audit: Recorder,
+) -> ModelFactory:
+    return DefaultModelFactory(terminal, usage, audit)
 
 
 InferenceModels = Annotated[ModelFactory, Depends(model_factory)]

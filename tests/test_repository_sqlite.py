@@ -1141,6 +1141,44 @@ def test_lead_session_read_omits_child_actor_rows(main):
     assert leads[0].lead == AN_ACTOR
 
 
+def test_working_directories_are_unique_and_most_recent_first(main):
+    store = SqliteSessionDataRepository(main)
+    other_session = SessionId("other-session")
+    store.apply(
+        SESSION,
+        SessionDataChanges(session=replace(A_SESSION, started_at=1.0)),
+        1,
+    )
+    store.apply(
+        other_session,
+        SessionDataChanges(
+            session=replace(
+                A_SESSION,
+                session_id=other_session,
+                working_directory="/other",
+                started_at=3.0,
+                state=LifecycleState.FINISHED,
+                finished_at=3.5,
+            )
+        ),
+        2,
+    )
+    newest_session = SessionId("newest-session")
+    store.apply(
+        newest_session,
+        SessionDataChanges(
+            session=replace(
+                A_SESSION,
+                session_id=newest_session,
+                started_at=4.0,
+            )
+        ),
+        3,
+    )
+
+    assert store.working_directories() == ("/work", "/other")
+
+
 def an_entry(entry_id: str) -> SessionEntry:
     return SessionEntry(
         entry_id=CanonicalEventId(entry_id),
