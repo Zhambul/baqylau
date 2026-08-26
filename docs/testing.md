@@ -76,30 +76,27 @@ The only run-scoped shared resource is a locked, atomic snapshot of read-only
 account usage, which prevents every daemon from launching the same native usage
 probes.
 
-The default is 20 concurrent live scenarios; frontend browser tests use 16
-workers. The suite is dominated by subprocess, socket, and remote-model waits
-rather than Python CPU work, so the live default is deliberately not tied to
-the logical CPU count. xdist uses separate Python processes, so the GIL does not
-serialize them. Dynamic one-test scheduling and a one-test scheduling chunk
-keep every scenario independently assignable and prevent fail-fast from leaving
-a large preassigned tail. Codex, Claude Code, usage, and automatic-title
-scenarios all share this pool. Local limits are process startup, memory, file
-descriptors, and database/socket work; remote CLI calls can still develop long
-tails when one provider alone is saturated. Override `E2E_WORKERS` to measure a
-different concurrency level. Use `E2E_WORKERS=1` for real-terminal or
-installed-daemon cases because those explicit opt-in suites control one
-machine-level resource.
+The default is one live scenario at a time and four frontend browser tests.
+The suite is dominated by subprocess, socket, and remote-model waits rather
+than Python CPU work, but higher live concurrency can saturate the shared
+harness providers and delay a valid first action beyond the live feed deadline.
+xdist uses separate Python processes, so the GIL does not serialize them.
+Dynamic one-test scheduling and a one-test scheduling chunk keep every scenario
+independently assignable and prevent fail-fast from leaving a large preassigned
+tail. Codex, Claude Code, usage, and automatic-title scenarios all share this
+pool. Override `E2E_WORKERS` to measure or stress a different concurrency level.
+Use `E2E_WORKERS=1` for real-terminal or installed-daemon cases because those
+explicit opt-in suites control one machine-level resource.
 
 `make e2e` is the complete end-to-end gate. It runs the live scenarios, the
 live-browser scenarios, and then static Playwright against one compiled
 production application. Every suite uses its measured maximum reliable
-parallelism: 20 workers for each live suite and up to the 16 static Playwright
-tests at once. The suite boundaries are intentionally serial. Both a shared
-24-worker load and a mixed 20-worker xdist pool caused native CLI stalls and
-long drain tails on the reference 8-core/16-GiB machine; perfect per-test state
-isolation cannot isolate the external harness account and backend. Override
-`E2E_WORKERS` when benchmarking another machine. Cases do not share ports, data
-directories, harness homes, or workspaces.
+parallelism: one worker for each live suite and four for static Playwright.
+The suite boundaries are intentionally serial. Higher shared and mixed worker
+counts caused native CLI stalls and long drain tails on the reference machine;
+perfect per-test state isolation cannot isolate the external harness account
+and backend. Override `E2E_WORKERS` when benchmarking another machine. Cases do
+not share ports, data directories, harness homes, or workspaces.
 
 `make test-drift` collects only `tests/e2e/test_scenarios.py`, the active live
 matrix. Browser drift, real-Kitty, and installed-daemon tests remain separate

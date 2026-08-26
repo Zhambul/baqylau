@@ -52,6 +52,7 @@ def _seed(data_directory: Path, port: int) -> dict[Any, Any]:
         TurnFinished,
         TurnStarted,
         UsageReported,
+        WebFetched,
     )
     from domain.ids import (
         AccountId,
@@ -332,6 +333,27 @@ def _seed(data_directory: Path, port: int) -> dict[Any, Any]:
         ),
         turn_id=turn,
         seconds_ago=673,
+    )
+    add(
+        "active-tool-search",
+        SearchPerformed(
+            "ToolSearch",
+            TextContent("select:Monitor,TaskOutput"),
+            TextContent("→ loaded tool: Monitor\n→ loaded tool: TaskOutput"),
+            Outcome.SUCCEEDED,
+        ),
+        turn_id=turn,
+        seconds_ago=672.8,
+    )
+    add(
+        "active-web-fetch",
+        WebFetched(
+            "https://example.com",
+            TextContent("Example Domain page"),
+            Outcome.SUCCEEDED,
+        ),
+        turn_id=turn,
+        seconds_ago=672.6,
     )
     background = ShellId("fixture-background")
     add(

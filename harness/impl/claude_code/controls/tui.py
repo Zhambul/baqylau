@@ -22,7 +22,10 @@ CLEAR_GAP_S = 0.15
 CLEAR_EFFECT_TIMEOUT_S = 1.5
 CLEAR_LINES_MAX = 50    # ceiling on the per-line kill loop: a corrupt/huge
 #                         stash must not become an unbounded keystroke storm.
-COMPOSER_READY_TIMEOUT_S = 3.0
+# Canonical turn completion can precede the native TUI restoring its composer.
+# Real Claude Code sessions exceed three seconds under concurrent live load;
+# keep the wait bounded, but allow the verified command path to reach the box.
+COMPOSER_READY_TIMEOUT_S = 10.0
 
 
 def type_command(

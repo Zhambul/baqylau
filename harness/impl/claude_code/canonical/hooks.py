@@ -20,6 +20,7 @@ from harness.impl.claude_code.canonical.support import event
 from harness.impl.claude_code.canonical.tasks import task_hook_event
 from harness.impl.claude_code.canonical.toolcalls import ToolCallSemantics
 from harness.impl.claude_code.canonical.turns import TurnSemantics
+from harness.impl.claude_code.ids import ClaudeCodeShellId
 from harness.models import RawEvent, session_run_finished_event
 from harness.models.selections import SelectionSemantics
 
@@ -126,6 +127,19 @@ def translate_hook(
             *effort_report(raw_event, hook, selection_semantics),
         ]
     if hook_name in ("PostToolUse", "PostToolUseFailure"):
+        if hook_name == "PostToolUse" and hook.tool_name == "TaskStop":
+            return [
+                *tool_call_semantics.background_stopped(
+                    raw_event,
+                    task_id=ClaudeCodeShellId(str(
+                        hook.tool_input.task_id
+                        if hook.tool_input is not None
+                        else ""
+                    )),
+                    transcript_path=str(hook.transcript_path or ""),
+                ),
+                *effort_report(raw_event, hook, selection_semantics),
+            ]
         events = [
             *tool_call_semantics.tool_finished(raw_event, records.ToolCallNative(
                 tool_use_id=hook.tool_use_id,

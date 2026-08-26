@@ -70,34 +70,33 @@ class RepositoryQueries:
     def status(cls, working_directory: str) -> RepositoryStatus | None:
         if not working_directory:
             return None
-        branch_result = cls.run_git(
-            working_directory,
-            "branch",
-            "--show-current",
-        )
-        if branch_result is None or branch_result.returncode != 0:
-            return None
-        branch = branch_result.stdout.strip()
-        if not branch:
-            revision_result = cls.run_git(
-                working_directory,
-                "rev-parse",
-                "--short",
-                "HEAD",
-            )
-            if revision_result is None:
-                return None
-            branch = revision_result.stdout.strip() or "?"
         status_result = cls.run_git(
             working_directory,
             "status",
-            "--porcelain",
+            "--porcelain=v2",
+            "--branch",
         )
-        if status_result is None:
+        if status_result is None or status_result.returncode != 0:
             return None
+        branch, dirty = _status(status_result.stdout)
         worktree = (
             os.path.basename(os.path.realpath(working_directory))
             if os.path.isfile(os.path.join(working_directory, ".git"))
             else None
         )
-        return RepositoryStatus(branch, worktree, bool(status_result.stdout))
+        return RepositoryStatus(branch, worktree, dirty)
+
+
+def _status(output: str) -> tuple[str, bool]:
+    head: str | None = None
+    revision: str | None = None
+    dirty = False
+    for line in output.splitlines():
+        if line.startswith("# branch.head "):
+            head = line.removeprefix("# branch.head ")
+        elif line.startswith("# branch.oid "):
+            revision = line.removeprefix("# branch.oid ")
+        elif line and not line.startswith("# "):
+            dirty = True
+    branch = head if head and head != "(detached)" else (revision or "?")[:7]
+    return branch, dirty

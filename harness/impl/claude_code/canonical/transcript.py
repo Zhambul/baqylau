@@ -104,12 +104,13 @@ _TM_ID  = re.compile(r'teammate_id="([^"]*)"')
 # user input).
 #
 # FOUR different facts ride this one channel — an agent finishing, a background
-# command finishing, a monitor's event, a monitor's stream ending — and it
-# arrives TWICE for each: once as a `queue-operation` enqueue and again as the
-# `user` record that re-injects it into the conversation. The `user` copy is the
-# single owner (`_task_notification`); the queue-operation copy is plumbing.
-# Measured in claude-code 2.1.233, where every notification appeared in both
-# shapes and the queue pair was always enqueue-then-dequeue.
+# command finishing, a monitor's event, a monitor's stream ending. The
+# `queue-operation` enqueue is always first. Claude Code can later re-inject the
+# notification as a `user` record, or absorb it into the active turn and write a
+# `queued_command` attachment instead. The queue record is the single owner of
+# monitor notifications because their event ids use an ordered ordinal; reading
+# a later copy would add the same event twice. Measured in Claude Code 2.1.233
+# (queue + user) and 2.1.246 (`absorbed_mid_turn`: queue + attachment).
 _TASK_NOTE = re.compile(r'<task-notification>(.*?)</task-notification>', re.S)
 
 # The summary prefixes that separate the four. Prose, because that is all the
@@ -537,7 +538,15 @@ def parse_line(s: str) -> TranscriptRecord | None:
             if not content.strip():
                 return None
             if user.origin is not None and user.origin.kind == "task-notification":
-                return _task_notification(content)
+                notification = _task_notification(content)
+                # The earlier queue enqueue owns monitor records. Unlike
+                # background and assignment events, monitor progress uses an
+                # ordinal, so translating this later copy would invent a
+                # second event. A monitor end has the same owner for one
+                # consistent channel rule.
+                if isinstance(notification, (MonitorEventTranscriptRecord, MonitorEndedTranscriptRecord)):
+                    return None
+                return notification
             idle_notifications = teammate_idle_notifications(content)
             if idle_notifications:
                 return TeammateIdleTranscriptRecord(idle_notifications)
@@ -631,16 +640,23 @@ def parse_line(s: str) -> TranscriptRecord | None:
         return None
     if t == "queue-operation":
         queue_record = records.QueueOperationRecord.model_validate_json(s)
-        # Monitor notifications have ordered event rows. Reading both their
-        # queue and user copies would create two different ordinals. Background
-        # and agent completions have content-stable identities, so their usual
-        # user copies deduplicate. Either kind can occur only in the queue: a
-        # child background completion in the parent transcript, or a resumed
-        # agent's later completion after an earlier user copy was delivered.
-        if queue_record.operation == "enqueue" and isinstance(queue_record.content, str):
+        # This enqueue is the single owner for monitor notifications: it exists
+        # whether the later delivery is a user record or an absorbed-mid-turn
+        # attachment. Background and agent completions have content-stable
+        # identities, so their later user copies deduplicate. Either kind can
+        # also occur only in the queue: a child background completion in the
+        # parent transcript, or a resumed agent's later completion after an
+        # earlier user copy was delivered.
+        if (
+            queue_record.operation == "enqueue"
+            and isinstance(queue_record.content, str)
+            and _TASK_NOTE.search(queue_record.content) is not None
+        ):
             notification = _task_notification(queue_record.content)
             if isinstance(notification, (
                 BackgroundCommandCompletedTranscriptRecord,
+                MonitorEventTranscriptRecord,
+                MonitorEndedTranscriptRecord,
                 ActorAssignmentFinishedTranscriptRecord,
             )):
                 return notification
@@ -878,6 +894,53 @@ def assignment_call_before(
     if len(candidates) > 1:
         raise TranslationError(
             f"Claude Code actor {actor_id!r} has multiple Agent assignments"
+        )
+    return candidates[0] if candidates else None
+
+
+def background_call(
+    path: str,
+    task_id: ClaudeCodeShellId,
+) -> ClaudeCodeCallId | None:
+    """Find the Bash result that introduced one native background task."""
+    if not task_id:
+        return None
+    try:
+        source = open(path, "rb")
+    except OSError:
+        return None
+    candidates: list[ClaudeCodeCallId] = []
+    task_bytes = str(task_id).encode("utf-8")
+    with source:
+        for line in source:
+            if task_bytes not in line:
+                continue
+            try:
+                user = records.UserRecord.model_validate_json(line)
+            except ValidationError:
+                continue
+            response = user.toolUseResult
+            if (
+                not isinstance(response, records.ToolResponse)
+                or response.backgroundTaskId != task_id
+            ):
+                continue
+            content_blocks = user.message.content if user.message is not None else None
+            if not isinstance(content_blocks, list):
+                continue
+            result_blocks = [
+                block
+                for block in content_blocks
+                if isinstance(block, records.ToolResultBlock)
+            ]
+            if len(result_blocks) != 1 or not result_blocks[0].tool_use_id:
+                continue
+            candidate = ClaudeCodeCallId(result_blocks[0].tool_use_id)
+            if candidate not in candidates:
+                candidates.append(candidate)
+    if len(candidates) > 1:
+        raise TranslationError(
+            f"Claude Code background task {task_id!r} has multiple Bash calls"
         )
     return candidates[0] if candidates else None
 

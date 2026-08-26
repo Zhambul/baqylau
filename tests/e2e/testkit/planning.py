@@ -68,7 +68,16 @@ class PlanWorkDriver:
     ) -> TurnRef:
         native_prompt = prompt
         if spec.harness == "codex":
-            mode = self._client.sessions.send(session, "/plan")
+            # A canonical turn finish can precede the native composer by a few
+            # frames. Verify that the TUI is ready before entering plan mode,
+            # then verify it again before submitting the actual plan prompt.
+            # Without these checks, both accepted writes can land during the
+            # transition and Codex silently drops the second one.
+            mode = self._client.sessions.send(
+                session,
+                "/plan",
+                replace_terminal_draft=True,
+            )
             self._require_acknowledged(mode, "enter Codex plan mode")
         elif spec.harness == "claude_code":
             native_prompt = (
@@ -83,7 +92,11 @@ class PlanWorkDriver:
 
         before = self._client.sessions.snapshot(session)
         lead = before.lead()
-        receipt = self._client.sessions.send(session, native_prompt)
+        receipt = self._client.sessions.send(
+            session,
+            native_prompt,
+            replace_terminal_draft=spec.harness == "codex",
+        )
         self._require_acknowledged(receipt, "start plan work")
         return TurnRef(
             session,

@@ -98,6 +98,11 @@ class ToolRequest(BaseModel):
     q: str | None = None
     query: str | None = None
     url: str | None = None
+    location: str | None = None
+    ticker: str | None = None
+    utc_offset: str | None = None
+    team: str | None = None
+    fn: str | None = None
     reference: str | None = Field(default=None, alias="ref_id")
 
 
@@ -108,6 +113,7 @@ class CodexToolArguments(BaseModel):
     weather: list[ToolRequest] | None = None
     finance: list[ToolRequest] | None = None
     sports: list[ToolRequest] | None = None
+    time: list[ToolRequest] | None = None
     open: list[ToolRequest] | None = None
     click: list[ToolRequest] | None = None
     find: list[ToolRequest] | None = None
@@ -539,7 +545,11 @@ class AgentMessagePayload(BaseModel):
 
 class WebSearchAction(BaseModel):
     model_config = FOREIGN
+    type: str | None = None
     query: str | None = None
+    queries: list[str] | None = None
+    url: str | None = None
+    pattern: str | None = None
 
 
 class WebSearchEndPayload(BaseModel):
@@ -753,7 +763,11 @@ class ChatMessageMetadata(BaseModel):
 
 class WebSearchCallAction(BaseModel):
     model_config = FOREIGN
+    type: str | None = None
     query: str | None = None
+    queries: list[str] | None = None
+    url: str | None = None
+    pattern: str | None = None
 
 
 class WebSearchCallPayload(BaseModel):
@@ -939,12 +953,23 @@ class ExecArguments(BaseModel):
     model_config = FOREIGN
     cmd: str | list[str] | None = None
     command: str | list[str] | None = None
+    workdir: str | None = None
+    yield_time_ms: int | None = None
+    max_output_tokens: int | None = None
+    shell: str | None = None
+    tty: bool | None = None
+    login: bool | None = None
+    sandbox_permissions: str | None = None
+    justification: str | None = None
+    prefix_rule: list[str] | None = None
 
 
 class StdinArguments(BaseModel):
     model_config = FOREIGN
     session_id: CodexShellId | int | None = None
     chars: str | None = None
+    yield_time_ms: int | None = None
+    max_output_tokens: int | None = None
 
 
 class AskOption(BaseModel):
@@ -1335,7 +1360,8 @@ class ToolBatchRecord:
     kind: Literal["tool_batch"] = "tool_batch"
     call_id: CodexCallId
     actions: tuple[
-        ExecRecord | StdinRecord | TaskListRecord | GoalToolRecord | CollaborationCallRecord,
+        ExecRecord | StdinRecord | ToolRecord | TaskListRecord | GoalToolRecord
+        | CollaborationCallRecord,
         ...,
     ]
 

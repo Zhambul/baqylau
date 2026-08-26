@@ -142,6 +142,7 @@ from harness.impl.claude_code.usage.rows import usage_reader as claude_usage_rea
 from harness.impl.claude_code.usage import live as claude_live_usage
 from harness.impl.claude_code.reactors import ClaudeOtelCanonicalEventReactor
 from harness.impl.codex.canonical.translator import CodexCanonicalTranslator
+from harness.impl.codex.canonical import items as codex_items
 from harness.impl.codex.canonical import sources as codex_sources
 from harness.impl.codex.canonical.sources import (
     CodexRawEventSources,
@@ -1958,6 +1959,100 @@ def test_claude_background_output_requires_the_native_task_evidence(monkeypatch,
     no_file_yet = json.loads(json.dumps(document))
     no_file_yet["tool_response"]["backgroundTaskId"] = "btk-without-a-file"
     assert claude_foreground.background_output(HookPayload.model_validate(no_file_yet)) is None
+
+
+def test_claude_task_stop_cancels_the_background_shell_output():
+    translator = ClaudeCanonicalTranslator()
+    translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Bash",
+                "tool_use_id": "background-op-one",
+                "tool_input": {"command": "sleep 120", "run_in_background": True},
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="background-start",
+        )
+    )
+    translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PostToolUse",
+                "tool_name": "Bash",
+                "tool_use_id": "background-op-one",
+                "tool_input": {"command": "sleep 120", "run_in_background": True},
+                "tool_response": {"backgroundTaskId": "native-task-one"},
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="background-launched",
+        )
+    )
+
+    stopped = translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PostToolUse",
+                "tool_name": "TaskStop",
+                "tool_use_id": "stop-one",
+                "tool_input": {"task_id": "native-task-one"},
+                "tool_response": {
+                    "message": "Successfully stopped task: native-task-one",
+                    "task_id": "native-task-one",
+                    "task_type": "local_bash",
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="background-stopped",
+        )
+    )
+
+    finished = payloads(stopped, ShellOutputFinished)
+    assert len(finished) == 1
+    assert finished[0].payload.shell_id == ShellId("background-op-one")
+    assert finished[0].payload.outcome == Outcome.CANCELLED
+
+
+def test_claude_task_stop_recovers_its_background_shell_after_restart(tmp_path):
+    launch_result = {
+        "type": "user",
+        "message": {
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "background-op-before-restart",
+                    "content": "Command running in background with ID: native-task-one",
+                }
+            ]
+        },
+        "toolUseResult": {"backgroundTaskId": "native-task-one"},
+    }
+    transcript_path = tmp_path / "session.jsonl"
+    transcript_path.write_text(json.dumps(launch_result) + "\n", encoding="utf-8")
+
+    stopped = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {
+                "hook_event_name": "PostToolUse",
+                "transcript_path": str(transcript_path),
+                "tool_name": "TaskStop",
+                "tool_use_id": "stop-after-restart",
+                "tool_input": {"task_id": "native-task-one"},
+                "tool_response": {"task_id": "native-task-one"},
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="background-stopped-after-restart",
+        )
+    )
+
+    finished = payloads(stopped, ShellOutputFinished)
+    assert len(finished) == 1
+    assert finished[0].payload.shell_id == ShellId("background-op-before-restart")
+    assert finished[0].payload.outcome == Outcome.CANCELLED
 
 
 def test_claude_background_output_streams_into_the_operation(monkeypatch, tmp_path):
@@ -4923,6 +5018,30 @@ def test_claude_background_completion_can_arrive_only_as_a_queue_record():
     assert finished[0].payload.outcome == "succeeded"
 
 
+def test_claude_queued_prompt_is_not_an_agent_completion():
+    """A user prompt can use the same queue as task notifications.
+
+    Session 185232a0 showed a false Agent finished entry because the
+    notification classifier used its agent default for an ordinary prompt.
+    """
+    queued = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "queue-operation",
+                "operation": "enqueue",
+                "content": "No create off fresh master",
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="queued-user-prompt",
+        )
+    )
+
+    assert not payloads(queued, ActorAssignmentFinished)
+    assert queued.canonical_events == ()
+    assert queued.decision == "ignored_nonsemantic"
+
+
 def test_claude_background_completion_carries_the_jobs_own_outcome():
     """The `<status>` is the JOB's, and the launch's says nothing about it: a
     command that exits non-zero launched perfectly. Values measured over every
@@ -4961,15 +5080,12 @@ def test_claude_background_completion_carries_the_jobs_own_outcome():
 
 
 def _monitor_notification(uuid, body):
-    """One <task-notification> as a `user` record — the shape every notification
-    really arrives in (measured, claude-code 2.1.233)."""
+    """The queue enqueue that owns one monitor notification."""
     return raw_event(
         {
-            "type": "user",
-            "uuid": uuid,
-            "origin": {"kind": "task-notification"},
-            "promptSource": "system",
-            "message": {"content": f"<task-notification>{body}</task-notification>"},
+            "type": "queue-operation",
+            "operation": "enqueue",
+            "content": f"<task-notification>{body}</task-notification>",
         },
         harness=HarnessName.CLAUDE_CODE,
         source_type="transcript",
@@ -5158,31 +5274,86 @@ def test_claude_monitor_ends_on_its_own_notification_not_on_its_arm():
 
 
 def test_claude_task_notifications_are_counted_once_though_they_arrive_twice():
-    """Every notification appears in the transcript twice: as the `queue-operation`
-    that enqueued it and as the `user` record that delivered it. Reading both
-    would double every monitor event."""
+    """The queue owns a monitor event and its later user copy is plumbing."""
     translator = ClaudeCanonicalTranslator()
     _armed_monitor(translator)
 
-    enqueued = translator.translate(
+    body = (
+        "<task-id>bmfwjr03l</task-id>"
+        '<summary>Monitor event: "ticks"</summary>'
+        "<event>tick-1</event>"
+    )
+    enqueued = translator.translate(_monitor_notification("enqueue-tick-1", body))
+    delivered = translator.translate(
         raw_event(
             {
-                "type": "queue-operation",
-                "operation": "enqueue",
-                "content": (
-                    "<task-notification><task-id>bmfwjr03l</task-id>"
-                    '<summary>Monitor event: "ticks"</summary>'
-                    "<event>tick-1</event></task-notification>"
-                ),
+                "type": "user",
+                "uuid": "delivered-tick-1",
+                "origin": {"kind": "task-notification"},
+                "promptSource": "system",
+                "message": {"content": f"<task-notification>{body}</task-notification>"},
             },
             harness=HarnessName.CLAUDE_CODE,
             source_type="transcript",
-            raw_event_id="enqueue-tick-1",
+            raw_event_id="delivered-tick-1",
         )
     )
 
-    assert enqueued.canonical_events == ()
-    assert enqueued.decision == "ignored_nonsemantic"
+    progressed = payloads(enqueued, ShellProgressed)
+    assert len(progressed) == 1
+    assert progressed[0].payload.content.text == "tick-1"
+    assert delivered.canonical_events == ()
+    assert delivered.decision == "ignored_nonsemantic"
+
+
+def test_claude_absorbed_monitor_notifications_end_the_monitor_from_the_queue():
+    """Claude Code 2.1.246 absorbs a monitor that ends mid-turn.
+
+    The queue enqueues the event and end, then removes both with
+    `absorbed_mid_turn` and writes task-notification attachments. No user record
+    exists. The enqueue pair must therefore carry the two facts by itself.
+    """
+    translator = ClaudeCanonicalTranslator()
+    _armed_monitor(translator)
+
+    event_body = (
+        "<task-id>bmfwjr03l</task-id>"
+        '<summary>Monitor event: "ticks"</summary>'
+        "<event>tick-1</event>"
+    )
+    end_body = (
+        "<task-id>bmfwjr03l</task-id>"
+        "<tool-use-id>monitor-op-one</tool-use-id>"
+        "<output-file>/tmp/tasks/bmfwjr03l.output</output-file>"
+        "<status>completed</status>"
+        '<summary>Monitor "ticks" stream ended</summary>'
+    )
+
+    progressed = translator.translate(_monitor_notification("absorbed-event", event_body))
+    ended = translator.translate(_monitor_notification("absorbed-end", end_body))
+    attachment = translator.translate(
+        raw_event(
+            {
+                "type": "attachment",
+                "attachment": {
+                    "type": "queued_command",
+                    "prompt": f"<task-notification>{end_body}</task-notification>",
+                    "commandMode": "task-notification",
+                    "timestamp": "2026-08-26T05:10:30.584Z",
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="absorbed-end-attachment",
+        )
+    )
+
+    assert payloads(progressed, ShellProgressed)[0].payload.content.text == "tick-1"
+    finished = payloads(ended, ShellOutputFinished)
+    assert len(finished) == 1
+    assert finished[0].payload.shell_id == ShellId("monitor-op-one")
+    assert attachment.canonical_events == ()
+    assert attachment.decision == "ignored_nonsemantic"
 
 
 def test_claude_resumed_agent_keeps_a_later_queue_only_result():
@@ -6177,33 +6348,434 @@ def test_claude_search_is_one_fact_holding_both_its_query_and_its_result():
             raw_event_id="tool-search",
         )
     )
-    result = translator.translate(
+    result_event = raw_event(
+        {
+            "type": "user",
+            "uuid": "tool-result-one",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tool-search-one",
+                        "content": [{"type": "tool_reference", "tool_name": "WebSearch"}],
+                    }
+                ]
+            },
+        },
+        harness=HarnessName.CLAUDE_CODE,
+        source_type="transcript",
+        raw_event_id="tool-result",
+    )
+
+    assert call.decision == "ignored_nonsemantic"
+    hook_result = translator.translate(
         raw_event(
             {
-                "type": "user",
-                "uuid": "tool-result-one",
+                "hook_event_name": "PostToolUse",
+                "tool_use_id": "tool-search-one",
+                "tool_name": "ToolSearch",
+                "tool_input": {"query": "select:WebSearch", "max_results": 1},
+                "tool_response": {
+                    "matches": ["WebSearch"],
+                    "query": "select:WebSearch",
+                    "total_deferred_tools": 34,
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="tool-search-hook-result",
+        )
+    )
+    result = translator.translate(result_event)
+    performed = payloads(result, SearchPerformed)[0].payload
+    hook_performed = payloads(hook_result, SearchPerformed)[0].payload
+    assert hook_performed == performed
+    assert hook_result.canonical_events[0].event_id == result.canonical_events[0].event_id
+    assert performed.tool == "ToolSearch"
+    assert performed.query == TextContent("select:WebSearch")
+    assert performed.result.text == "→ loaded tool: WebSearch"
+    assert performed.outcome == "succeeded"
+
+
+def test_claude_web_search_hook_and_transcript_results_converge_readably():
+    """WebSearch's hook is first, but its structured response must render like
+    the later transcript instead of winning the fact as an internal JSON dump."""
+    translator = ClaudeCanonicalTranslator()
+    translator.translate(
+        raw_event(
+            {
+                "type": "assistant",
                 "message": {
                     "content": [
                         {
-                            "type": "tool_result",
-                            "tool_use_id": "tool-search-one",
-                            "content": [{"type": "tool_reference", "tool_name": "WebSearch"}],
+                            "type": "tool_use",
+                            "id": "web-search-one",
+                            "name": "WebSearch",
+                            "input": {"query": "IANA Example Domain reserved"},
                         }
                     ]
                 },
             },
             harness=HarnessName.CLAUDE_CODE,
             source_type="transcript",
-            raw_event_id="tool-result",
+            raw_event_id="web-search-call",
+        )
+    )
+    response = {
+        "query": "IANA Example Domain reserved",
+        "results": [
+            {
+                "tool_use_id": "server-search-one",
+                "content": [
+                    {"title": "Example Domain", "url": "https://example.com"}
+                ],
+            },
+            "The Example Domain is reserved.",
+        ],
+        "durationSeconds": 0.5,
+        "searchCount": 1,
+    }
+    hook_result = translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PostToolUse",
+                "tool_use_id": "web-search-one",
+                "tool_name": "WebSearch",
+                "tool_input": {"query": "IANA Example Domain reserved"},
+                "tool_response": response,
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="web-search-hook-result",
+        )
+    )
+    transcript_result = translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "web-search-one",
+                            "content": "vendor-formatted search result",
+                        }
+                    ]
+                },
+                "toolUseResult": response,
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="web-search-transcript-result",
         )
     )
 
-    assert call.decision == "ignored_nonsemantic"
-    performed = payloads(result, SearchPerformed)[0].payload
-    assert performed.tool == "ToolSearch"
-    assert performed.query == TextContent("select:WebSearch")
-    assert performed.result.text == "→ loaded tool: WebSearch"
-    assert performed.outcome == "succeeded"
+    hook_event = payloads(hook_result, SearchPerformed)[0]
+    transcript_event = payloads(transcript_result, SearchPerformed)[0]
+    assert hook_event.event_id == transcript_event.event_id
+    assert hook_event.payload == transcript_event.payload
+    assert hook_event.payload.result == TextContent(
+        'Web search results for query: "IANA Example Domain reserved"\n\n'
+        "Links:\n- Example Domain — https://example.com\n\n"
+        "The Example Domain is reserved."
+    )
+
+
+def test_claude_web_fetch_hook_and_transcript_results_converge():
+    """WebFetch already exposes a direct result field; pin both arrival paths."""
+    translator = ClaudeCanonicalTranslator()
+    translator.translate(
+        raw_event(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "web-fetch-one",
+                            "name": "WebFetch",
+                            "input": {
+                                "url": "https://example.com",
+                                "prompt": "Read the page",
+                            },
+                        }
+                    ]
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="web-fetch-call",
+        )
+    )
+    response = {
+        "bytes": 14,
+        "code": 200,
+        "codeText": "OK",
+        "result": "Example Domain",
+        "durationMs": 10,
+        "url": "https://example.com",
+    }
+    hook_result = translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PostToolUse",
+                "tool_use_id": "web-fetch-one",
+                "tool_name": "WebFetch",
+                "tool_input": {
+                    "url": "https://example.com",
+                    "prompt": "Read the page",
+                },
+                "tool_response": response,
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="web-fetch-hook-result",
+        )
+    )
+    transcript_result = translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "web-fetch-one",
+                            "content": "Example Domain",
+                        }
+                    ]
+                },
+                "toolUseResult": response,
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="web-fetch-transcript-result",
+        )
+    )
+
+    hook_event = payloads(hook_result, WebFetched)[0]
+    transcript_event = payloads(transcript_result, WebFetched)[0]
+    assert hook_event.event_id == transcript_event.event_id
+    assert hook_event.payload == transcript_event.payload
+    assert hook_event.payload.result == TextContent("Example Domain")
+
+
+def test_claude_read_accepts_the_native_token_cap_marker():
+    translator = ClaudeCanonicalTranslator()
+    translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_use_id": "read-truncated",
+                "tool_name": "Read",
+                "tool_input": {"file_path": "/work/large.txt"},
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="read-truncated-call",
+        )
+    )
+
+    translated = translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PostToolUse",
+                "tool_use_id": "read-truncated",
+                "tool_name": "Read",
+                "tool_input": {"file_path": "/work/large.txt"},
+                "tool_response": {
+                    "type": "text",
+                    "file": {
+                        "filePath": "/work/large.txt",
+                        "content": "visible prefix",
+                        "numLines": 1,
+                        "startLine": 1,
+                        "totalLines": 50000,
+                        "truncatedByTokenCap": True,
+                    },
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="read-truncated-result",
+        )
+    )
+
+    accessed = payloads(translated, FileAccessed)[0].payload
+    assert accessed.path == "/work/large.txt"
+    assert accessed.content == TextContent("visible prefix")
+
+
+def test_claude_read_accepts_the_native_image_sidecar():
+    translator = ClaudeCanonicalTranslator()
+    translator.translate(
+        raw_event(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "read-image",
+                        "name": "Read",
+                        "input": {"file_path": "/work/image.png"},
+                    }],
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="read-image-call",
+        )
+    )
+    translated = translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "message": {
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": "read-image",
+                        "content": [{
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": "aW1hZ2U=",
+                            },
+                        }],
+                    }],
+                },
+                "toolUseResult": {
+                    "type": "image",
+                    "file": {
+                        "filePath": "/work/image.png",
+                        "base64": "aW1hZ2U=",
+                        "type": "image/png",
+                        "originalSize": 5,
+                        "dimensions": {
+                            "originalWidth": 10,
+                            "originalHeight": 20,
+                            "displayWidth": 10,
+                            "displayHeight": 20,
+                        },
+                    },
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="read-image-result",
+        )
+    )
+
+    accessed = payloads(translated, FileAccessed)[0].payload
+    assert accessed.path == "/work/image.png"
+    assert accessed.outcome == "succeeded"
+
+
+@pytest.mark.parametrize("native_name", ("Grep", "Glob"))
+def test_claude_filename_search_hook_keeps_readable_results(native_name):
+    translator = ClaudeCanonicalTranslator()
+    translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_use_id": "filename-search",
+                "tool_name": native_name,
+                "tool_input": {"pattern": "*.py"},
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id=f"{native_name}-call",
+        )
+    )
+
+    translated = translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PostToolUse",
+                "tool_use_id": "filename-search",
+                "tool_name": native_name,
+                "tool_input": {"pattern": "*.py"},
+                "tool_response": {
+                    "filenames": ["api/app.py", "tests/test_app.py"],
+                    "numFiles": 2,
+                    "truncated": False,
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id=f"{native_name}-result",
+        )
+    )
+
+    performed = payloads(translated, SearchPerformed)[0].payload
+    assert performed.tool == native_name
+    assert performed.result == TextContent("api/app.py\ntests/test_app.py")
+
+
+def test_claude_background_result_reader_is_known_duplicate_plumbing():
+    translation = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_use_id": "task-output",
+                "tool_name": "TaskOutput",
+                "tool_input": {"task_id": "native-task", "block": True},
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="task-output-call",
+        )
+    )
+
+    assert translation.canonical_events == ()
+    assert translation.decision == "ignored_nonsemantic"
+
+
+def test_claude_browser_mcp_result_is_a_readable_web_fact():
+    translator = ClaudeCanonicalTranslator()
+    translator.translate(
+        raw_event(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "browser-navigate",
+                            "name": "mcp__claude-in-chrome__navigate",
+                            "input": {"url": "https://example.com"},
+                        }
+                    ]
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="browser-navigate-call",
+        )
+    )
+    translated = translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "browser-navigate",
+                            "content": "Example Domain loaded",
+                        }
+                    ]
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="browser-navigate-result",
+        )
+    )
+
+    fetched = payloads(translated, WebFetched)[0].payload
+    assert fetched.url == "https://example.com"
+    assert fetched.result == TextContent("Example Domain loaded")
 
 
 def test_claude_child_actor_uses_the_task_description_from_its_sidecar(tmp_path):
@@ -6614,6 +7186,23 @@ def test_codex_usage_retries_a_transient_app_server_miss(monkeypatch):
 
     assert codex_usage.read_rate_limits() is None
     assert codex_usage.read_rate_limits() == expected
+
+
+def test_codex_usage_keeps_a_visible_row_when_the_native_probe_fails(
+    monkeypatch,
+    tmp_path,
+):
+    from harness.impl.codex.usage_rows import CodexUsage
+
+    monkeypatch.setattr(codex_usage, "read_rate_limits", lambda: None)
+    repository = SqliteAccountUsageRepository(main_database(str(tmp_path / "main.db")))
+
+    rows = CodexUsage().read(repository)
+
+    assert len(rows) == 1
+    assert rows[0].harness == HarnessName.CODEX
+    assert rows[0].windows == ()
+    assert rows[0].collection_error == "Codex usage probe is unavailable"
 
 
 def test_claude_unmapped_tool_stays_ignored_not_failed():
@@ -8124,6 +8713,343 @@ def test_codex_web_tool_uses_shared_search_vocabulary(tmp_path):
     assert performed.tool == "WebSearch"
     assert performed.query.text == "Bali weather"
     assert performed.result.text == "26C and sunny"
+
+
+def test_codex_javascript_tool_scan_ignores_strings_and_comments():
+    calls = codex_items.js_tool_calls(
+        'const patch = "tests mention tools.not_a_call({})";'
+        "// tools.also_not_a_call({})\n"
+        "/* tools.still_not_a_call({}) */"
+        "text(await tools.apply_patch(patch));"
+    )
+
+    assert calls == (("apply_patch", "patch"),)
+
+
+def test_codex_dynamic_shell_and_plan_tools_stay_structured():
+    shell_record = codex_rollout.parse_line(json.dumps({
+        "type": "response_item",
+        "payload": {
+            "type": "custom_tool_call",
+            "name": "exec",
+            "call_id": "dynamic-shell",
+            "input": (
+                'const cmd = "pytest -q";'
+                "const result = await tools.exec_command({cmd});text(result.output);"
+            ),
+        },
+    }))
+    plan_record = codex_rollout.parse_line(json.dumps({
+        "type": "response_item",
+        "payload": {
+            "type": "custom_tool_call",
+            "name": "exec",
+            "call_id": "dynamic-plan",
+            "input": (
+                'const plan=[{step:"Verify tools",status:"in_progress"}];'
+                "text(await tools.update_plan({plan}));"
+            ),
+        },
+    }))
+
+    assert shell_record is not None
+    # Dynamic single-command cells are owned by their exact native
+    # CommandExecution completion rather than this wrapper expression.
+    assert shell_record.kind == "covered_item"
+    assert plan_record is not None
+    assert plan_record.kind == "task_list"
+    assert plan_record.tasks[0].step == "Verify tools"
+
+
+def test_codex_legacy_shell_arguments_and_web_actions_remain_parseable():
+    shell_record = codex_rollout.parse_line(json.dumps({
+        "type": "response_item",
+        "payload": {
+            "type": "function_call",
+            "name": "exec_command",
+            "call_id": "legacy-shell",
+            "arguments": json.dumps({
+                "cmd": "pwd",
+                "workdir": "/work",
+                "yield_time_ms": 1000,
+                "max_output_tokens": 12000,
+                "sandbox_permissions": "require_escalated",
+                "justification": "read remote refs",
+                "prefix_rule": ["git", "fetch"],
+            }),
+        },
+    }))
+    search_record = codex_rollout.parse_line(json.dumps({
+        "type": "event_msg",
+        "payload": {
+            "type": "web_search_end",
+            "call_id": "legacy-find",
+            "query": "needle in page",
+            "action": {
+                "type": "find_in_page",
+                "url": "https://example.com",
+                "pattern": "needle",
+                "queries": ["needle in page"],
+            },
+        },
+    }))
+
+    assert shell_record is not None
+    assert shell_record.kind == "exec"
+    assert shell_record.cmd == "pwd"
+    assert search_record is not None
+    assert search_record.kind == "search"
+    assert search_record.query == "needle in page"
+
+
+def test_codex_notify_tool_is_known_non_feed_activity():
+    translation = CodexCanonicalTranslator().translate(raw_event(
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call",
+                "name": "exec",
+                "call_id": "notify",
+                "input": "text(await tools.notify({}));",
+            },
+        },
+        harness=HarnessName.CODEX,
+        source_type="rollout",
+        raw_event_id="notify-call",
+    ))
+
+    assert translation.canonical_events == ()
+    assert translation.decision == "ignored_nonsemantic"
+
+
+def test_codex_nested_exec_wrapper_is_known_transport_noise():
+    record = codex_rollout.parse_line(json.dumps({
+        "type": "response_item",
+        "payload": {
+            "type": "custom_tool_call",
+            "name": "exec",
+            "call_id": "nested-exec",
+            "input": "const value = await tools.exec(envelope);text(value);",
+        },
+    }))
+
+    assert record is not None
+    assert record.kind == "empty"
+
+
+def test_codex_legacy_direct_web_run_keeps_its_result():
+    translator = CodexCanonicalTranslator()
+    opened = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call",
+                    "name": "run",
+                    "call_id": "legacy-web",
+                    "arguments": json.dumps(
+                        {"search_query": [{"q": "Example Domain"}]}
+                    ),
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="legacy-web-call",
+        )
+    )
+    answered = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call_output",
+                    "call_id": "legacy-web",
+                    "output": "Example Domain result",
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="legacy-web-result",
+        )
+    )
+
+    assert opened.decision == "ignored_nonsemantic"
+    performed = payloads(answered, SearchPerformed)[0].payload
+    assert performed.query == TextContent("Example Domain")
+    assert performed.result == TextContent("Example Domain result")
+
+
+def test_codex_batched_web_tool_keeps_the_shared_wrapper_result():
+    translator = CodexCanonicalTranslator()
+    opened = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "batched-web",
+                    "input": (
+                        'const command = await tools.exec_command({cmd:"pwd"});'
+                        "const web = await tools.web__run("
+                        '{search_query:[{q:"Example Domain"}]});'
+                        "text(web);"
+                    ),
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="batched-web-call",
+        )
+    )
+    answered = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "batched-web",
+                    "output": "Script completed\nOutput:\nExample Domain result",
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="batched-web-result",
+        )
+    )
+
+    assert payloads(opened, ShellStarted)
+    performed = payloads(answered, SearchPerformed)[0].payload
+    assert performed.query == TextContent("Example Domain")
+    assert performed.result == TextContent("Example Domain result")
+
+
+def test_codex_batched_image_views_keep_every_file_fact():
+    translator = CodexCanonicalTranslator()
+    translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "batched-images",
+                    "input": (
+                        'image(await tools.view_image({path:"/work/one.png"}));'
+                        'image(await tools.view_image({path:"/work/two.png"}));'
+                    ),
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="batched-images-call",
+        )
+    )
+    answered = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "batched-images",
+                    "output": "Script completed\nOutput:\nimages loaded",
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="batched-images-result",
+        )
+    )
+
+    accessed = payloads(answered, FileAccessed)
+    assert [item.payload.path for item in accessed] == [
+        "/work/one.png",
+        "/work/two.png",
+    ]
+
+
+def test_codex_web_time_lookup_is_known_search_activity():
+    translator = CodexCanonicalTranslator()
+    translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "time-lookup",
+                    "input": (
+                        "const value = await tools.web__run("
+                        '{time:[{utc_offset:"+08:00"}]});text(value);'
+                    ),
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="time-lookup-call",
+        )
+    )
+    answered = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "time-lookup",
+                    "output": "21:30",
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="time-lookup-result",
+        )
+    )
+
+    performed = payloads(answered, SearchPerformed)[0].payload
+    assert performed.tool == "WebSearch"
+    assert performed.result == TextContent("21:30")
+
+
+def test_codex_browser_context_tool_keeps_its_result():
+    translator = CodexCanonicalTranslator()
+    translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "browser-context",
+                    "input": (
+                        "const value = await tools.chrome_extension__getTabContext("
+                        "{tabId:42});text(value);"
+                    ),
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="browser-context-call",
+        )
+    )
+    answered = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "browser-context",
+                    "output": "Current tab: Example Domain",
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="browser-context-result",
+        )
+    )
+
+    fetched = payloads(answered, WebFetched)[0].payload
+    assert fetched.url is None
+    assert fetched.result == TextContent("Current tab: Example Domain")
 
 
 def test_codex_web_extension_item_is_the_covered_copy_of_the_custom_tool_result():
@@ -10438,6 +11364,30 @@ def test_claude_argless_slash_command_settles_no_state():
     # a bare `/model` opens the picker and chooses nothing
     assert not payloads(translation, ModelChanged)
     assert payloads(translation, MessageCreated)[0].payload.content.text == "/model"
+
+
+@pytest.mark.parametrize("arguments", ("", "New session title"))
+def test_claude_rename_is_only_the_separate_title_change(arguments):
+    translation = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "system",
+                "subtype": "local_command",
+                "uuid": "rename",
+                "content": (
+                    "<command-name>/rename</command-name>"
+                    "<command-message>rename</command-message>"
+                    f"<command-args>{arguments}</command-args>"
+                ),
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="slash-rename-" + (arguments or "automatic"),
+        )
+    )
+
+    assert translation.canonical_events == ()
+    assert translation.decision == "ignored_nonsemantic"
 
 
 def test_claude_prompt_quoting_a_command_envelope_stays_a_prompt():

@@ -20,6 +20,7 @@ Feature: prompts sent during active work wait for that work
     And command "active command" has state succeeded
     And turn "queued work" produces its final answer after command "active command" finishes
     And turn "queued work" completes
+    And turn "queued work" has exactly 0 assignments
     And session "primary" has no queued prompts after a fresh application read
     And session "primary" has no running work
 

@@ -102,7 +102,11 @@ class ToolKind(StrEnum):
 # is the one fixed instruction text Claude Code always sends back — nothing
 # session-specific for the feed to show. Its sibling `ExitPlanMode` is PLAN
 # below, because that call carries the plan text and the person's decision.
-# An unlisted name is drift.
+# TaskStop is ignored by this generic call-result table because hooks.py turns
+# its successful result into the background shell's structural end. TaskOutput
+# is the read-back of that same background shell's already-recorded output, so
+# a second operation would duplicate it. An unlisted name is drift, except for
+# the browser MCP prefix handled by `tool_kind` below.
 TOOL_KINDS: Mapping[str, ToolKind] = {
     "Bash": ToolKind.SHELL, "Monitor": ToolKind.SHELL,
     "exec_command": ToolKind.SHELL, "read_command": ToolKind.SHELL,
@@ -118,7 +122,9 @@ TOOL_KINDS: Mapping[str, ToolKind] = {
     "ExitPlanMode": ToolKind.PLAN, "EnterPlanMode": ToolKind.IGNORED,
     "TaskCreate": ToolKind.IGNORED, "TaskUpdate": ToolKind.IGNORED,
     "TaskGet": ToolKind.IGNORED, "TaskList": ToolKind.IGNORED,
-    "TaskStop": ToolKind.IGNORED, "ListAgents": ToolKind.IGNORED,
+    "TaskStop": ToolKind.IGNORED, "TaskOutput": ToolKind.IGNORED,
+    "ListAgents": ToolKind.IGNORED,
+    "DesignSync": ToolKind.IGNORED,
     "GenerateImage": ToolKind.IGNORED, "image_gen__imagegen": ToolKind.IGNORED,
 }
 
@@ -142,6 +148,11 @@ FILE_ACTIONS: Mapping[str, FileAction] = {
 
 
 def tool_kind(native_name: str) -> ToolKind:
+    # Claude in Chrome is a deferred MCP family whose individual verbs evolve
+    # independently. They all describe interaction with or reading from a web
+    # page, the same canonical family Codex uses for open/click/find/screenshot.
+    if native_name.startswith("mcp__claude-in-chrome__"):
+        return ToolKind.WEB
     kind = TOOL_KINDS.get(native_name)
     if kind is None:
         raise UnknownRawEvent(f"unmapped Claude Code tool: {native_name or '<missing>'}")
@@ -190,6 +201,33 @@ def result_content(
         if isinstance(native_result, str):
             return content(native_result)
     return content(tool_response)
+
+
+def web_search_content(
+    tool_response: records.ToolResponse,
+    fallback_query: str,
+) -> Content:
+    """Render Claude WebSearch identically from hook and transcript sources."""
+    query = tool_response.query or fallback_query
+    links: list[str] = []
+    answers: list[str] = []
+    for result in tool_response.results or ():
+        if isinstance(result, str):
+            if result.strip():
+                answers.append(result.strip())
+            continue
+        for link in result.content or ():
+            title = (link.title or link.url or "").strip()
+            url = (link.url or "").strip()
+            if title and url:
+                links.append(f"- {title} — {url}")
+            elif title:
+                links.append(f"- {title}")
+    parts = [f'Web search results for query: "{query}"']
+    if links:
+        parts.append("Links:\n" + "\n".join(links))
+    parts.extend(answers)
+    return content("\n\n".join(parts))
 
 
 def attention_answers(
@@ -262,6 +300,13 @@ class MonitorState:
 
 
 @dataclass(frozen=True)
+class BackgroundTaskState:
+    session_id: SessionId
+    task_id: ClaudeCodeShellId
+    shell_id: ShellId
+
+
+@dataclass(frozen=True)
 class AgentAssignmentState:
     session_id: SessionId
     actor_id: ClaudeCodeActorId
@@ -272,8 +317,9 @@ class ToolCallSemantics:
     """Session-scoped state that joins related native events.
 
     A call's name and input stay here until all result channels can use them.
-    Assignment and monitor links stay only until their native finish record.
-    The interpreter clears all remaining state when the session finishes.
+    Assignment, monitor, and background-task links stay only until their native
+    finish record. The interpreter clears all remaining state when the session
+    finishes.
     """
 
     def __init__(self) -> None:
@@ -290,6 +336,12 @@ class ToolCallSemantics:
         # does carry the tool_use_id, so the end needs no memory and survives a
         # daemon restart that loses this.
         self.monitors: dict[tuple[SessionId, ClaudeCodeShellId], MonitorState] = {}
+        # A background task's native id -> the Bash shell that launched it.
+        # TaskStop names only this task id, so the stop needs this link to close
+        # the shell. The transcript is the durable fallback after a restart.
+        self.background_tasks: dict[
+            tuple[SessionId, ClaudeCodeShellId], BackgroundTaskState
+        ] = {}
 
     # --- what a call was, across the two raw event streams ------------------
 
@@ -346,6 +398,9 @@ class ToolCallSemantics:
         for monitor_key in tuple(self.monitors):
             if monitor_key[0] == session_id:
                 del self.monitors[monitor_key]
+        for background_key in tuple(self.background_tasks):
+            if background_key[0] == session_id:
+                del self.background_tasks[background_key]
         self.loaded_skills = {
             key for key in self.loaded_skills if key[0] != session_id
         }
@@ -476,6 +531,44 @@ class ToolCallSemantics:
         for key, monitor in tuple(self.monitors.items()):
             if key[0] == raw_event.session_id and monitor.shell_id == shell_id:
                 del self.monitors[key]
+
+    def background_launched(
+        self,
+        raw_event: RawEvent,
+        task_id: ClaudeCodeShellId,
+        shell_id: ShellId,
+    ) -> None:
+        self.background_tasks[(raw_event.session_id, task_id)] = BackgroundTaskState(
+            raw_event.session_id,
+            task_id,
+            shell_id,
+        )
+
+    def background_stopped(
+        self,
+        raw_event: RawEvent,
+        task_id: ClaudeCodeShellId,
+        transcript_path: str,
+    ) -> list[CanonicalEvent[EventPayload]]:
+        """Close a background Bash command after a successful TaskStop."""
+        if not task_id:
+            return []
+        key = raw_event.session_id, task_id
+        background = self.background_tasks.get(key)
+        if background is None:
+            call_id = transcript.background_call(transcript_path, task_id)
+            if call_id is None:
+                return []
+            shell_id = shell_id_from_claude_code_call(call_id)
+            background = BackgroundTaskState(raw_event.session_id, task_id, shell_id)
+        self.background_tasks.pop(key, None)
+        return [event(
+            raw_event,
+            "shell",
+            str(background.shell_id),
+            "output_finished",
+            ShellOutputFinished(background.shell_id, Outcome.CANCELLED),
+        )]
 
     # --- the request ---------------------------------------------------------
 
@@ -636,6 +729,34 @@ class ToolCallSemantics:
             else Outcome.SUCCEEDED
         )
         answered = result if result is not None else result_content(call.tool_response)
+        if (
+            native_name == "WebSearch"
+            and isinstance(call.tool_response, records.ToolResponse)
+            and call.tool_response.results is not None
+        ):
+            answered = web_search_content(
+                call.tool_response,
+                str(arguments.query or ""),
+            )
+        if (
+            result is None
+            and native_name == "ToolSearch"
+            and isinstance(call.tool_response, records.ToolResponse)
+            and call.tool_response.matches is not None
+        ):
+            answered = content(
+                "\n".join(
+                    f"→ loaded tool: {tool_name}"
+                    for tool_name in call.tool_response.matches
+                )
+            )
+        if (
+            result is None
+            and native_name in ("Grep", "Glob")
+            and isinstance(call.tool_response, records.ToolResponse)
+            and call.tool_response.filenames is not None
+        ):
+            answered = content("\n".join(call.tool_response.filenames))
         if kind == ToolKind.SHELL:
             return self._shell_finished(
                 raw_event,
@@ -786,6 +907,8 @@ class ToolCallSemantics:
         # command is still writing to is ended by `shell.finished` unless this
         # fact has already re-armed it (see ShellBackgrounded).
         background_task_id = ClaudeCodeShellId(str(response.backgroundTaskId or ""))
+        if background_task_id:
+            self.background_launched(raw_event, background_task_id, shell_id)
         if background_task_id and not shell_arguments.run_in_background:
             events.append(event(
                 raw_event,

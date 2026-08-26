@@ -629,6 +629,7 @@ class ToolArguments(BaseModel):
     description: str | None = None
     run_in_background: bool | None = None
     timeout: int | float | None = None
+    task_id: str | None = None
     file_path: str | None = None
     notebook_path: str | None = None
     content: str | None = None
@@ -688,8 +689,18 @@ class ToolResponseBlocks(RootModel[list[InnerContentBlock | str]]):
     pass
 
 
+class ToolResponseImageDimensions(BaseModel):
+    """Dimensions Claude records when Read returns an image."""
+
+    model_config = FOREIGN
+    originalWidth: int | None = None
+    originalHeight: int | None = None
+    displayWidth: int | None = None
+    displayHeight: int | None = None
+
+
 class ToolResponseFile(BaseModel):
-    """The built-in Read tool's file result."""
+    """The built-in Read tool's text or image result."""
 
     model_config = FOREIGN
     filePath: str | None = None
@@ -697,6 +708,26 @@ class ToolResponseFile(BaseModel):
     numLines: int | None = None
     startLine: int | None = None
     totalLines: int | None = None
+    truncatedByTokenCap: bool | None = None
+    base64: str | None = None
+    type: str | None = None
+    originalSize: int | None = None
+    dimensions: ToolResponseImageDimensions | None = None
+
+
+class WebSearchLink(BaseModel):
+    """One readable link in Claude WebSearch's open tool response."""
+
+    model_config = OPEN_FOREIGN
+    title: str | None = None
+    url: str | None = None
+
+
+class WebSearchResultSet(BaseModel):
+    """The link-bearing member of WebSearch's mixed result list."""
+
+    model_config = OPEN_FOREIGN
+    content: list[WebSearchLink] | None = None
 
 
 class ToolResponse(BaseModel):
@@ -728,6 +759,10 @@ class ToolResponse(BaseModel):
     team_name: str | None = None
     taskId: str | None = None
     planWasEdited: bool | None = None
+    matches: list[str] | None = None
+    filenames: list[str] | None = None
+    query: str | None = None
+    results: list[WebSearchResultSet | str] | None = None
 
 
 class ToolCallNative(BaseModel):

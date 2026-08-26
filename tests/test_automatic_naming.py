@@ -390,7 +390,7 @@ def test_explicit_failure_keeps_the_current_title_unchanged(tmp_path) -> None:
     ]
 
 
-def test_initial_failure_records_the_model_error_before_it_marks_the_job_failed(
+def test_initial_unavailability_marks_the_job_failed_without_an_application_error(
     tmp_path,
 ) -> None:
     jobs = SqliteNamingJobRepository(main_database(str(tmp_path / "main.db")))
@@ -410,17 +410,31 @@ def test_initial_failure_records_the_model_error_before_it_marks_the_job_failed(
     stored = jobs.find(job.key)
     assert stored is not None
     assert stored.state == NamingJobState.FAILED
-    assert audit.errors == [
-        (
-            str(SESSION_ID),
-            "automatic naming (initial)",
-            {
-                "job_key": job.key,
-                "error_type": "ModelUnavailableError",
-                "error": "unavailable",
-            },
-        )
-    ]
+    assert audit.errors == []
+    state = cast(tuple[object, ...], audit.states[-1])
+    assert state[-1] == {"job_key": job.key, "status": "failed"}
+
+
+def test_stopping_the_application_cancels_naming_without_an_error(tmp_path) -> None:
+    jobs = SqliteNamingJobRepository(main_database(str(tmp_path / "main.db")))
+    job = NamingJob(f"initial:{SESSION_ID}", SESSION_ID, "Name this session")
+    assert jobs.enqueue(job)
+    audit = Audit()
+    service = namer(FixedModels(unavailable=True), jobs, RawEvents(), audit=audit)
+    worker = NamingJobWorker(
+        jobs,
+        cast(SessionRepository, Sessions(session())),
+        service,
+        cast(AuditRecorder, audit),
+    )
+
+    assert worker.tick(lambda: True)
+
+    stored = jobs.find(job.key)
+    assert stored is not None and stored.state == NamingJobState.FAILED
+    assert audit.errors == []
+    state = cast(tuple[object, ...], audit.states[-1])
+    assert state[-1] == {"job_key": job.key, "status": "cancelled"}
 
 
 def test_job_completion_is_durable(tmp_path) -> None:

@@ -103,6 +103,7 @@ Status values:
 | B12 | Browser | Keep a native Codex name through park, restart, and resume | Real `/rename`, application restart, browser header, and resumed turn | Complete |
 | B13 | Browser | Show the native Claude Fable model limit | API scope, percentage, reset time, visible bar, and weekly reset | Complete |
 | B14 | Browser | Group a linked worktree with its main checkout | Real Git worktree, two live sessions, and one project group | Complete |
+| B15 | Browser | Recover a Codex usage row after the first application read misses it | A later application refresh shows Codex in the same browser document | Complete |
 
 ## GitHub bug regression map
 

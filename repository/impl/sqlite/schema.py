@@ -25,7 +25,7 @@ columns, half of them null, and none of them queried.
 
 from __future__ import annotations
 
-MAIN_SCHEMA_VERSION = 16
+MAIN_SCHEMA_VERSION = 19
 AUDIT_SCHEMA_VERSION = 1
 
 # Version 4 rewrote the canonical vocabulary, so files older than that remain
@@ -56,6 +56,13 @@ AUDIT_SCHEMA_VERSION = 1
 # Version 16 repairs a resumed native run whose process exit deduplicated against
 # an earlier run's session finish. Without the second finish, the interpreter
 # keeps the dead session watchable and can replay a large rollout indefinitely.
+# Version 17 makes the session activity index cover both values the session list
+# aggregates. Without `occurred_at`, SQLite visited every entry table row, whose
+# payload pages grow with the complete feed, to answer a three-column summary.
+# Version 18 requeues ignored Claude PostToolUse hooks. TaskStop was previously
+# nonsemantic, so affected background jobs have no output-finished fact. The
+# current translator identifies TaskStop from the restored hook and recovers its
+# shell relation from the native transcript. Other ignored hooks stay ignored.
 MAIN_MIGRATIONS: dict[int, tuple[str, ...]] = {
     5: (
         """
@@ -456,6 +463,117 @@ MAIN_MIGRATIONS: dict[int, tuple[str, ...]] = {
           )
         """,
     ),
+    17: (
+        "DROP INDEX index_session_entries_session",
+        "CREATE INDEX index_session_entries_session "
+        "ON session_entries(session_id, cursor, occurred_at)",
+    ),
+    18: (
+        """
+        INSERT OR IGNORE INTO pending_raw_events(raw_event_row_id, raw_event_id)
+        SELECT raw.id, raw.raw_event_id
+        FROM raw_events AS raw
+        JOIN interpretations AS interpretation
+          ON interpretation.raw_event_id = raw.raw_event_id
+        WHERE raw.harness = 'claude_code'
+          AND raw.source_type = 'hook'
+          AND raw.source_name = 'PostToolUse'
+          AND interpretation.decision = 'ignored_nonsemantic'
+        """,
+        """
+        DELETE FROM interpretation_events
+        WHERE raw_event_id IN (
+            SELECT raw.raw_event_id
+            FROM raw_events AS raw
+            JOIN interpretations AS interpretation
+              ON interpretation.raw_event_id = raw.raw_event_id
+            WHERE raw.harness = 'claude_code'
+              AND raw.source_type = 'hook'
+              AND raw.source_name = 'PostToolUse'
+              AND interpretation.decision = 'ignored_nonsemantic'
+        )
+        """,
+        """
+        DELETE FROM interpretations
+        WHERE raw_event_id IN (
+            SELECT raw.raw_event_id
+            FROM raw_events AS raw
+            WHERE raw.harness = 'claude_code'
+              AND raw.source_type = 'hook'
+              AND raw.source_name = 'PostToolUse'
+              AND raw.raw_event_id IN (
+                  SELECT pending.raw_event_id
+                  FROM pending_raw_events AS pending
+              )
+        )
+          AND decision = 'ignored_nonsemantic'
+        """,
+    ),
+    19: (
+        # ToolSearch/WebSearch hook results used to be stored as the hook's raw
+        # response object. The current translator renders readable text, but
+        # the canonical event id is stable, so simply retrying would deduplicate
+        # against the bad event. Remember only repairable events (those with a
+        # self-contained PostToolUse hook), remove their derived facts, and
+        # requeue that hook. Raw observations remain append-only.
+        """
+        CREATE TEMP TABLE tool_result_repairs(
+            event_id TEXT PRIMARY KEY,
+            raw_event_id TEXT NOT NULL UNIQUE,
+            raw_event_row_id INTEGER NOT NULL
+        )
+        """,
+        """
+        INSERT INTO tool_result_repairs(event_id, raw_event_id, raw_event_row_id)
+        SELECT canonical.event_id, raw.raw_event_id, raw.id
+        FROM canonical_events AS canonical
+        JOIN interpretation_events AS verdict
+          ON verdict.event_id = canonical.event_id
+        JOIN raw_events AS raw
+          ON raw.raw_event_id = verdict.raw_event_id
+        WHERE canonical.event_type = 'search.performed'
+          AND canonical.harness = 'claude_code'
+          AND json_extract(canonical.payload, '$.tool') IN (
+              'ToolSearch', 'WebSearch'
+          )
+          AND json_type(canonical.payload, '$.result.json_text') = 'text'
+          AND raw.source_type = 'hook'
+          AND raw.source_name = 'PostToolUse'
+        GROUP BY canonical.event_id
+        """,
+        """
+        INSERT OR IGNORE INTO pending_raw_events(raw_event_row_id, raw_event_id)
+        SELECT raw_event_row_id, raw_event_id FROM tool_result_repairs
+        """,
+        """
+        DELETE FROM interpretation_events
+        WHERE event_id IN (SELECT event_id FROM tool_result_repairs)
+        """,
+        """
+        DELETE FROM interpretations
+        WHERE raw_event_id IN (
+            SELECT raw_event_id FROM tool_result_repairs
+        )
+        """,
+        """
+        DELETE FROM canonical_events
+        WHERE event_id IN (SELECT event_id FROM tool_result_repairs)
+        """,
+        # Session data is a disposable projection. Clearing it avoids keeping
+        # the old expandable card under the same entry id; the reaction loop
+        # rebuilds every row from the canonical log, including repaired events.
+        "DELETE FROM session_entries "
+        "WHERE EXISTS (SELECT 1 FROM tool_result_repairs)",
+        "DELETE FROM session_data_actors "
+        "WHERE EXISTS (SELECT 1 FROM tool_result_repairs)",
+        "DELETE FROM session_data "
+        "WHERE EXISTS (SELECT 1 FROM tool_result_repairs)",
+        "DELETE FROM reaction_progress "
+        "WHERE EXISTS (SELECT 1 FROM tool_result_repairs)",
+        "DELETE FROM sqlite_sequence WHERE name='session_entries' "
+        "AND EXISTS (SELECT 1 FROM tool_result_repairs)",
+        "DROP TABLE tool_result_repairs",
+    ),
 }
 
 
@@ -677,7 +795,7 @@ CREATE TABLE IF NOT EXISTS session_entries(
 );
 
 CREATE INDEX IF NOT EXISTS index_session_entries_session
-    ON session_entries(session_id, cursor);
+    ON session_entries(session_id, cursor, occurred_at);
 
 -- The reaction loop's high-water mark against canonical_events; one row,
 -- typed, the same standing as schema_version — not a key-value table.

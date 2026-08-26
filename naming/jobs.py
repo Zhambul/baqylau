@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 
 from audit.recorder import AuditRecorder
 from domain.events import CanonicalEvent, EventPayload, MessageCreated
 from domain.naming import NamingJob
 from domain.values import TextContent
 from harness.registry import HarnessRegistry
+from inference.errors import ModelUnavailableError
 from naming.service import AutomaticSessionNamer, bounded_prompt
 from repository.contract.naming import NamingJobRepository
 from repository.contract.sessions import SessionRepository
@@ -57,10 +59,11 @@ class NamingJobWorker:
 
     def run(self, stop_event: threading.Event) -> None:
         while not stop_event.is_set():
-            self.tick()
+            self.tick(stop_event.is_set)
             stop_event.wait(NAMING_POLL_SECONDS)
 
-    def tick(self) -> bool:
+    def tick(self, cancelled: Callable[[], bool] | None = None) -> bool:
+        is_cancelled = cancelled or (lambda: False)
         job = self.jobs.claim_next()
         if job is None:
             return False
@@ -76,6 +79,23 @@ class NamingJobWorker:
                 "",
                 "automatic_title",
                 {"job_key": job.key, "title": title, "status": "completed"},
+            )
+        except ModelUnavailableError:
+            if is_cancelled():
+                self.jobs.fail(job.key, "application stopped")
+                self.audit.state_file(
+                    str(session.session_id),
+                    "",
+                    "automatic_title",
+                    {"job_key": job.key, "status": "cancelled"},
+                )
+                return True
+            self.jobs.fail(job.key, "no small model is currently available")
+            self.audit.state_file(
+                str(session.session_id),
+                "",
+                "automatic_title",
+                {"job_key": job.key, "status": "failed"},
             )
         except Exception as error:
             self.audit.error(

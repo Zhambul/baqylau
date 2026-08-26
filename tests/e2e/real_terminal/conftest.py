@@ -40,7 +40,10 @@ def real_terminal_identity(
 def application_process(
     tmp_path_factory: pytest.TempPathFactory,
     isolated_codex_home: Path,
+    isolated_claude_home: Path,
+    claude_workspace_trust: None,
 ) -> Iterator[ApplicationProcess]:
+    del claude_workspace_trust
     if resolve_listen_on() is None:
         pytest.skip("no Kitty remote-control socket is available")
     process = ApplicationProcess.start(ApplicationConfig(
@@ -53,6 +56,10 @@ def application_process(
         base_environment={
             **os.environ,
             "CODEX_HOME": str(isolated_codex_home),
+            "CLAUDE_CONFIG_DIR": str(isolated_claude_home),
+            "CLAUDE_CODE_MANAGED_SETTINGS_PATH": str(
+                isolated_claude_home / "managed-settings.json"
+            ),
         },
     ))
     try:
@@ -85,6 +92,7 @@ def journey_driver(
     application_process: ApplicationProcess,
     wait_policy: WaitPolicy,
     isolated_codex_home: Path,
+    isolated_claude_home: Path,
 ) -> Iterator[JourneyDriver]:
     driver = JourneyDriver(
         client,
@@ -92,7 +100,14 @@ def journey_driver(
         workspace,
         application_process.endpoint.port,
         wait_policy,
-        launch_environment=(("CODEX_HOME", str(isolated_codex_home)),),
+        launch_environment=(
+            ("CODEX_HOME", str(isolated_codex_home)),
+            ("CLAUDE_CONFIG_DIR", str(isolated_claude_home)),
+            (
+                "CLAUDE_CODE_MANAGED_SETTINGS_PATH",
+                str(isolated_claude_home / "managed-settings.json"),
+            ),
+        ),
     )
     try:
         yield driver

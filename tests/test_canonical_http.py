@@ -1157,7 +1157,7 @@ def test_an_internal_failure_is_a_500_and_an_audit_row_not_a_400(tmp_path, monke
     def explode():
         raise ValueError("/Users/someone/private/notes is not a directory")
 
-    monkeypatch.setattr(application.session_data, "visible", explode)
+    monkeypatch.setattr(application.session_data, "running", explode)
     server, thread = _server(application)
     try:
         status, headers, body = _get_response(server, "/sessionData")

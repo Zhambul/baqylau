@@ -24,9 +24,7 @@ class CodexUsage(HarnessUsage):
     def read(self, account_usage_repository: AccountUsageRepository) -> tuple[UsageRow, ...]:
         del account_usage_repository  # codex asks its own CLI live; nothing is cached
         rate_limits = native_usage.read_rate_limits()
-        if rate_limits is None:
-            return ()
-        plan = rate_limits.plan
+        plan = rate_limits.plan if rate_limits is not None else None
         windows = tuple(
             UsageWindow(
                 key=f"minutes_{window.duration_minutes}",
@@ -37,7 +35,7 @@ class CodexUsage(HarnessUsage):
                 scope=UsageWindowScope.ACCOUNT,
                 model_name=None,
             )
-            for window in rate_limits.windows
+            for window in (rate_limits.windows if rate_limits is not None else ())
         )
         return (UsageRow(
             harness=HARNESS,
@@ -51,7 +49,9 @@ class CodexUsage(HarnessUsage):
             scheduling_allowed=False,
             limit=None,
             authentication_error=None,
-            collection_error=None,
+            collection_error=(
+                None if rate_limits is not None else "Codex usage probe is unavailable"
+            ),
         ),)
 
 

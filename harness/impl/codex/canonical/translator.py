@@ -217,6 +217,10 @@ CODEX_TOOLS: Mapping[str, ToolMeaning] = {
         CodexToolKind.IGNORED, "ListResourceTemplates"
     ),
     "image_gen__imagegen": ToolMeaning(CodexToolKind.IGNORED, "GenerateImage"),
+    "notify": ToolMeaning(CodexToolKind.IGNORED, "Notify"),
+    "chrome_extension__getTabContext": ToolMeaning(
+        CodexToolKind.WEB, "BrowserContext"
+    ),
     # Deferred web execution yields a local orchestration handle and Codex
     # later waits on that handle.  The search/fetch call owns the user-visible
     # fact; waiting for its cell has no separate canonical meaning.
@@ -252,7 +256,7 @@ def _codex_tool(native_name: str, arguments: str | None) -> tuple[CodexToolKind,
         fields = _tool_fields(arguments)
         if not fields:
             raise TranslationError("Codex web tool arguments are not an object")
-        if any(fields.has(field) for field in _SEARCH_QUERY_FIELDS[:-1]):
+        if any(fields.has(field) for field in _SEARCH_QUERY_FIELDS):
             return CodexToolKind.SEARCH, "WebSearch"
         if any(fields.has(field) for field in (
             CodexToolField.OPEN, CodexToolField.CLICK,
@@ -300,6 +304,7 @@ class CodexToolField(StrEnum):
     WEATHER = "weather"
     FINANCE = "finance"
     SPORTS = "sports"
+    TIME = "time"
     QUERY = "query"
     OPEN = "open"
     CLICK = "click"
@@ -313,7 +318,8 @@ class CodexToolField(StrEnum):
 
 _SEARCH_QUERY_FIELDS = (
     CodexToolField.SEARCH_QUERY, CodexToolField.IMAGE_QUERY, CodexToolField.WEATHER,
-    CodexToolField.FINANCE, CodexToolField.SPORTS, CodexToolField.QUERY,
+    CodexToolField.FINANCE, CodexToolField.SPORTS, CodexToolField.TIME,
+    CodexToolField.QUERY,
 )
 
 
@@ -369,6 +375,7 @@ class ToolFields:
         if name is CodexToolField.WEATHER: return self.document.weather
         if name is CodexToolField.FINANCE: return self.document.finance
         if name is CodexToolField.SPORTS: return self.document.sports
+        if name is CodexToolField.TIME: return self.document.time
         if name is CodexToolField.OPEN: return self.document.open
         if name is CodexToolField.CLICK: return self.document.click
         if name is CodexToolField.FIND: return self.document.find
@@ -400,7 +407,17 @@ class ToolFields:
             requests = self.requests(name)
             if requests:
                 request = requests[0]
-                return request.query or request.q or request.url or request.reference
+                return (
+                    request.query
+                    or request.q
+                    or request.url
+                    or request.reference
+                    or request.location
+                    or request.ticker
+                    or request.utc_offset
+                    or request.team
+                    or request.fn
+                )
         direct = next(
             (field.value for field in self.javascript_strings if field.name == name.value),
             None,
@@ -528,7 +545,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
         self._backgrounded_shells: set[tuple[str, ShellId]] = set()
         self._semantic_tool_calls: set[tuple[str, str]] = set()
         self._call_records: dict[
-            tuple[str, str], ExecRecord | ToolRecord | AskRecord | None
+            tuple[str, str], ExecRecord | ToolRecord | ToolBatchRecord | AskRecord | None
         ] = {}
         self._mcp_tool_outcomes: dict[tuple[str, str], Outcome] = {}
         self._finished_tool_calls: set[tuple[str, str]] = set()
@@ -761,7 +778,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
     @staticmethod
     def _call_from_line(
         line: bytes, call_id: CodexCallId,
-    ) -> ExecRecord | ToolRecord | AskRecord | Literal[False] | None:
+    ) -> ExecRecord | ToolRecord | ToolBatchRecord | AskRecord | Literal[False] | None:
         """The parsed call this output belongs to.
 
         None means this is not the call being sought; False means it is the
@@ -774,7 +791,9 @@ class CodexCanonicalTranslator(HarnessTranslator):
             record = rollout.parse_line(line.decode())
         except (UnicodeDecodeError, ValidationError):
             return None
-        if not isinstance(record, (ExecRecord, ToolRecord, AskRecord)) or record.call_id != call_id:
+        if not isinstance(
+            record, (ExecRecord, ToolRecord, ToolBatchRecord, AskRecord)
+        ) or record.call_id != call_id:
             return None
         return record
 
@@ -782,7 +801,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
         self,
         raw_event: RawEvent,
         call_id: CodexCallId,
-    ) -> ExecRecord | ToolRecord | AskRecord | None:
+    ) -> ExecRecord | ToolRecord | ToolBatchRecord | AskRecord | None:
         """Pair an output with the call that opened it.
 
         The in-memory answer handles the normal adjacent call/output pair. The
@@ -810,7 +829,10 @@ class CodexCanonicalTranslator(HarnessTranslator):
                         if opened is not None:
                             found = (
                                 opened
-                                if isinstance(opened, (ExecRecord, ToolRecord, AskRecord))
+                                if isinstance(
+                                    opened,
+                                    (ExecRecord, ToolRecord, ToolBatchRecord, AskRecord),
+                                )
                                 else None
                             )
                             self._call_records[key] = found
@@ -1374,13 +1396,24 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 occurred_at=occurred_at,
             )]
         if isinstance(record, ToolBatchRecord):
-            self._semantic_tool_calls.add((
-                self._source_key(raw_event),
-                CodexCallId(record.call_id or native_identity),
-            ))
+            source_key = self._source_key(raw_event)
+            batch_call_id = CodexCallId(record.call_id or native_identity)
+            tool_actions = tuple(
+                action for action in record.actions if isinstance(action, ToolRecord)
+            )
+            if tool_actions:
+                # The wrapper has one result for every nested semantic tool.
+                # Keep the batch under that outer result id and each action
+                # under its synthetic id for native MCP completion matching.
+                self._call_records[(source_key, batch_call_id)] = record
+            else:
+                self._semantic_tool_calls.add((source_key, batch_call_id))
             batch_events: list[CanonicalEvent[EventPayload]] = []
             for action in record.actions:
-                if isinstance(action, (CollaborationCallRecord, ExecRecord, StdinRecord)):
+                if isinstance(
+                    action,
+                    (CollaborationCallRecord, ExecRecord, StdinRecord, ToolRecord),
+                ):
                     batch_events.extend(self._translate_record(
                         raw_event,
                         rollout_observation,
@@ -1588,6 +1621,30 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 return []
             if isinstance(call_record, ToolRecord):
                 return self._tool_result(raw_event, call_id, call_record, record, occurred_at)
+            if isinstance(call_record, ToolBatchRecord):
+                batch_result_events: list[CanonicalEvent[EventPayload]] = []
+                for action in call_record.actions:
+                    if not isinstance(action, ToolRecord):
+                        continue
+                    nested_result = ExecResultRecord(
+                        exit=record.exit,
+                        output=record.output,
+                        call_id=action.call_id,
+                        process_id=record.process_id,
+                        running=record.running,
+                        interrupted=record.interrupted,
+                        ts=record.ts,
+                    )
+                    batch_result_events.extend(
+                        self._tool_result(
+                            raw_event,
+                            action.call_id,
+                            action,
+                            nested_result,
+                            occurred_at,
+                        )
+                    )
+                return batch_result_events
             if isinstance(call_record, AskRecord):
                 return self._question_result(
                     raw_event,
@@ -1837,10 +1894,11 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 and isinstance(call_record, ToolRecord)
                 and call_record.name in known_names
                 and (source_key, call_id) not in self._finished_tool_calls
+                and (source_key, call_id) not in self._mcp_tool_outcomes
             ]
-            if len(candidates) != 1:
+            if not candidates:
                 raise TranslationError(
-                    "Codex MCP completion does not identify exactly one pending "
+                    "Codex MCP completion does not identify a pending "
                     f"{native_name} call"
                 )
             if record.status == "failed":
@@ -1851,6 +1909,9 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 raise TranslationError(
                     f"unknown Codex MCP completion state: {record.status!r}"
                 )
+            # Native MCP items omit the wrapper call id. Calls and completions
+            # are ordered, so the oldest pending call is their only stable join
+            # when one JS cell invokes the same MCP tool more than once.
             self._mcp_tool_outcomes[(source_key, candidates[0])] = outcome
             return []
         if isinstance(record, SearchRecord):

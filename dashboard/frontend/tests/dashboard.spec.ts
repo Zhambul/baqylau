@@ -325,16 +325,39 @@ test('keeps activity details readable and expandable', async ({ page }) => {
   await expect(summary).toHaveCSS('white-space', 'pre-wrap');
   await expect(summary).toHaveCSS('text-overflow', 'clip');
 
-  const webSearch = page.locator('.operation-label', {
-    hasText: 'WebSearch',
+  const toolSearch = page.locator('.blk').filter({
+    has: page.locator('.operation-label', { hasText: 'ToolSearch' }),
   });
+  await expect(toolSearch).toHaveAttribute('data-open', '0');
+  await toolSearch.locator('.bhead').click();
+  await expect(toolSearch).toHaveAttribute('data-open', '1');
+  await expect(toolSearch.locator('.bbody')).toContainText(
+    '→ loaded tool: Monitor',
+  );
+  await expect(toolSearch.locator('.bbody')).toContainText(
+    '→ loaded tool: TaskOutput',
+  );
+
+  const webSearch = page.locator('.blk').filter({
+    has: page.locator('.operation-label', { hasText: 'WebSearch' }),
+  });
+  await webSearch.locator('.bhead').click();
+  await expect(webSearch.locator('.bbody')).toContainText('one result');
+
+  const webFetch = page.locator('.blk').filter({
+    has: page.locator('.operation-label', { hasText: 'WebFetch' }),
+  });
+  await webFetch.locator('.bhead').click();
+  await expect(webFetch.locator('.bbody')).toContainText('Example Domain page');
+
+  const webSearchLabel = webSearch.locator('.operation-label');
   const background = page.locator('.operation-label', {
     hasText: 'background',
   });
-  await expect(webSearch).toHaveCSS('font-weight', '500');
+  await expect(webSearchLabel).toHaveCSS('font-weight', '500');
   await expect(background).toHaveCSS('font-weight', '500');
   const labelStyles = await Promise.all(
-    [webSearch, background].map((label) =>
+    [webSearchLabel, background].map((label) =>
       label.evaluate((element) => {
         const style = getComputedStyle(element);
         return { color: style.color, background: style.backgroundColor };

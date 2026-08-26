@@ -24,7 +24,7 @@ from domain.entries import (
     pending_attention,
 )
 from domain.ids import SessionId
-from domain.sessiondata import ActorFacts, SessionData, SessionFacts
+from domain.sessiondata import ActorFacts, LifecycleState, SessionData, SessionFacts
 from repository.mapper.documents import encode_document
 from repository.contract.session_data import (
     AggregateDelta,
@@ -178,19 +178,32 @@ class SqliteSessionDataRepository(SessionDataRepository):
                 "SELECT session_id, MAX(cursor) AS cursor, MAX(occurred_at) AS occurred_at "
                 "FROM session_entries GROUP BY session_id"
             ).fetchall()
-        actors_by_session: dict[str, list[sqlite3.Row]] = {}
-        for row in actor_rows:
-            actors_by_session.setdefault(row["session_id"], []).append(row)
-        newest = {row["session_id"]: row for row in entry_cursors}
-        return tuple(
-            _aggregate(
-                session_row,
-                actors_by_session.get(session_row["session_id"], ()),
-                _value(newest.get(session_row["session_id"]), "cursor"),
-                _value(newest.get(session_row["session_id"]), "occurred_at"),
-            )
-            for session_row in session_rows
-        )
+        return _aggregates(session_rows, actor_rows, entry_cursors)
+
+    def running(self) -> tuple[SessionData, ...]:
+        with self.sqlite_database.read() as connection:
+            session_rows = connection.execute(
+                "SELECT * FROM session_data "
+                "WHERE json_extract(payload, '$.state') = ?",
+                (LifecycleState.RUNNING.value,),
+            ).fetchall()
+            if not session_rows:
+                return ()
+            session_ids = tuple(str(row["session_id"]) for row in session_rows)
+            placeholders = ",".join("?" for _session_id in session_ids)
+            actor_rows = connection.execute(
+                "SELECT * FROM session_data_actors "
+                f"WHERE session_id IN ({placeholders}) "
+                "ORDER BY session_id, actor_id",
+                session_ids,
+            ).fetchall()
+            entry_cursors = connection.execute(
+                "SELECT session_id, MAX(cursor) AS cursor, "
+                "MAX(occurred_at) AS occurred_at FROM session_entries "
+                f"WHERE session_id IN ({placeholders}) GROUP BY session_id",
+                session_ids,
+            ).fetchall()
+        return _aggregates(session_rows, actor_rows, entry_cursors)
 
     def working_directories(self) -> tuple[str, ...]:
         with self.sqlite_database.read() as connection:
@@ -334,6 +347,26 @@ def _entry(row: sqlite3.Row) -> SessionEntry:
 
 def _value(row: sqlite3.Row | None, column: str) -> float | None:
     return None if row is None else row[column]
+
+
+def _aggregates(
+    session_rows: Sequence[sqlite3.Row],
+    actor_rows: Sequence[sqlite3.Row],
+    entry_cursors: Sequence[sqlite3.Row],
+) -> tuple[SessionData, ...]:
+    actors_by_session: dict[str, list[sqlite3.Row]] = {}
+    for row in actor_rows:
+        actors_by_session.setdefault(row["session_id"], []).append(row)
+    newest = {row["session_id"]: row for row in entry_cursors}
+    return tuple(
+        _aggregate(
+            session_row,
+            actors_by_session.get(session_row["session_id"], ()),
+            _value(newest.get(session_row["session_id"]), "cursor"),
+            _value(newest.get(session_row["session_id"]), "occurred_at"),
+        )
+        for session_row in session_rows
+    )
 
 
 def _aggregate(

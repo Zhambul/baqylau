@@ -1,7 +1,7 @@
 PY ?= .venv/bin/python
 NPM ?= npm
-E2E_WORKERS ?= 20
-BROWSER_E2E_WORKERS ?= 20
+E2E_WORKERS ?= 1
+BROWSER_E2E_WORKERS ?= 4
 E2E_DIST ?= load
 FRONTEND_DIR = dashboard/frontend
 FRONTEND_MODULES = $(FRONTEND_DIR)/node_modules/.package-lock.json

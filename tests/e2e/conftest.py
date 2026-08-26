@@ -248,7 +248,10 @@ def isolated_claude_home(
     source = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude"))
     destination = tmp_path_factory.mktemp("baqylau-e2e-claude-home")
     _copy_claude_credentials(source, destination)
-    for filename in ("settings.local.json",):
+    for filename in (
+        "settings.local.json",
+        "remote-settings-consent.json",
+    ):
         source_file = source / filename
         if source_file.exists():
             shutil.copy2(source_file, destination / filename)
@@ -278,8 +281,19 @@ def isolated_claude_home(
         source_profile = Path.home() / ".claude.json"
     shutil.copy2(source_profile, destination / ".claude.json")
 
+    # Claude 2.1.246 asks for interactive consent when an organization-managed
+    # setting can export prompts or responses. The host's managed policy is not
+    # part of this isolated test profile. Point Claude at an explicit empty
+    # policy so the new consent dialog cannot hold the Stop hooks indefinitely.
+    managed_settings = destination / "managed-settings.json"
+    managed_settings.write_text("{}", encoding="utf-8")
+
     previous = os.environ.get("CLAUDE_CONFIG_DIR")
+    previous_managed_settings = os.environ.get(
+        "CLAUDE_CODE_MANAGED_SETTINGS_PATH"
+    )
     os.environ["CLAUDE_CONFIG_DIR"] = str(destination)
+    os.environ["CLAUDE_CODE_MANAGED_SETTINGS_PATH"] = str(managed_settings)
     try:
         yield destination
     finally:
@@ -287,6 +301,12 @@ def isolated_claude_home(
             os.environ.pop("CLAUDE_CONFIG_DIR", None)
         else:
             os.environ["CLAUDE_CONFIG_DIR"] = previous
+        if previous_managed_settings is None:
+            os.environ.pop("CLAUDE_CODE_MANAGED_SETTINGS_PATH", None)
+        else:
+            os.environ["CLAUDE_CODE_MANAGED_SETTINGS_PATH"] = (
+                previous_managed_settings
+            )
 
 
 @pytest.fixture(scope="session")

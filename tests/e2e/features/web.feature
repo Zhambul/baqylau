@@ -1,5 +1,19 @@
 Feature: web activity stays on the work that requested it
 
+  Scenario: Claude tool discovery keeps the loaded tools in the result
+    Given session configuration "primary" uses claude_code with model haiku and low effort
+    When I launch session "primary" and assign work "tool discovery" to the lead with prompt
+      """
+      Your first tool call must be ToolSearch with the exact query
+      select:Monitor,TaskOutput and max_results 2. After it returns, reply with
+      the exact marker TOOL_DISCOVERY_DONE and no other text.
+      """
+    Then work "tool discovery" completes
+    And work "tool discovery" has final answer 'TOOL_DISCOVERY_DONE'
+    When I name the search in work "tool discovery" with query containing 'select:Monitor,TaskOutput' "tool search"
+    Then search "tool search" has result containing '→ loaded tool: Monitor'
+    And search "tool search" has result containing '→ loaded tool: TaskOutput'
+
   Scenario Outline: a real web search belongs to one worker
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" and assign work "search example" to the <worker> with prompt
@@ -13,6 +27,7 @@ Feature: web activity stays on the work that requested it
     And work "search example" has final answer 'WEB_SEARCH_DONE'
     When I name the search in work "search example" with query containing 'IANA Example Domain reserved' "example search"
     Then search "example search" has state succeeded
+    And search "example search" has result containing 'Example Domain'
 
     Examples:
       | harness     | model        | worker   |

@@ -1,5 +1,14 @@
 Feature: the browser controls real harness sessions
 
+  Scenario Outline: usage appears after the first application read misses it
+    Given the next browser application read omits usage for <harness>
+    When I open the browser session list
+    Then the browser shows the <harness> usage row without reloading the document
+
+    Examples:
+      | harness |
+      | codex   |
+
   Scenario Outline: a new-session draft survives modal close and page reload
     Given session configuration "draft form" uses <harness> with model <model> and low effort
     And the browser is on the session list

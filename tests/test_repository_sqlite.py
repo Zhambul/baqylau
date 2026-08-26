@@ -25,6 +25,7 @@ from domain.entries import MessageBody, SessionEntry, ShellStartedBody
 from domain.events import (
     CanonicalEvent,
     MessageCreated,
+    SearchPerformed,
     SessionFinished,
     SessionStarted,
     ShellBackgrounded,
@@ -71,6 +72,7 @@ from domain.values import (
     ModelReference,
     Outcome,
     ShellFollowUntil,
+    StructuredContent,
     TextContent,
 )
 from domain.workspace import AnswerSelection, ComposerDraft, DialogDraft, QueuedMessage
@@ -610,6 +612,171 @@ def test_version_fifteen_finishes_a_resumed_run_with_a_deduplicated_exit(tmp_pat
     assert repaired.harness_process_id == 202
     assert repaired.payload == SessionFinished(Outcome.UNKNOWN, "process_exited")
     assert SqliteSessionRepository(upgraded).watchable() == ()
+
+
+def test_version_sixteen_adds_the_covering_session_activity_index(tmp_path):
+    path = str(tmp_path / "main.db")
+    old_database = main_database(path)
+    old_database.initialize()
+    with old_database.write() as connection:
+        connection.execute("DROP INDEX index_session_entries_session")
+        connection.execute(
+            "CREATE INDEX index_session_entries_session "
+            "ON session_entries(session_id, cursor)"
+        )
+        connection.execute("UPDATE schema_version SET version = 16 WHERE id = 1")
+
+    upgraded = main_database(path)
+    upgraded.initialize()
+
+    with upgraded.read() as connection:
+        columns = tuple(
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA index_info(index_session_entries_session)"
+            )
+        )
+        version = connection.execute(
+            "SELECT version FROM schema_version WHERE id = 1"
+        ).fetchone()
+    assert columns == ("session_id", "cursor", "occurred_at")
+    assert version["version"] == MAIN_SCHEMA_VERSION
+
+
+def test_version_seventeen_requeues_ignored_claude_post_tool_hooks(tmp_path):
+    path = str(tmp_path / "main.db")
+    old_database = main_database(path)
+    raw_events = SqliteRawEventRepository(old_database)
+    canonical = SqliteCanonicalEventRepository(old_database)
+    task_stop = replace(
+        a_raw_event("task-stop"),
+        harness=HarnessName.CLAUDE_CODE,
+        source_name="PostToolUse",
+        payload=(
+            b'{"hook_event_name":"PostToolUse","tool_name":"TaskStop",'
+            b'"tool_input":{"task_id":"background-one"}}'
+        ),
+    )
+    unrelated = replace(
+        a_raw_event("unrelated-hook"),
+        harness=HarnessName.CODEX,
+        source_name="PostToolUse",
+    )
+    raw_events.record([task_stop, unrelated])
+    canonical.record_translation(
+        task_stop,
+        "3",
+        TranslationResult((), "ignored_nonsemantic", "old TaskStop handling"),
+        1001.0,
+    )
+    canonical.record_translation(
+        unrelated,
+        "3",
+        TranslationResult((), "ignored_nonsemantic", "unrelated harness"),
+        1001.0,
+    )
+    with old_database.write() as connection:
+        connection.execute("UPDATE schema_version SET version = 17 WHERE id = 1")
+
+    upgraded = main_database(path)
+    upgraded.initialize()
+
+    assert [event.raw_event_id for event in SqliteRawEventRepository(upgraded).unverdicted(10)] == [
+        RawEventId("task-stop")
+    ]
+    with upgraded.read() as connection:
+        remaining = connection.execute(
+            "SELECT raw_event_id FROM interpretations ORDER BY raw_event_id"
+        ).fetchall()
+        version = connection.execute(
+            "SELECT version FROM schema_version WHERE id = 1"
+        ).fetchone()
+    assert [row["raw_event_id"] for row in remaining] == ["unrelated-hook"]
+    assert version["version"] == MAIN_SCHEMA_VERSION
+
+
+def test_version_eighteen_reprocesses_structured_claude_search_results(tmp_path):
+    path = str(tmp_path / "main.db")
+    old_database = main_database(path)
+    raw_events = SqliteRawEventRepository(old_database)
+    canonical = SqliteCanonicalEventRepository(old_database)
+    hook = replace(
+        a_raw_event("tool-search-result"),
+        harness=HarnessName.CLAUDE_CODE,
+        source_name="PostToolUse",
+        payload=(
+            b'{"hook_event_name":"PostToolUse","tool_name":"ToolSearch",'
+            b'"tool_input":{"query":"select:Monitor"},'
+            b'"tool_response":{"matches":["Monitor"]}}'
+        ),
+    )
+    raw_events.record([hook])
+    old_event = CanonicalEvent(
+        event_id=CanonicalEventId("old-tool-search"),
+        session_id=SESSION,
+        actor_id=ACTOR,
+        turn_id=None,
+        parent_actor_id=None,
+        harness=HarnessName.CLAUDE_CODE,
+        occurred_at=1000.0,
+        terminal_window_id=None,
+        harness_process_id=None,
+        payload=SearchPerformed(
+            "ToolSearch",
+            TextContent("select:Monitor"),
+            StructuredContent("{}"),
+            Outcome.SUCCEEDED,
+        ),
+    )
+    canonical.record_translation(
+        hook,
+        "3",
+        TranslationResult((old_event,), "translated"),
+        1001.0,
+    )
+    with old_database.write() as connection:
+        connection.execute(
+            "INSERT INTO session_entries("
+            "cursor, entry_id, session_id, entry_type, actor_id, payload"
+            ") VALUES(1, 'old-search-entry', ?, 'search', ?, '{}')",
+            (str(SESSION), str(ACTOR)),
+        )
+        connection.execute(
+            "INSERT INTO reaction_progress(id, canonical_cursor, updated_at) "
+            "VALUES(1, 1, 1001.0)"
+        )
+        connection.execute("UPDATE schema_version SET version = 18 WHERE id = 1")
+
+    upgraded = main_database(path)
+    upgraded.initialize()
+
+    assert [
+        event.raw_event_id
+        for event in SqliteRawEventRepository(upgraded).unverdicted(10)
+    ] == [RawEventId("tool-search-result")]
+    with upgraded.read() as connection:
+        event_count = connection.execute(
+            "SELECT COUNT(*) AS value FROM canonical_events "
+            "WHERE event_id='old-tool-search'"
+        ).fetchone()
+        interpretation_count = connection.execute(
+            "SELECT COUNT(*) AS value FROM interpretations "
+            "WHERE raw_event_id='tool-search-result'"
+        ).fetchone()
+        entry_count = connection.execute(
+            "SELECT COUNT(*) AS value FROM session_entries"
+        ).fetchone()
+        progress_count = connection.execute(
+            "SELECT COUNT(*) AS value FROM reaction_progress"
+        ).fetchone()
+        version = connection.execute(
+            "SELECT version FROM schema_version WHERE id = 1"
+        ).fetchone()
+    assert event_count["value"] == 0
+    assert interpretation_count["value"] == 0
+    assert entry_count["value"] == 0
+    assert progress_count["value"] == 0
+    assert version["version"] == MAIN_SCHEMA_VERSION
 
 
 def test_version_nine_builds_the_pending_raw_event_queue(tmp_path):
@@ -1334,6 +1501,42 @@ def test_the_list_view_reads_every_session_with_its_own_cursor(main):
     assert listed[SESSION].cursor == 3
     assert listed[other].session.title == "Other"
     assert [actor.actor_id for actor in listed[other].actors] == [ActorId("lead")]
+
+
+def test_the_running_list_does_not_read_finished_session_aggregates(main):
+    store = SqliteSessionDataRepository(main)
+    finished_id = SessionId("session-finished")
+    store.apply(
+        SESSION,
+        SessionDataChanges(session=A_SESSION, actors=(AN_ACTOR,)),
+        1,
+    )
+    store.apply(
+        finished_id,
+        SessionDataChanges(
+            session=replace(
+                A_SESSION,
+                session_id=finished_id,
+                state=LifecycleState.FINISHED,
+                finished_at=2.0,
+            ),
+            actors=(
+                replace(
+                    AN_ACTOR,
+                    session_id=finished_id,
+                    state=LifecycleState.FINISHED,
+                ),
+            ),
+        ),
+        2,
+    )
+    store.apply(SESSION, SessionDataChanges(entry=an_entry("e1")), 3)
+
+    running = store.running()
+
+    assert [data.session.session_id for data in running] == [SESSION]
+    assert running[0].actors == (AN_ACTOR,)
+    assert running[0].cursor == 3
 
 
 # --- the session workspace ----------------------------------------------------

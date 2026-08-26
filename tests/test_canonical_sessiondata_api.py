@@ -208,7 +208,7 @@ def test_the_session_list_maps_only_terminal_attached_sessions():
     )
     read_model = Mock(spec=SessionDataRepository)
     read_model.high_water_cursor.return_value = 15
-    read_model.visible.return_value = (live, parked)
+    read_model.running.return_value = (live, parked)
     terminal = Mock(spec=TerminalAdapter)
     terminal.live_sessions.return_value = frozenset({SESSION})
     repositories = Mock(spec=RepositoryQueries)
@@ -246,7 +246,7 @@ def test_a_finished_harness_is_not_live_when_its_shell_tab_remains():
     )
     read_model = Mock(spec=SessionDataRepository)
     read_model.high_water_cursor.return_value = 16
-    read_model.visible.return_value = (finished,)
+    read_model.running.return_value = ()
     read_model.read.return_value = finished
     terminal = Mock(spec=TerminalAdapter)
     terminal.live_sessions.return_value = frozenset({SESSION})
@@ -273,6 +273,7 @@ def test_a_finished_harness_is_not_live_when_its_shell_tab_remains():
 
     assert listed.sessions == ()
     assert single.live is False
+    read_model.visible.assert_not_called()
     terminal.window_for_session.assert_not_called()
 
 
@@ -299,8 +300,34 @@ def test_repository_identity_maps_a_linked_worktree_to_its_main_checkout(tmp_pat
     project_directory = RepositoryQueries.project_directory(str(linked))
 
     assert status is not None
+    assert status.branch == "worktree"
+    assert status.dirty is False
     assert status.worktree == linked.name
     assert project_directory == str(source)
+
+
+def test_repository_status_uses_one_git_query_and_handles_detached_head(monkeypatch):
+    run_git = Mock(
+        return_value=subprocess.CompletedProcess(
+            (),
+            0,
+            "# branch.oid 1234567890abcdef\n"
+            "# branch.head (detached)\n"
+            "? untracked.txt\n",
+            "",
+        )
+    )
+    monkeypatch.setattr(RepositoryQueries, "run_git", run_git)
+
+    status = RepositoryQueries.status("/not-a-worktree")
+
+    assert status == RepositoryStatus("1234567", None, True)
+    run_git.assert_called_once_with(
+        "/not-a-worktree",
+        "status",
+        "--porcelain=v2",
+        "--branch",
+    )
 
 
 def test_an_actor_carries_one_model_name_and_never_the_ids_behind_it():

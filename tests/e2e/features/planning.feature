@@ -153,7 +153,8 @@ Feature: planning tools update the session goal and tasks
       """
       Make a plan that contains the exact marker E2E-PLAN-MARKER-731. The plan
       must not change files or run commands. Wait for the person to decide.
-      After approval, reply only with the word approved.
+      After approval, do not implement the plan or use tools. Reply only with
+      the exact word approved.
       """
     And I name the pending plan in turn "propose plan" containing 'E2E-PLAN-MARKER-731' "safe plan"
     Then plan "safe plan" contains 'E2E-PLAN-MARKER-731'

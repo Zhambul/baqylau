@@ -23,7 +23,7 @@ from terminal.models import ScreenReadRequest, TabCloseRequest, TabOpenRequest
 
 INTERNAL_MODEL_VARIABLE = "BAQYLAU_INTERNAL_MODEL"
 DEFAULT_TIMEOUT_SECONDS = 45.0
-PROVIDER_ATTEMPT_TIMEOUT_SECONDS = 15.0
+PROVIDER_ATTEMPT_TIMEOUT_SECONDS = 30.0
 POLL_SECONDS = 0.05
 TITLE_SCHEMA_JSON = (
     '{"type":"object","properties":{"title":{"type":"string"}},'
@@ -41,9 +41,6 @@ UNAVAILABLE_MARKERS = (
 )
 ESCAPED_TITLE = re.compile(r'\\?"title\\?"\s*:\s*\\?"((?:\\.|[^"\\])*)\\?"')
 MINIMUM_TITLE_WORDS = 3
-AUDIT_OUTPUT_LIMIT = 2_000
-
-
 class _TitleDocument(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -178,7 +175,7 @@ class _SmallModel:
 
     def send(self, model_prompt_request: ModelPromptRequest) -> ModelPromptResponse:
         try:
-            candidates, provider_states = self._candidates()
+            candidates = self._candidates()
         except Exception as error:
             self.audit.error(
                 model_prompt_request.session_id,
@@ -188,28 +185,27 @@ class _SmallModel:
             raise
         failures: list[str] = []
         # A CLI or remote request can fail transiently even though account
-        # capacity remains. Try every provider once, then retry the preferred
-        # one in a fresh ephemeral process. Per-attempt time is capped so the
-        # extra recovery attempt is still faster than one old 45-second hang.
-        attempts = (*candidates, candidates[0]) if candidates else ()
-        for attempt, candidate in enumerate(attempts, start=1):
+        # capacity remains. Try every provider twice in fresh ephemeral
+        # processes. A malformed title gets an immediate retry from the same
+        # provider; a timeout moves to the other provider first. Each provider
+        # has a finite deadline, but current native CLIs can need more than 15
+        # seconds under ordinary load before they write their final result.
+        attempts = list(candidates)
+        retries = {candidate: 1 for candidate in candidates}
+        attempt = 0
+        while attempts:
+            candidate = attempts.pop(0)
+            attempt += 1
             try:
                 return self._send(candidate, model_prompt_request)
             except ProviderUnavailableError as error:
                 failures.append(f"{candidate.harness}: {error}")
-                context: dict[str, JsonValue] = {
-                    **_error_context(error),
-                    "provider": str(candidate.harness),
-                    "attempt": attempt,
-                    "stage": error.stage,
-                }
-                if error.output:
-                    context["output"] = error.output[:AUDIT_OUTPUT_LIMIT]
-                self.audit.error(
-                    model_prompt_request.session_id,
-                    "small model (provider attempt)",
-                    context,
-                )
+                if retries[candidate] > 0:
+                    retries[candidate] -= 1
+                    if error.stage == "parse output" and "title" in str(error):
+                        attempts.insert(0, candidate)
+                    else:
+                        attempts.append(candidate)
             except Exception as error:
                 self.audit.error(
                     model_prompt_request.session_id,
@@ -222,60 +218,20 @@ class _SmallModel:
                 )
                 raise
         reason = "; ".join(failures) if failures else "no provider is available"
-        try:
-            raise ModelUnavailableError(reason)
-        except ModelUnavailableError as error:
-            failure_values: list[JsonValue] = [failure for failure in failures]
-            self.audit.error(
-                model_prompt_request.session_id,
-                "small model (unavailable)",
-                {
-                    **_error_context(error),
-                    "providers": list(provider_states),
-                    "attempt_failures": failure_values,
-                },
-            )
-            raise
+        raise ModelUnavailableError(reason)
 
-    def _candidates(self) -> tuple[tuple[_Candidate, ...], tuple[JsonValue, ...]]:
+    def _candidates(self) -> tuple[_Candidate, ...]:
         rows = self.usage.usage_rows()
         ranked: list[tuple[Decimal, int, _Candidate]] = []
-        states: list[JsonValue] = []
         for order, candidate in enumerate(CANDIDATES):
             if not self.executable_available(candidate.executable):
-                states.append(
-                    {
-                        "provider": str(candidate.harness),
-                        "status": "executable unavailable",
-                    }
-                )
                 continue
             capacity = _remaining_capacity(candidate.harness, rows)
             if capacity <= 0:
-                matching = tuple(row for row in rows if row.harness == candidate.harness)
-                status = (
-                    "authentication error"
-                    if any(row.authentication_error for row in matching)
-                    else "capacity exhausted"
-                )
-                states.append(
-                    {
-                        "provider": str(candidate.harness),
-                        "status": status,
-                        "remaining_capacity_percent": str(capacity),
-                    }
-                )
                 continue
-            states.append(
-                {
-                    "provider": str(candidate.harness),
-                    "status": "available",
-                    "remaining_capacity_percent": str(capacity),
-                }
-            )
             ranked.append((capacity, -order, candidate))
         ranked.sort(reverse=True, key=lambda item: (item[0], item[1]))
-        return tuple(candidate for _capacity, _order, candidate in ranked), tuple(states)
+        return tuple(candidate for _capacity, _order, candidate in ranked)
 
     def _send(self, candidate: _Candidate, request: ModelPromptRequest) -> ModelPromptResponse:
         with tempfile.TemporaryDirectory(prefix="baqylau-model-") as directory:

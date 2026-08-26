@@ -207,6 +207,9 @@ def slash_command(
     where there is one, otherwise a prompt bubble holding what the human
     typed.
 
+    `/rename` emits no event here. Its `agent-name` or `ai-title` record owns
+    the title change, and the local command does not open a model turn.
+
     `/model`/`/effort` with a valid selection emit ONLY the state event —
     the model-change entry is what shows the switch, so a second, redundant
     prompt bubble echoing "/model opus" would just duplicate it. Every other
@@ -226,6 +229,8 @@ def slash_command(
     """
     name = record.name.lstrip("/").strip().lower()
     selection = record.arguments.strip()
+    if name == "rename":
+        return []
     if selection and len(selection.split()) == 1 and name in ("model", "effort"):
         payload: EventPayload | None = (
             selection_semantics.model(

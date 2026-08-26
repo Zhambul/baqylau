@@ -50,6 +50,7 @@ def background_workers(instances: Instances) -> Iterator[None]:
     reactions = resolve(instances, providers.reaction_loop)
     usage_state = resolve(instances, providers.usage_state)
     naming_worker = resolve(instances, providers.naming_worker)
+    model_terminal = resolve(instances, providers.model_terminal)
     # Attachments are pruned from the ROW, not by walking the directory and
     # trusting mtimes: what we wrote is what we know about.
     resolve(instances, providers.uploads).prune()
@@ -76,6 +77,10 @@ def background_workers(instances: Instances) -> Iterator[None]:
         usage_stop.set()
         notifier_stop.set()
         naming_stop.set()
+        # A naming call can be waiting on a native model process. Close its
+        # private terminal first so the worker can observe cancellation and
+        # finish before the application releases its repositories.
+        model_terminal.close()
         observation.join(timeout=2)
         reaction.join(timeout=2)
         usage.join(timeout=2)
@@ -86,4 +91,3 @@ def background_workers(instances: Instances) -> Iterator[None]:
         # from surviving an application restart; external terminals provide a
         # no-op lifecycle callback.
         resolve(instances, providers.terminal_plugin).close()
-        resolve(instances, providers.model_terminal).close()

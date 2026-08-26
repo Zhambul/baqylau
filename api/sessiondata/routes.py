@@ -56,11 +56,7 @@ def session_data_list(
             known[working_directory] = repositories.status(working_directory)
         return known[working_directory]
 
-    visible = tuple(
-        data
-        for data in read_model.visible()
-        if data.session.state == LifecycleState.RUNNING
-    )
+    visible = read_model.running()
     live = terminal.live_sessions(data.session.session_id for data in visible)
     return SessionDataListResponse(
         cursor=cursor,

@@ -102,7 +102,7 @@ CITATION_RE = re.compile(r"cite[^]+\s*")
 # nothing and the command silently vanished (verified live — a gpt-5.6-terra run's
 # `pwd` showed no block at all).
 _JS_CMD = re.compile(
-    r"""["']?cmd["']?\s*:\s*(\[[^\]]*\]|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')""")
+    r"""["']?cmd["']?\s*:\s*(\[[^\]]*\]|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)""")
 # The custom-exec output preamble ends in this marker; the block body wants only
 # what follows it (the exit is still read from the whole head window).
 _OUTPUT_MARK = "Output:\n"
@@ -118,6 +118,46 @@ _JS_PLAN_STEP = re.compile(
 _JS_PLAN_STATUS = re.compile(
     r'''["']?status["']?\s*:\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')'''
 )
+
+
+def _next_js_tool(js: str, cursor: int) -> re.Match[str] | None:
+    """Find the next real ``tools.<name>(`` outside strings and comments."""
+    quote = ""
+    escaped = False
+    line_comment = False
+    block_comment = False
+    index = cursor
+    while index < len(js):
+        character = js[index]
+        following = js[index + 1] if index + 1 < len(js) else ""
+        if line_comment:
+            if character in "\r\n":
+                line_comment = False
+        elif block_comment:
+            if character == "*" and following == "/":
+                block_comment = False
+                index += 1
+        elif quote:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == quote:
+                quote = ""
+        elif character in _JS_QUOTES:
+            quote = character
+        elif character == "/" and following == "/":
+            line_comment = True
+            index += 1
+        elif character == "/" and following == "*":
+            block_comment = True
+            index += 1
+        else:
+            match = _JS_TOOL.match(js, index)
+            if match is not None:
+                return match
+        index += 1
+    return None
 
 
 def js_tool_calls(js: str) -> tuple[tuple[str, str], ...]:
@@ -140,7 +180,7 @@ def js_tool_calls(js: str) -> tuple[tuple[str, str], ...]:
     falls open to the rest of the string rather than raising."""
     calls = []
     cursor = 0
-    while match := _JS_TOOL.search(js or "", cursor):
+    while match := _next_js_tool(js or "", cursor):
         index, depth, quote, escaped = match.end(), 1, "", False
         while index < len(js) and depth:
             character = js[index]
@@ -300,11 +340,15 @@ def _exec_cmd_from_js(js: str) -> str:
     if not m:
         return ""
     raw = m.group(1)
+    if raw.startswith("`") and "${" in raw:
+        # Runtime interpolation cannot be recovered faithfully. A native
+        # CommandExecution item later supplies the resolved command.
+        return ""
     try:
         v = ast.literal_eval(raw)
     except (SyntaxError, ValueError):
-        raw = raw.strip()                   # single-quoted / unquoted — light cleanup
-        return raw[1:-1] if raw[:1] in "\"'" else raw
+        raw = raw.strip()                   # quoted / unquoted — light cleanup
+        return raw[1:-1] if raw[:1] in "\"'`" else raw
     return " ".join(str(x) for x in v) if isinstance(v, list) else str(v)
 
 
@@ -418,29 +462,48 @@ def _rsp_custom_tool_call(custom_tool_call_payload: CustomToolCallPayload) -> Ro
                     # Each authoritative FileChange item carries the patch and
                     # its result. The wrapper call is only request plumbing.
                     continue
-                action: ExecRecord | StdinRecord | TaskListRecord | GoalToolRecord | CollaborationCallRecord | None
+                action: (
+                    ExecRecord
+                    | StdinRecord
+                    | ToolRecord
+                    | TaskListRecord
+                    | GoalToolRecord
+                    | CollaborationCallRecord
+                    | None
+                )
                 if name == "exec_command":
                     cmd = _exec_cmd_from_js(arguments)
-                    action = (
-                        ExecRecord(
-                            cmd=cmd,
-                            call_id=action_call_id,
-                            turn=metadata.turn_id if metadata else None,
-                            yield_ms=_loose_int_field(arguments, "yield_time_ms"),
-                            reports_session_id=".session_id" in js,
-                        )
-                        if cmd
-                        else None
+                    # Dynamic cells commonly pass `{cmd}` or interpolate a
+                    # local variable. Their exact native CommandExecution
+                    # items own the command and result; this wrapper must not
+                    # invent a duplicate shell or become an unknown tool.
+                    if not cmd:
+                        continue
+                    action = ExecRecord(
+                        cmd=cmd,
+                        call_id=action_call_id,
+                        turn=metadata.turn_id if metadata else None,
+                        yield_ms=_loose_int_field(arguments, "yield_time_ms"),
+                        reports_session_id=".session_id" in js,
                     )
                 elif name == "write_stdin":
                     continuation = _stdin_record(action_call_id, arguments)
-                    # A dynamic `r.session_id` waits for an exec in this same
-                    # cell. The completed CommandExecution item owns its result.
+                    # A dynamic process id waits for an exec in this same cell.
+                    # The completed CommandExecution item owns its result.
                     action = continuation if continuation.process_id else None
-                    if action is None and ".session_id" in arguments:
+                    if action is None:
                         continue
+                elif name == "exec":
+                    # A few early code-mode rollouts contain a nested
+                    # `tools.exec(...)` produced by a malformed tool envelope.
+                    # The outer custom `exec` record is already its transport.
+                    continue
                 else:
                     action = _state_tool_action(name, arguments, action_call_id)
+                    if action is None and name == "update_plan":
+                        # Plans are often assigned to a local `plan`/`p`
+                        # variable and only that variable is passed here.
+                        action = _state_tool_action(name, js, action_call_id)
                 if action is None:
                     action = _collaboration_call(
                         name,
@@ -449,7 +512,11 @@ def _rsp_custom_tool_call(custom_tool_call_payload: CustomToolCallPayload) -> Ro
                         javascript=True,
                     )
                 if action is None:
-                    return UnmappedToolRecord(name=f"batched {name}")
+                    action = ToolRecord(
+                        name=name,
+                        args=arguments,
+                        call_id=action_call_id,
+                    )
                 actions.append(action)
             return ToolBatchRecord(call_id=call_id, actions=tuple(actions)) if actions else empty_record()
         cmd = _exec_cmd_from_js(js)
@@ -472,6 +539,10 @@ def _rsp_custom_tool_call(custom_tool_call_payload: CustomToolCallPayload) -> Ro
             # JavaScript that inspects the execution environment but calls no
             # tool is known execution plumbing. It has no canonical activity.
             return empty_record()
+        if fn == "exec":
+            # Early code-mode models occasionally echoed the wrapper itself as
+            # `tools.exec(...)`. It is transport syntax, not a nested tool.
+            return empty_record()
         if fn == "apply_patch":
             return empty_record()
         if fn == "write_stdin":
@@ -484,6 +555,10 @@ def _rsp_custom_tool_call(custom_tool_call_payload: CustomToolCallPayload) -> Ro
             return CoveredItemRecord()
         if fn == "update_plan":
             tasks = _plan_tasks(args)
+            if tasks is None:
+                # The argument commonly references a local `plan`/`p`
+                # declaration in the same JavaScript cell.
+                tasks = _plan_tasks(js)
             if tasks is None:
                 return UnmappedToolRecord(name="update_plan")
             return TaskListRecord(tasks=tasks, call_id=call_id)
@@ -657,6 +732,14 @@ def _rsp_function_call(function_call_payload: FunctionCallPayload) -> RolloutRec
         # Deferred custom-tool orchestration. The originating tool owns the
         # semantic fact; waiting for its cell only schedules transport work.
         return empty_record()
+    if name == "run":
+        # The pre-code-mode web connector exposed the same request grammar as a
+        # direct function named `run`; current Codex calls `tools.web__run`.
+        return ToolRecord(
+            name="web__run",
+            args=arguments or "{}",
+            call_id=CodexCallId(p.call_id or ""),
+        )
     try:
         collaboration_name = CollaborationCallName(name)
     except ValueError:

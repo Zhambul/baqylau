@@ -9,6 +9,9 @@ from dataclasses import dataclass
 from enum import StrEnum
 from urllib.parse import quote, urlsplit
 
+from api.application.models.preferences.global_application_response import (
+    GlobalApplicationResponse,
+)
 from api.controls.models.control_outcome_response import PlanChoicesResultResponse
 from api.common.models.values.usage_row import UsageRowResponse, UsageWindowResponse
 from api.sessiondata.models.entry import FileBodyResponse, QuestionResponse
@@ -19,6 +22,7 @@ from playwright.sync_api import (
     Locator,
     Page,
     Request,
+    Route,
     TimeoutError as PlaywrightTimeoutError,
     expect,
 )
@@ -121,6 +125,7 @@ class BrowserSessionDriver:
         self._browser_failures: list[str] = []
         self._request_paths: list[str] = []
         self._network_drop_expected = False
+        self._usage_document_marker: str | None = None
         page.on("console", self._record_console_error)
         page.on("pageerror", lambda error: self._browser_failures.append(str(error)))
         page.on("request", self._record_request)
@@ -133,6 +138,44 @@ class BrowserSessionDriver:
         expect(self._page.get_by_role("button", name="+ session")).to_be_visible(
             timeout=self._milliseconds(self._wait_policy.feed),
         )
+        if self._usage_document_marker == "pending":
+            marker = self._page.evaluate(
+                "() => globalThis.__baqylauUsageDocumentMarker"
+            )
+            if not isinstance(marker, str):
+                raise AssertionError("the browser document marker is missing")
+            self._usage_document_marker = marker
+
+    def omit_usage_from_next_application_read(self, harness: str) -> None:
+        self._page.add_init_script(
+            "globalThis.__baqylauUsageDocumentMarker = crypto.randomUUID()"
+        )
+        self._usage_document_marker = "pending"
+
+        def omit(route: Route) -> None:
+            response = route.fetch()
+            document = GlobalApplicationResponse.model_validate(response.json())
+            filtered = document.model_copy(update={
+                "usage_rows": tuple(
+                    row for row in document.usage_rows if row.harness != harness
+                ),
+            })
+            route.fulfill(response=response, json=filtered.model_dump(mode="json"))
+
+        self._page.route("**/api/application", omit, times=1)
+
+    def assert_usage_row_appears_without_reload(self, harness: str) -> None:
+        marker = self._usage_document_marker
+        if marker is None or marker == "pending":
+            raise AssertionError("the initial application read was not intercepted")
+        name = self._page.locator(".aname").filter(
+            has_text=re.compile(rf"^{re.escape(harness)}$")
+        )
+        expect(name).to_be_visible(timeout=15_000)
+        current_marker = self._page.evaluate(
+            "() => globalThis.__baqylauUsageDocumentMarker"
+        )
+        assert current_marker == marker, "the browser reloaded the document"
 
     def start(self, spec: SessionSpec, prompt: str) -> BrowserSessionStart:
         known = frozenset(

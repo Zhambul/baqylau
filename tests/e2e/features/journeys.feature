@@ -180,3 +180,47 @@ Feature: sessions cross dashboard and terminal boundaries
       | harness     | model        |
       | codex       | gpt-5.6-luna |
       | claude_code | haiku        |
+
+  Scenario Outline: renaming a completed session keeps its terminal tab done
+    Given session configuration "primary" uses <harness> with model <model> and low effort
+    When I start journey session "primary" from the terminal as turn "before rename" with prompt
+      """
+      Do not use tools. Reply only with READY_TO_RENAME.
+      """
+    Then turn "before rename" completes
+    And turn "before rename" has final answer 'READY_TO_RENAME'
+    And the terminal tab for journey session "primary" has color awaiting_response
+    When I rename session "primary" to 'Renamed completed E2E session' as control "completed rename"
+    Then control "completed rename" response is accepted
+    And control "completed rename" outcome is acknowledged
+    And session "primary" has title 'Renamed completed E2E session'
+    And the lead in session "primary" has status awaiting_response
+    And the terminal tab for journey session "primary" has color awaiting_response
+    When I request an automatic name for session "primary" as control "completed automatic rename"
+    Then control "completed automatic rename" response is accepted
+    And control "completed automatic rename" outcome is acknowledged
+    And session "primary" title is not 'Renamed completed E2E session'
+    And the lead in session "primary" has status awaiting_response
+    And the terminal tab for journey session "primary" has color awaiting_response
+
+    Examples:
+      | harness     | model        |
+      | codex       | gpt-5.6-luna |
+      | claude_code | haiku        |
+
+  Scenario: stopping a Claude background command returns its terminal tab to done
+    Given session configuration "primary" uses claude_code with model haiku and low effort
+    When I start journey session "primary" from the terminal as turn "stop background command" with prompt
+      """
+      Your first tool call must use Bash to run the exact command `sleep 120`
+      with run_in_background set to true. After Bash returns the background task
+      ID, load TaskStop if needed and use TaskStop for that exact task ID. Do not
+      wait for automatic completion. Then, reply only with BACKGROUND_STOPPED.
+      """
+    Then turn "stop background command" completes
+    And turn "stop background command" has final answer 'BACKGROUND_STOPPED'
+    When I name the only background job in turn "stop background command" containing 'sleep 120' "stopped background command"
+    Then job "stopped background command" ends
+    And session "primary" has no running work
+    And the lead in session "primary" has status awaiting_response
+    And the terminal tab for journey session "primary" has color awaiting_response

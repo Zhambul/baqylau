@@ -32,9 +32,27 @@ def browser_is_on_session_list(browser_session_driver: BrowserSessionDriver) -> 
     browser_session_driver.open_session_list()
 
 
+@given(parsers.parse("the next browser application read omits usage for {harness}"))
+def next_browser_application_read_omits_usage(
+    browser_session_driver: BrowserSessionDriver,
+    harness: str,
+) -> None:
+    browser_session_driver.omit_usage_from_next_application_read(harness)
+
+
 @when("I open the browser session list")
 def open_browser_session_list(browser_session_driver: BrowserSessionDriver) -> None:
     browser_session_driver.open_session_list()
+
+
+@then(parsers.parse(
+    "the browser shows the {harness} usage row without reloading the document"
+))
+def browser_shows_usage_without_reload(
+    browser_session_driver: BrowserSessionDriver,
+    harness: str,
+) -> None:
+    browser_session_driver.assert_usage_row_appears_without_reload(harness)
 
 
 @when(parsers.parse('I release active browser work in session "{session_name}"'))

@@ -139,6 +139,14 @@ class SessionDataRepository(Protocol):
         """Every session's aggregate — the list view, one query per table."""
         ...
 
+    def running(self) -> tuple[SessionData, ...]:
+        """Each running session's aggregate.
+
+        The live list must not read and decode all finished session history to
+        discard it at the API boundary.
+        """
+        ...
+
     def working_directories(self) -> tuple[str, ...]:
         """Each directory in session history, most recently used first."""
         ...

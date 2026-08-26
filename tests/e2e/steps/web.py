@@ -105,6 +105,27 @@ def search_has_state(
     assert _search(client.sessions.snapshot(reference.session), reference).state == state
 
 
+@then(parsers.parse('search "{name}" has result containing \'{text}\''))
+def search_has_result(
+    client: BaqylauClient,
+    searches: Searches,
+    wait_policy: WaitPolicy,
+    name: str,
+    text: str,
+) -> None:
+    reference = searches.get(name)
+
+    def contains(snapshot: SessionSnapshot) -> bool | None:
+        result = _search(snapshot, reference).result
+        return True if result is not None and text in result.text else None
+
+    client.sessions.watch(reference.session).wait(
+        f"search {name!r} result to contain {text!r}",
+        contains,
+        timeout=wait_policy.feed,
+    )
+
+
 @then(parsers.parse('web fetch "{name}" has state {state}'))
 def web_fetch_has_state(
     client: BaqylauClient,
