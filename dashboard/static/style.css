@@ -1751,6 +1751,11 @@ body.modal-open { overflow: hidden; }
 .rwmenu .rwopt:disabled { opacity: .5; cursor: default; }
 .rwmenu .rwx { color: var(--dim); background: transparent; }
 .msg.message { border-left-color: color-mix(in srgb, var(--mid) 55%, transparent); }
+/* Model thinking is useful context, but it should sit behind the answer in the
+   visual hierarchy. Concise reasoning often arrives wrapped in markdown bold;
+   keep that markup from making thinking louder than ordinary conversation. */
+.msg.thinking .md { color: var(--dim); font-size: 12.5px; }
+.msg.thinking .md strong { color: inherit; font-weight: 400; }
 /* team mail, both directions — ONE look, because it is one conversation: an agent's
    `✉ from <peer>` and `✉ to <peer>` are the two halves of the same exchange and
    reading them in different registers is what made an outgoing report look like

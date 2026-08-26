@@ -314,7 +314,7 @@ export function presentEntry(
       return {
         ...metadata(entry, 'messages', 'message', 'message'),
         kind: 'message',
-        className: 'message',
+        className: 'thinking',
         label: actorName(entry, actors),
         body: contentBody(entry.body.content),
         questions: [],

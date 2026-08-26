@@ -34,4 +34,33 @@ describe('entry presentation', () => {
       label: 'parent agent',
     });
   });
+
+  it('marks reasoning as visually quiet thinking', () => {
+    const entry: Entry = {
+      type: 'reasoning',
+      entryId: entryId('reasoning-one'),
+      cursor: 1,
+      actorId: actorId('lead'),
+      parentActorId: null,
+      turnId: 'turn-one',
+      occurredAt: 1,
+      summary: null,
+      body: {
+        reasoningId: 'reasoning-one',
+        content: {
+          text: '**Inspecting the frontend**',
+          mediaType: 'text/markdown',
+        },
+      },
+    };
+
+    const presentation = presentEntry(entry, new Map());
+
+    expect(presentation).toMatchObject({
+      kind: 'message',
+      className: 'thinking',
+      conversationKind: 'message',
+      label: 'lead',
+    });
+  });
 });
