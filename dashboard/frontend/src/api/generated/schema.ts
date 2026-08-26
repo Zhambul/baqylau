@@ -1806,6 +1806,8 @@ export interface components {
             supports_accounts: boolean;
             /** Supports Terminal Input */
             supports_terminal_input: boolean;
+            /** Supports Readable Compaction Context */
+            supports_readable_compaction_context: boolean;
             /** Requires Initial Message */
             requires_initial_message: boolean;
         };

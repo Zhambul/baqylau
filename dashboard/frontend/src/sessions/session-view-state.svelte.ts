@@ -157,7 +157,12 @@ export class SessionViewState {
   readonly feedItems = $derived.by(() => {
     const actors = new SvelteMap<ActorId, string>();
     for (const actor of this.actors) actors.set(actor.actorId, actor.name);
-    return buildFeedItems(this.entries, actors, this.shellFolds);
+    return buildFeedItems(
+      this.entries,
+      actors,
+      this.shellFolds,
+      this.harness?.supportsReadableCompactionContext ?? false,
+    );
   });
   readonly visibleFeedCount = $derived(
     visibleDensityCount(

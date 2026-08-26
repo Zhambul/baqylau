@@ -15,11 +15,21 @@ function wireHarness(controlNames: string[]): WireHarness {
     control_names: controlNames,
     supports_accounts: false,
     supports_terminal_input: true,
+    supports_readable_compaction_context: false,
     requires_initial_message: false,
   };
 }
 
 describe('harness translator', () => {
+  it('maps readable compaction context support independently of controls', () => {
+    expect(
+      translateHarness({
+        ...wireHarness([]),
+        supports_readable_compaction_context: true,
+      }).supportsReadableCompactionContext,
+    ).toBe(true);
+  });
+
   it('denies every action when the server declares no controls', () => {
     expect(translateHarness(wireHarness([])).capabilities).toEqual({
       send: false,

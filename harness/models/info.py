@@ -30,6 +30,9 @@ class HarnessInfo:
     default_for_launch: bool = False
     supports_accounts: bool = False
     supports_native_automatic_renaming: bool = False
+    # Whether compaction yields readable context for people, rather than only
+    # an opaque continuation item for the harness itself.
+    supports_readable_compaction_context: bool = False
     # A queued Enter is owned by the CLI and drains at its turn boundary. When
     # false, the application keeps the item durable and submits it after the
     # canonical turn-finished fact.

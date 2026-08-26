@@ -21,6 +21,7 @@ export type HarnessDescription = {
   readonly supportsAttachments: boolean;
   readonly supportsAccounts: boolean;
   readonly supportsTerminalInput: boolean;
+  readonly supportsReadableCompactionContext: boolean;
   readonly requiresInitialMessage: boolean;
   readonly capabilities: SessionCapabilities;
 };

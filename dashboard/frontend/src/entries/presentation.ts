@@ -297,6 +297,7 @@ export function presentEntry(
   entry: Entry,
   actors: ReadonlyMap<ActorId, string>,
   questionText: QuestionTextIndex = new Map(),
+  supportsReadableCompactionContext = true,
 ): EntryPresentation {
   switch (entry.type) {
     case 'turn_started':
@@ -458,7 +459,9 @@ export function presentEntry(
       return note(
         entry,
         `Context compacted${detail}`,
-        contentBody(entry.body.context),
+        contentBody(
+          supportsReadableCompactionContext ? entry.body.context : null,
+        ),
         'succeeded',
         'compaction',
       );

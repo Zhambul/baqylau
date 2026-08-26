@@ -36,6 +36,8 @@ export function translateHarness(
     supportsAttachments: wire.supports_attachments,
     supportsAccounts: wire.supports_accounts,
     supportsTerminalInput: wire.supports_terminal_input,
+    supportsReadableCompactionContext:
+      wire.supports_readable_compaction_context,
     requiresInitialMessage: wire.requires_initial_message,
     capabilities: capabilities(wire.control_names),
   };

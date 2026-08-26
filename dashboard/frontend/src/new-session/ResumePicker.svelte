@@ -9,6 +9,7 @@
   import FeedItem from '../entries/FeedItem.svelte';
   import { buildFeedItems } from '../entries/feed-model';
   import type { FeedItem as FeedItemModel } from '../entries/feed-model';
+  import type { HarnessDescription } from '../harnesses/model';
   import type { ResumableSession } from './model';
   import { initialEntriesNewestFirst } from '../sessions/session-reducer';
   import { foldShellEntries } from '../sessions/shell-fold';
@@ -18,10 +19,12 @@
 
   let {
     workingDirectory,
+    harnesses,
     value = $bindable<SessionId | null>(null),
     onselect,
   }: {
     workingDirectory: string;
+    harnesses: readonly HarnessDescription[];
     value?: SessionId | null;
     onselect: (session: ResumableSession) => void;
   } = $props();
@@ -168,7 +171,17 @@
         newest,
         lead?.background.runningShellIds ?? [],
       );
-      previewItems = [...buildFeedItems(newest, actorNames, shells)].reverse();
+      const supportsReadableCompactionContext =
+        harnesses.find((harness) => harness.name === snapshot.session.harness)
+          ?.supportsReadableCompactionContext ?? false;
+      previewItems = [
+        ...buildFeedItems(
+          newest,
+          actorNames,
+          shells,
+          supportsReadableCompactionContext,
+        ),
+      ].reverse();
     } catch (error) {
       if (controller.signal.aborted) return;
       previewFailure = error instanceof Error ? error.message : String(error);

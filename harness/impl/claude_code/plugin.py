@@ -57,6 +57,7 @@ plugin = HarnessPlugin(
         default_for_launch=True,
         supports_accounts=False,
         supports_native_automatic_renaming=True,
+        supports_readable_compaction_context=True,
         supports_native_text_queue=True,
         models=MODELS,
         rewind_modes=REWIND_MODES,

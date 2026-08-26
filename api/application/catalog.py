@@ -40,6 +40,9 @@ def harnesses(registry: Registry) -> list[HarnessDescriptionResponse]:
             })),
             supports_accounts=plugin.info.supports_accounts,
             supports_terminal_input=plugin.terminal_probe is not None,
+            supports_readable_compaction_context=(
+                plugin.info.supports_readable_compaction_context
+            ),
             requires_initial_message=plugin.info.requires_initial_message,
         )
         for plugin in registry.plugins()

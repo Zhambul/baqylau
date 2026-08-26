@@ -261,6 +261,7 @@ export function buildFeedItems(
   entries: readonly Entry[],
   actors: ReadonlyMap<ActorId, string>,
   shells: readonly ShellFold[],
+  supportsReadableCompactionContext = false,
 ): readonly FeedItem[] {
   const shellById = new Map(shells.map((shell) => [shell.shellId, shell]));
   const skillFinishedById = new Map(
@@ -295,7 +296,12 @@ export function buildFeedItems(
       );
       continue;
     }
-    const presentation = presentEntry(entry, actors, questions);
+    const presentation = presentEntry(
+      entry,
+      actors,
+      questions,
+      supportsReadableCompactionContext,
+    );
     if (presentation.kind !== 'hidden') items.push(presentation);
   }
   return items;

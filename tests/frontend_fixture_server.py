@@ -32,7 +32,6 @@ def _seed(data_directory: Path, port: int) -> dict[Any, Any]:
         ActorStarted,
         CanonicalEvent,
         CompactionFinished,
-        CompactionStarted,
         ContextReported,
         EffortChanged,
         FileAccessed,
@@ -358,12 +357,6 @@ def _seed(data_directory: Path, port: int) -> dict[Any, Any]:
         seconds_ago=672.6,
     )
     add(
-        "active-compaction-started",
-        CompactionStarted(82_000),
-        turn_id=turn,
-        seconds_ago=672.5,
-    )
-    add(
         "active-compaction",
         CompactionFinished(
             82_000,
@@ -375,18 +368,6 @@ def _seed(data_directory: Path, port: int) -> dict[Any, Any]:
         ),
         turn_id=turn,
         seconds_ago=672.4,
-    )
-    add(
-        "active-opaque-compaction-started",
-        CompactionStarted(42_000),
-        turn_id=turn,
-        seconds_ago=672.3,
-    )
-    add(
-        "active-opaque-compaction",
-        CompactionFinished(42_000, 9_000, None),
-        turn_id=turn,
-        seconds_ago=672.2,
     )
     background = ShellId("fixture-background")
     add(

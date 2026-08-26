@@ -555,6 +555,7 @@
         <ResumePicker
           bind:value={resumeSessionId}
           {workingDirectory}
+          harnesses={appState.harnesses}
           onselect={selectResume}
         />
       </div>
