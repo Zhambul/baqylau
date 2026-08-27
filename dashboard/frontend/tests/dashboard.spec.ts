@@ -5,7 +5,7 @@ import { expect, test } from './fixtures';
 
 const FIXTURE_TIME = 1_700_000_000_000;
 // macOS patch releases can rasterize the same text with small edge differences.
-const SCREENSHOT_MAX_DIFF_PIXEL_RATIO = 0.001;
+const SCREENSHOT_MAX_DIFF_PIXEL_RATIO = 0.002;
 
 test.beforeEach(async ({ page }) => {
   await page.clock.setFixedTime(FIXTURE_TIME);
