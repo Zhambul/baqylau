@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { onDestroy, tick } from 'svelte';
 
   import type { HarnessCatalog } from '../harnesses/model';
   import PresentationBody from './PresentationBody.svelte';
@@ -95,6 +95,11 @@
 
   async function copyBody(event: MouseEvent): Promise<void> {
     event.stopPropagation();
+    if (!open) {
+      userSet = true;
+      open = true;
+      await tick();
+    }
     const target = event.currentTarget;
     if (!(target instanceof Element)) return;
     const block = target.closest('.blk');
@@ -209,7 +214,9 @@
           ></span
         >
       </div>
-      <div class="bbody"><PresentationBody body={presentation.body} /></div>
+      {#if open}
+        <div class="bbody"><PresentationBody body={presentation.body} /></div>
+      {/if}
     </div>
   {/if}
 {:else if presentation.kind === 'block'}
@@ -271,7 +278,9 @@
         {/if}
       </span>
     </div>
-    <div class="bbody"><PresentationBody body={presentation.body} /></div>
+    {#if open}
+      <div class="bbody"><PresentationBody body={presentation.body} /></div>
+    {/if}
   </div>
 {/if}
 

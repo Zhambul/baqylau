@@ -19,7 +19,7 @@ import os
 import time
 
 from domain.ids import HarnessName, RawEventId, SessionId, ShellId
-from domain.shells import ShellOutputFollowing
+from domain.shells import ShellOutputFollowing, shell_output_source_key
 from domain.values import ProgressStream
 from harness.contract import HarnessRawEventSource
 from harness.models import RawEvent
@@ -33,9 +33,12 @@ FINISHED_POSITION = "finished"
 
 
 def shell_output_source_identity(
-    harness: HarnessName, session_id: SessionId, shell_id: ShellId
+    harness: HarnessName, session_id: SessionId, shell_id: ShellId, source_path: str
 ) -> str:
-    return f"{harness}:shell_output:{session_id}:{shell_id}"
+    return (
+        f"{harness}:shell_output:{session_id}:{shell_id}:"
+        f"{shell_output_source_key(source_path)}"
+    )
 
 
 def delete_source_file(shell_output_following: ShellOutputFollowing) -> None:
@@ -69,6 +72,7 @@ class ShellOutputRawEventSource(HarnessRawEventSource):
             shell_output_following.harness,
             shell_output_following.session_id,
             shell_output_following.shell_id,
+            shell_output_following.source_path,
         )
 
     def read(self, after_position: str | None) -> tuple[RawEvent, ...]:
@@ -97,7 +101,11 @@ class ShellOutputRawEventSource(HarnessRawEventSource):
                         break
                     raw_events.append(self._chunk(chunk_position, source.tell(), content))
         if following.finishing:
-            self.shell_output_repository.remove(following.session_id, following.shell_id)
+            self.shell_output_repository.remove(
+                following.session_id,
+                following.shell_id,
+                following.source_path,
+            )
             delete_source_file(following)
             if raw_events:
                 last = raw_events[-1]
@@ -135,6 +143,7 @@ class ShellOutputRawEventSource(HarnessRawEventSource):
                 shell_id=following.shell_id,
                 ordinal=start,
                 stream=ProgressStream.OUTPUT,
+                source_key=shell_output_source_key(following.source_path),
             )
         )
         content_hash = hashlib.sha256(content).hexdigest()

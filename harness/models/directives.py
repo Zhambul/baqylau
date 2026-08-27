@@ -39,6 +39,9 @@ class ShellOutputChunk:
     shell_id: ShellId
     ordinal: int
     stream: ProgressStream
+    # Old stored chunks have no key. Their event identity keeps the former
+    # ordinal-only form when the translator reads them again.
+    source_key: str | None = None
 
 
 @dataclass(frozen=True)

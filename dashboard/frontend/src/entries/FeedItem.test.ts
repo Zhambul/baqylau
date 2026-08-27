@@ -44,6 +44,7 @@ describe('feed item', () => {
     const block = container.querySelector('.blk');
 
     expect(block).toHaveAttribute('data-open', '0');
+    expect(screen.queryByText('newValue', { exact: false })).toBeNull();
     const header = container.querySelector('.bhead');
     expect(header).toHaveAttribute('role', 'button');
     if (!(header instanceof HTMLElement)) throw new Error('header is missing');
@@ -63,5 +64,27 @@ describe('feed item', () => {
     expect(container.querySelector('.added .token.keyword')).toHaveTextContent(
       'const',
     );
+  });
+
+  it('renders a closed body before it copies the body text', async () => {
+    const user = userEvent.setup();
+    const { container } = render(FeedItem, {
+      presentation: EDIT,
+      extraClass: '',
+      defaultOpen: false,
+      rewindModes: [],
+      rewindOpen: false,
+      onOpenRewind: undefined,
+      onCancelRewind: undefined,
+      onRewind: undefined,
+    });
+    const block = container.querySelector('.blk');
+
+    expect(block).toHaveAttribute('data-open', '0');
+    expect(container.querySelector('.bbody')).toBeNull();
+    await user.click(screen.getByRole('button', { name: '⧉copy' }));
+
+    expect(block).toHaveAttribute('data-open', '1');
+    expect(container.querySelector('.bbody')).not.toBeNull();
   });
 });

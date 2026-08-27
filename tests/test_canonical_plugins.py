@@ -132,6 +132,7 @@ from harness.impl.claude_code.canonical.sources import (
 )
 from harness.impl.claude_code.hooks import gateway as claude_hooks
 from harness.impl.claude_code.hooks import foreground as claude_foreground
+from harness.impl.claude_code import shell as claude_shell
 from harness.impl.claude_code.controls import (
     controller as claude_controller,
     confirmdialog,
@@ -1678,7 +1679,7 @@ def test_claude_hook_returns_native_pretool_output_and_an_output_location(monkey
     monkeypatch.setattr(
         claude_hooks.foreground,
         "prepare",
-        lambda value: SimpleNamespace(reply=expected, located=located),
+        lambda value: SimpleNamespace(reply=expected, locations=(located,)),
     )
 
     response = claude_hooks.ClaudeHookGateway().handle(hook_request(json.dumps(document).encode()))
@@ -2243,11 +2244,99 @@ def test_claude_foreground_prepare_rewrites_the_command_into_an_output_location(
     updated_command = native_output["hookSpecificOutput"]["updatedInput"]["command"]
     assert native_output["hookSpecificOutput"]["permissionDecision"] == "allow"
     assert "tee -a" in updated_command
-    assert prepared.located.shell_id == "command-one"
-    assert prepared.located.delete_source is True
-    assert prepared.located.until == "shell_finished"
-    assert prepared.located.chunk_source_type == "foreground_output"
-    assert prepared.located.source_path in updated_command
+    assert len(prepared.locations) == 1
+    located = prepared.locations[0]
+    assert located.shell_id == "command-one"
+    assert located.delete_source is True
+    assert located.until == "shell_finished"
+    assert located.chunk_source_type == "foreground_output"
+    assert located.source_path in updated_command
+
+
+def test_claude_shell_finds_every_static_redirect_and_pipe_sink(tmp_path):
+    command = (
+        "cd nested && task > first.log 2> /tmp/errors.log; "
+        "echo exit >> first.log; printf pipe | tee -a /tmp/pipe-one.log /tmp/pipe-two.log >/dev/null"
+    )
+
+    found = claude_shell.redirected_outputs(command, str(tmp_path))
+
+    assert [(item.path, item.append) for item in found] == [
+        (str(tmp_path / "nested" / "first.log"), False),
+        ("/tmp/errors.log", False),
+        ("/tmp/pipe-one.log", True),
+        ("/tmp/pipe-two.log", True),
+    ]
+
+
+def test_claude_shell_finds_a_pipe_sink_in_process_substitution():
+    found = claude_shell.redirected_outputs(
+        "task > >(tee /tmp/process-output.log)",
+        "/work",
+    )
+
+    assert [(item.path, item.append) for item in found] == [
+        ("/tmp/process-output.log", False),
+    ]
+
+
+def test_claude_background_pretool_locates_all_redirected_files():
+    document = {
+        "session_id": "claude-session",
+        "transcript_path": "/work/claude.jsonl",
+        "cwd": "/work",
+        "hook_event_name": "PreToolUse",
+        "hook_event_id": "pre-background-one",
+        "tool_name": "Bash",
+        "tool_use_id": "background-one",
+        "tool_input": {
+            "command": (
+                "deploy > /tmp/deploy.log 2>&1; echo done >> /tmp/deploy.log; "
+                "printf pipe | tee /tmp/pipe.log >/dev/null"
+            ),
+            "run_in_background": True,
+        },
+    }
+
+    response = claude_hooks.ClaudeHookGateway().handle(
+        hook_request(json.dumps(document).encode())
+    )
+
+    directives = [row for row in response.raw_events if row.source_type == "output_location"]
+    assert response.reply == b""
+    assert [json.loads(row.payload)["source_path"] for row in directives] == [
+        "/tmp/deploy.log",
+        "/tmp/pipe.log",
+    ]
+    assert all(json.loads(row.payload)["until"] == "session_finished" for row in directives)
+    assert len({row.raw_event_id for row in directives}) == 2
+
+
+def test_claude_monitor_pretool_locates_redirected_files_without_rewriting_input():
+    document = {
+        "session_id": "claude-session",
+        "transcript_path": "/work/claude.jsonl",
+        "cwd": "/work",
+        "hook_event_name": "PreToolUse",
+        "hook_event_id": "pre-monitor-one",
+        "tool_name": "Monitor",
+        "tool_use_id": "monitor-one",
+        "tool_input": {
+            "command": "watch-command > /tmp/monitor.log 2>&1",
+            "description": "watch changes",
+            "persistent": True,
+        },
+    }
+
+    response = claude_hooks.ClaudeHookGateway().handle(
+        hook_request(json.dumps(document).encode())
+    )
+
+    directives = [row for row in response.raw_events if row.source_type == "output_location"]
+    assert response.reply == b""
+    assert len(directives) == 1
+    assert json.loads(directives[0].payload)["source_path"] == "/tmp/monitor.log"
+    assert json.loads(directives[0].payload)["until"] == "session_finished"
 
 
 def test_claude_foreground_bytes_flow_through_raw_audit_into_operation_projection(
@@ -2292,6 +2381,67 @@ def test_claude_foreground_bytes_flow_through_raw_audit_into_operation_projectio
     foreground_evidence = [row for row in evidence if row.raw_event.source_type == "foreground_output"]
     assert len(foreground_evidence) == 1
     assert base64.b64decode(json.loads(foreground_evidence[0].raw_event.payload)["content_base64"]) == b"hello\n"
+
+
+def test_claude_several_redirected_files_flow_into_one_background_shell(
+    monkeypatch,
+    tmp_path,
+):
+    application = tmp_path / "application"
+    first = tmp_path / "deploy.log"
+    second = tmp_path / "pipe.log"
+    monkeypatch.setenv("BAQYLAU_DATA_DIR", str(application))
+    document = {
+        "session_id": "session-one",
+        "transcript_path": str(tmp_path / "session-one.jsonl"),
+        "cwd": str(tmp_path),
+        "hook_event_name": "PreToolUse",
+        "hook_event_id": "pre-background-one",
+        "tool_name": "Bash",
+        "tool_use_id": "background-one",
+        "tool_input": {
+            "command": (
+                f"deploy > {first} 2>&1; echo done >> {first}; "
+                f"printf pipe | tee {second} >/dev/null"
+            ),
+            "run_in_background": True,
+        },
+    }
+    _deliver_hook(claude_hooks.ClaudeHookGateway(), json.dumps(document).encode())
+    runtime, interpreter = interpreting_runtime(application / "main.db")
+    runtime.register(
+        "claude_code",
+        Session(
+            SessionId("session-one"),
+            ActorId("session-one:lead"),
+            str(tmp_path / "session-one.jsonl"),
+            str(tmp_path),
+            harness_process_id=1003,
+        ),
+    )
+
+    interpreter.tick()
+    followings = runtime.shell_output.find_for_session(SessionId("session-one"))
+    assert [item.source_path for item in followings] == [str(first), str(second)]
+    first.write_text("deploy-output\nexit=0\n")
+    second.write_text("pipe-output\n")
+    interpreter.tick()
+
+    output = shell_output_text(
+        runtime,
+        SessionId("session-one"),
+        ShellId("background-one"),
+    )
+    assert "deploy-output\nexit=0\n" in output
+    assert "pipe-output\n" in output
+    progressed = [
+        event
+        for event in runtime.store.page_from(0, 100)
+        if isinstance(event.payload, ShellProgressed)
+        and event.payload.shell_id == ShellId("background-one")
+    ]
+    assert len(progressed) == 2
+    assert len({event.event_id for event in progressed}) == 2
 
 
 def pane_terminal():
@@ -5038,6 +5188,67 @@ def test_claude_resumed_child_assignment_correlation_survives_restart(tmp_path):
     assert finished.payload.result.text == "FOLLOWUP_MARKER_417"
 
 
+def test_claude_foreground_shell_completion_survives_translator_restart(tmp_path):
+    call = {
+        "type": "assistant",
+        "uuid": "assistant-before-restart",
+        "message": {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "shell-before-restart",
+                    "name": "Bash",
+                    "input": {"command": "python -c 'pass'"},
+                }
+            ]
+        },
+    }
+    result = {
+        "type": "user",
+        "uuid": "result-after-restart",
+        "message": {
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "shell-before-restart",
+                    "content": "",
+                }
+            ]
+        },
+    }
+    lines = tuple(json.dumps(document) + "\n" for document in (call, result))
+    source = tmp_path / "claude-restart.jsonl"
+    source.write_text("".join(lines), encoding="utf-8")
+
+    started = ClaudeCanonicalTranslator().translate(
+        replace(
+            raw_event(
+                call,
+                harness=HarnessName.CLAUDE_CODE,
+                source_type="transcript",
+                raw_event_id="claude-call-before-restart",
+                source_position="0",
+            ),
+            source_name=str(source),
+        )
+    )
+    finished = ClaudeCanonicalTranslator().translate(
+        replace(
+            raw_event(
+                result,
+                harness=HarnessName.CLAUDE_CODE,
+                source_type="transcript",
+                raw_event_id="claude-result-after-restart",
+                source_position=str(len(lines[0].encode())),
+            ),
+            source_name=str(source),
+        )
+    )
+
+    shell_id = payloads(started, ShellStarted)[0].payload.shell_id
+    assert payloads(finished, ShellFinished)[0].payload.shell_id == shell_id
+
+
 def test_claude_background_completion_is_an_output_finish_not_an_agent_finish():
     """Background Bash completions ride the SAME <task-notification> channel as
     agent completions; treating them as assignment finishes painted phantom
@@ -5729,6 +5940,71 @@ def test_codex_yielded_exec_closes_the_original_shell_after_translator_restart(
     assert payloads(after_restart, ShellStarted) == []
     assert payloads(after_restart, ShellFinished)[0].payload.shell_id == shell_id
     assert payloads(after_restart, ShellOutputFinished)[0].payload.shell_id == shell_id
+
+
+def test_codex_foreground_exec_closes_the_original_shell_after_translator_restart(
+    tmp_path,
+):
+    call = {
+        "type": "response_item",
+        "payload": {
+            "type": "custom_tool_call",
+            "name": "exec",
+            "call_id": "call-before-restart",
+            "input": (
+                "const r = await tools.exec_command({"
+                'cmd:"python -c \'pass\'",yield_time_ms:30000});'
+                "text(r.output);"
+            ),
+        },
+    }
+    completed = {
+        "type": "event_msg",
+        "payload": {
+            "type": "item_completed",
+            "item": {
+                "type": "CommandExecution",
+                "id": "native-after-restart",
+                "process_id": "22817",
+                "command": ["/bin/zsh", "-lc", "python -c 'pass'"],
+                "status": "completed",
+                "aggregated_output": "",
+                "exit_code": 0,
+            },
+        },
+    }
+    lines = tuple(json.dumps(document) + "\n" for document in (call, completed))
+    source = tmp_path / "rollout.jsonl"
+    source.write_text("".join(lines), encoding="utf-8")
+
+    started = CodexCanonicalTranslator().translate(
+        replace(
+            raw_event(
+                call,
+                harness=HarnessName.CODEX,
+                source_type="rollout",
+                raw_event_id="codex-call-before-restart",
+                source_position="0",
+            ),
+            source_name=str(source),
+        )
+    )
+    finished = CodexCanonicalTranslator().translate(
+        replace(
+            raw_event(
+                completed,
+                harness=HarnessName.CODEX,
+                source_type="rollout",
+                raw_event_id="codex-completion-after-restart",
+                source_position=str(len(lines[0].encode())),
+            ),
+            source_name=str(source),
+        )
+    )
+
+    shell_id = payloads(started, ShellStarted)[0].payload.shell_id
+    assert payloads(finished, ShellStarted) == []
+    assert payloads(finished, ShellFinished)[0].payload.shell_id == shell_id
 
 
 def test_codex_fast_exec_uses_the_authoritative_item_exit_code():

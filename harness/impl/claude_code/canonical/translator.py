@@ -92,12 +92,13 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
                 content(output_content.decode("utf-8", errors="replace")),
                 OutputMode.APPEND,
             )
+            source_phase = f":{chunk.source_key}" if chunk.source_key is not None else ""
             return TranslationResult(
                 (event(
                     raw_event,
                     "shell",
                     str(chunk.shell_id),
-                    f"progress:{chunk.ordinal}",
+                    f"progress{source_phase}:{chunk.ordinal}",
                     progress,
                 ),),
                 RecordedTranslationDecision.TRANSLATED,

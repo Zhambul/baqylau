@@ -643,7 +643,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
 
     def _pending_exec_shell_for_command(
         self,
-        source_key: str,
+        raw_event: RawEvent,
         native_command: tuple[str, ...],
     ) -> ShellId | None:
         """Match a completed native process to its wrapper command.
@@ -655,6 +655,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
         """
         if not native_command:
             return None
+        source_key = self._source_key(raw_event)
         command_texts = {" ".join(native_command)}
         if len(native_command) >= 3 and native_command[-2] in ("-c", "-lc"):
             command_texts.add(native_command[-1])
@@ -672,7 +673,66 @@ class CodexCanonicalTranslator(HarnessTranslator):
         ]
         # Equal commands have equal meaning here. Native completions arrive in
         # start order, so the oldest open wrapper is the stable owner.
-        return candidates[0] if candidates else None
+        if candidates:
+            return candidates[0]
+
+        # The call is durable in the rollout even when an application restart
+        # cleared translator memory. Rebuild the pending set up to, but not
+        # including, this completion record.
+        try:
+            end_position = int(raw_event.source_position)
+        except ValueError:
+            return None
+        pending: list[ExecRecord] = []
+        try:
+            with open(source_key, "rb") as source:
+                while source.tell() < end_position:
+                    line = source.readline()
+                    if not line:
+                        break
+                    try:
+                        recovered = rollout.parse_line(line.decode())
+                    except (UnicodeDecodeError, ValidationError):
+                        continue
+                    if isinstance(recovered, ExecRecord):
+                        if (
+                            _read_skill_name(recovered.cmd) is None
+                            and recovered.cmd in command_texts
+                        ):
+                            pending.append(recovered)
+                        continue
+                    if isinstance(recovered, ExecResultRecord):
+                        for index, call in enumerate(pending):
+                            if call.call_id != recovered.call_id:
+                                continue
+                            yielded = (
+                                call.yield_ms is not None
+                                and recovered.exit is None
+                                and not recovered.output
+                            )
+                            if not recovered.running and not yielded:
+                                pending.pop(index)
+                            break
+                        continue
+                    if (
+                        isinstance(recovered, CommandCompletedRecord)
+                        and recovered.command
+                    ):
+                        recovered_texts = {" ".join(recovered.command)}
+                        if (
+                            len(recovered.command) >= 3
+                            and recovered.command[-2] in ("-c", "-lc")
+                        ):
+                            recovered_texts.add(recovered.command[-1])
+                        if command_texts & recovered_texts and pending:
+                            pending.pop(0)
+        except OSError:
+            return None
+        if not pending:
+            return None
+        recovered_call = pending[0]
+        self._call_records[(source_key, recovered_call.call_id)] = recovered_call
+        return shell_id_from_codex_call(recovered_call.call_id)
 
     def _process_shell(
         self,
@@ -1829,7 +1889,7 @@ class CodexCanonicalTranslator(HarnessTranslator):
             completed_shell_id = self._process_shell(raw_event, process_id)
             if completed_shell_id is None:
                 completed_shell_id = self._pending_exec_shell_for_command(
-                    source_key,
+                    raw_event,
                     record.command,
                 )
             if completed_shell_id is None:

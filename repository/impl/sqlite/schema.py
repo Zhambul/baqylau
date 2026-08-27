@@ -25,7 +25,7 @@ columns, half of them null, and none of them queried.
 
 from __future__ import annotations
 
-MAIN_SCHEMA_VERSION = 20
+MAIN_SCHEMA_VERSION = 23
 AUDIT_SCHEMA_VERSION = 1
 
 # Version 4 rewrote the canonical vocabulary, so files older than that remain
@@ -63,6 +63,12 @@ AUDIT_SCHEMA_VERSION = 1
 # nonsemantic, so affected background jobs have no output-finished fact. The
 # current translator identifies TaskStop from the restored hook and recovers its
 # shell relation from the native transcript. Other ignored hooks stay ignored.
+# Version 21 runs the version 15 duplicate-shell repair again. Sessions created
+# after version 15 could still hit that defect until restart correlation became
+# durable in both translators.
+# Version 22 accepts the observed native order: the replacement shell can finish
+# before the empty wrapper marks the original shell as background work.
+# Version 23 lets one shell follow several redirected output files.
 MAIN_MIGRATIONS: dict[int, tuple[str, ...]] = {
     5: (
         """
@@ -357,7 +363,7 @@ MAIN_MIGRATIONS: dict[int, tuple[str, ...]] = {
               ON replacement_started.session_id = backgrounded.session_id
              AND replacement_started.actor_id = backgrounded.actor_id
              AND replacement_started.event_type = 'shell.started'
-             AND replacement_started.cursor > backgrounded.cursor
+             AND replacement_started.cursor > original_started.cursor
              AND json_extract(replacement_started.payload, '$.shell_id') !=
                  json_extract(backgrounded.payload, '$.shell_id')
              AND json_extract(replacement_started.payload, '$.command.text') =
@@ -384,9 +390,7 @@ MAIN_MIGRATIONS: dict[int, tuple[str, ...]] = {
                   FROM canonical_events AS original_closed
                   WHERE original_closed.session_id = backgrounded.session_id
                     AND original_closed.actor_id = backgrounded.actor_id
-                    AND original_closed.event_type IN (
-                        'shell.finished', 'shell.output_finished'
-                    )
+                    AND original_closed.event_type = 'shell.output_finished'
                     AND json_extract(original_closed.payload, '$.shell_id') =
                         json_extract(backgrounded.payload, '$.shell_id')
               )
@@ -622,7 +626,36 @@ MAIN_MIGRATIONS: dict[int, tuple[str, ...]] = {
           AND json_type(payload, '$.model.native_id') = 'text'
         """,
     ),
+    23: (
+        "ALTER TABLE shell_output RENAME TO shell_output_one_file",
+        """
+        CREATE TABLE shell_output(
+            session_id TEXT NOT NULL,
+            shell_id TEXT NOT NULL,
+            harness TEXT NOT NULL,
+            actor_id TEXT NOT NULL,
+            parent_actor_id TEXT,
+            source_path TEXT NOT NULL,
+            chunk_source_type TEXT NOT NULL,
+            delete_source INTEGER NOT NULL,
+            initial_size INTEGER NOT NULL,
+            initial_modified_at INTEGER NOT NULL,
+            wait_for_source_change INTEGER NOT NULL,
+            until TEXT NOT NULL CHECK(until IN ('shell_finished', 'session_finished')),
+            state TEXT NOT NULL CHECK(state IN ('active', 'finishing')),
+            created_at REAL NOT NULL,
+            PRIMARY KEY(session_id, shell_id, source_path)
+        )
+        """,
+        "INSERT INTO shell_output SELECT * FROM shell_output_one_file",
+        "DROP TABLE shell_output_one_file",
+    ),
 }
+
+# The repair is idempotent. Version 15 repaired old rows when it first shipped;
+# versions 21 and 22 repair rows that acquired the same shape after that upgrade.
+MAIN_MIGRATIONS[21] = MAIN_MIGRATIONS[15]
+MAIN_MIGRATIONS[22] = MAIN_MIGRATIONS[15]
 
 
 _SCHEMA_VERSION_TABLE = """
@@ -796,7 +829,7 @@ CREATE TABLE IF NOT EXISTS shell_output(
     until TEXT NOT NULL CHECK(until IN ('shell_finished', 'session_finished')),
     state TEXT NOT NULL CHECK(state IN ('active', 'finishing')),
     created_at REAL NOT NULL,
-    PRIMARY KEY(session_id, shell_id)
+    PRIMARY KEY(session_id, shell_id, source_path)
 );
 
 -- === the read model ========================================================

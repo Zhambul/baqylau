@@ -20,6 +20,7 @@ from harness.models import (
     output_location_raw_event,
 )
 from domain.ids import HarnessName, RawEventId
+from domain.values import ShellFollowUntil
 from harness.impl.claude_code.canonical.records import HookPayload, LaunchSelectionDocument
 from harness.impl.claude_code.ids import (
     ClaudeCodeActorId,
@@ -137,15 +138,26 @@ class ClaudeHookGateway(HarnessHookGateway):
             parent_actor_id=lead_actor_id if native_actor_id else None,
             source_reference=source_reference,
         )
-        if hook_name == "PreToolUse" and document.tool_name == "Bash":
-            prepared = foreground.prepare(document)
-            if prepared is not None:
-                reply = prepared.reply
-                raw_events.append(
-                    output_location_raw_event(
-                        context, HARNESS, prepared.located, payload=encode_document(prepared.located)
-                    )
+        if hook_name == "PreToolUse" and document.tool_name in {"Bash", "Monitor"}:
+            shell_arguments = document.shell_input()
+            if document.tool_name == "Bash" and not shell_arguments.run_in_background:
+                prepared = foreground.prepare(document)
+                if prepared is not None:
+                    reply = prepared.reply
+                    locations = prepared.locations
+                else:
+                    locations = ()
+            else:
+                locations = foreground.redirected_locations(
+                    document,
+                    ShellFollowUntil.SESSION_FINISHED,
                 )
+            raw_events.extend(
+                output_location_raw_event(
+                    context, HARNESS, located, payload=encode_document(located)
+                )
+                for located in locations
+            )
         elif hook_name in {"PostToolUse", "PostToolUseFailure"} \
                 and document.tool_name == "Bash":
             background = foreground.background_output(document)

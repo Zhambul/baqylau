@@ -6,3 +6,4 @@ uvicorn>=0.30
 pyyaml>=6.0        # the /openapi.yaml document
 cryptography>=43.0 # Web Push VAPID and payload encryption
 psutil>=6.0        # process identity and ancestry without a subprocess per hook
+bashlex>=0.18      # parse shell redirects without executing the command

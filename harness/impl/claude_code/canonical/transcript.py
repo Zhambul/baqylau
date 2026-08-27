@@ -910,6 +910,45 @@ def assignment_call_before(
     return candidates[0] if candidates else None
 
 
+def tool_call_before(
+    path: str,
+    before_position: str,
+    call_id: ClaudeCodeCallId,
+) -> tuple[str, records.ToolArguments] | None:
+    """Find the request for a tool result after an application restart."""
+    try:
+        end_position = int(before_position)
+    except ValueError:
+        return None
+    try:
+        source = open(path, "rb")
+    except OSError:
+        return None
+    call_bytes = str(call_id).encode("utf-8")
+    with source:
+        while source.tell() < end_position:
+            line = source.readline()
+            if not line or call_bytes not in line:
+                continue
+            try:
+                parsed = parse_line(line.decode())
+            except UnicodeDecodeError:
+                continue
+            if not isinstance(parsed, AssistantTranscriptRecord):
+                continue
+            blocks = parsed.message.content if parsed.message is not None else None
+            if not isinstance(blocks, list):
+                continue
+            for block in blocks:
+                if (
+                    isinstance(block, records.ToolUseBlock)
+                    and block.id == call_id
+                    and block.name
+                ):
+                    return block.name, block.input or records.ToolArguments()
+    return None
+
+
 def background_call(
     path: str,
     task_id: ClaudeCodeShellId,

@@ -35,7 +35,7 @@ BACKGROUND_OUTPUT_ROOT = "/tmp"
 @dataclass(frozen=True)
 class PreparedForegroundCommand:
     reply: bytes
-    located: ShellOutputLocated
+    locations: tuple[ShellOutputLocated, ...]
 
 
 class HookSpecificOutput(BaseModel):
@@ -125,6 +125,47 @@ def background_output(
     )
 
 
+def redirected_locations(
+    hook_payload: HookPayload,
+    shell_follow_until: ShellFollowUntil,
+) -> tuple[ShellOutputLocated, ...]:
+    """Return every concrete file that receives this tool's output."""
+    shell_arguments = hook_payload.shell_input()
+    command = shell_arguments.command if isinstance(shell_arguments.command, str) else ""
+    if not command.strip():
+        return ()
+    native_session_id = ClaudeCodeSessionId(hook_payload.session_id or "")
+    call_id = ClaudeCodeCallId(hook_payload.tool_use_id or "")
+    if not native_session_id or not call_id:
+        raise ValueError("Claude Code shell tool has no session or command id")
+    shell_id = shell_id_from_claude_code_call(call_id)
+    working_directory = hook_payload.cwd
+    targets = shell.redirected_outputs(
+        command,
+        str(working_directory) if working_directory is not None else None,
+    )
+    locations: list[ShellOutputLocated] = []
+    for target in targets:
+        try:
+            source_stat = os.stat(target.path)
+            initial_size = source_stat.st_size
+            initial_modified_at = source_stat.st_mtime_ns
+        except FileNotFoundError:
+            initial_size = 0
+            initial_modified_at = 0
+        locations.append(ShellOutputLocated(
+            shell_id=shell_id_from_claude_code(ClaudeCodeShellId(shell_id)),
+            source_path=target.path,
+            chunk_source_type=CHUNK_SOURCE_TYPE,
+            delete_source=False,
+            initial_size=initial_size,
+            initial_modified_at=initial_modified_at,
+            wait_for_source_change=not target.append,
+            until=shell_follow_until,
+        ))
+    return tuple(locations)
+
+
 def prepare(
     hook_payload: HookPayload,
 ) -> PreparedForegroundCommand | None:
@@ -146,11 +187,8 @@ def prepare(
     session_id = session_id_from_claude_code(native_session_id)
     shell_id = shell_id_from_claude_code_call(call_id)
 
-    working_directory = hook_payload.cwd
-    redirect = shell.redirected_output(
-        command, str(working_directory) if working_directory is not None else None
-    )
-    if redirect is None:
+    locations = redirected_locations(hook_payload, ShellFollowUntil.SHELL_FINISHED)
+    if not locations:
         source_path = _tee_path(session_id, shell_id)
         os.makedirs(os.path.dirname(source_path), mode=0o700, exist_ok=True)
         descriptor = os.open(
@@ -160,33 +198,20 @@ def prepare(
         )
         os.close(descriptor)
         wrapped_command = shell.copy_output_to(command, source_path)
-        delete_source = True
-        initial_size = 0
-        initial_modified_at = 0
-        wait_for_source_change = False
-    else:
-        source_path, append = redirect
-        try:
-            source_stat = os.stat(source_path)
-            initial_size = source_stat.st_size
-            initial_modified_at = source_stat.st_mtime_ns
-        except FileNotFoundError:
-            initial_size = 0
-            initial_modified_at = 0
-        wrapped_command = command
-        delete_source = False
-        wait_for_source_change = not append
-
-    return PreparedForegroundCommand(
-        _updated_input(shell_arguments, wrapped_command),
-        ShellOutputLocated(
+        locations = (ShellOutputLocated(
             shell_id=shell_id_from_claude_code(ClaudeCodeShellId(shell_id)),
             source_path=source_path,
             chunk_source_type=CHUNK_SOURCE_TYPE,
-            delete_source=delete_source,
-            initial_size=initial_size,
-            initial_modified_at=initial_modified_at,
-            wait_for_source_change=wait_for_source_change,
+            delete_source=True,
+            initial_size=0,
+            initial_modified_at=0,
+            wait_for_source_change=False,
             until=ShellFollowUntil.SHELL_FINISHED,
-        ),
+        ),)
+    else:
+        wrapped_command = command
+
+    return PreparedForegroundCommand(
+        _updated_input(shell_arguments, wrapped_command),
+        locations,
     )

@@ -18,6 +18,7 @@ pytestmark = [
 ]
 
 scenarios(
+    "../features/background_restart.feature",
     "../features/journeys.feature",
     "../features/runtime_restart.feature",
     "../features/terminal.feature",

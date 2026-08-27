@@ -156,7 +156,12 @@ class ShellOutputCanonicalEventReaction(CanonicalEventReaction):
         followings = self.shell_output.find_for_session(session_id)
         positions = self.raw_events.latest_positions(
             [
-                output_source.shell_output_source_identity(following.harness, following.session_id, following.shell_id)
+                output_source.shell_output_source_identity(
+                    following.harness,
+                    following.session_id,
+                    following.shell_id,
+                    following.source_path,
+                )
                 for following in followings
             ]
         )
@@ -165,7 +170,11 @@ class ShellOutputCanonicalEventReaction(CanonicalEventReaction):
             raw_events = source.read(positions.get(source.source_identity))
             if raw_events:
                 self.raw_events.record(raw_events)
-            self.shell_output.remove(session_id, ShellId(str(following.shell_id)))
+            self.shell_output.remove(
+                session_id,
+                ShellId(str(following.shell_id)),
+                following.source_path,
+            )
             output_source.delete_source_file(following)
 
 

@@ -8,6 +8,7 @@ database.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -18,6 +19,11 @@ from domain.values import ShellFollowUntil
 class ShellFollowState(StrEnum):
     ACTIVE = "active"
     FINISHING = "finishing"
+
+
+def shell_output_source_key(source_path: str) -> str:
+    """Return the stable identity of one file followed for a shell."""
+    return hashlib.sha256(source_path.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)

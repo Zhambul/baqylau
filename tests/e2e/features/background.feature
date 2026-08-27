@@ -1,5 +1,29 @@
 Feature: background work reaches the session feed
 
+  Scenario Outline: redirected output from one background command reaches its shell block
+    Given session configuration "primary" uses <harness> with model <model> and low effort
+    When I launch session "primary" as turn "redirect background output" with prompt
+      """
+      Use the Bash tool with run_in_background set to true. Run this exact command:
+
+      python3 -c 'import time; print("redirect-one", flush=True); time.sleep(2); print("redirect-two", flush=True)' > /tmp/baqylau-e2e-background-redirect.log 2>&1; echo "exit=$?" >> /tmp/baqylau-e2e-background-redirect.log; printf 'pipe-output\n' | tee /tmp/baqylau-e2e-background-pipe.log >/dev/null
+
+      Do not read either file and do not start another tool. Reply only with the
+      exact marker REDIRECT_STARTED.
+      """
+    When I name the only background job in turn "redirect background output" containing 'baqylau-e2e-background-redirect.log' "redirected background command"
+    Then job "redirected background command" has output containing 'redirect-one'
+    And job "redirected background command" has output containing 'redirect-two'
+    And job "redirected background command" has output containing 'exit=0'
+    And job "redirected background command" has output containing 'pipe-output'
+    And job "redirected background command" ends
+    And command "redirected background command" has state succeeded
+    And turn "redirect background output" has final answer 'REDIRECT_STARTED'
+
+    Examples:
+      | harness     | model |
+      | claude_code | haiku |
+
   Scenario Outline: a backgrounded command is tracked past the end of its turn
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" and assign work "start delayed echo" to the <worker> with prompt

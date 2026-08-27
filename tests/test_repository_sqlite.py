@@ -444,7 +444,20 @@ def test_version_eight_settles_codex_shell_finishes_added_after_the_turn(tmp_pat
     assert version["version"] == MAIN_SCHEMA_VERSION
 
 
-def test_version_fourteen_closes_a_codex_shell_duplicated_after_restart(tmp_path):
+@pytest.mark.parametrize(
+    ("old_version", "backgrounded_after_replacement", "has_late_shell_finish"),
+    (
+        (14, False, False),
+        (20, True, False),
+        (21, True, True),
+    ),
+)
+def test_schema_upgrade_closes_a_codex_shell_duplicated_after_restart(
+    tmp_path,
+    old_version,
+    backgrounded_after_replacement,
+    has_late_shell_finish,
+):
     path = str(tmp_path / "main.db")
     old_database = main_database(path)
     raw_events = SqliteRawEventRepository(old_database)
@@ -485,16 +498,28 @@ def test_version_fourteen_closes_a_codex_shell_duplicated_after_restart(tmp_path
             0,
         ),
     )
+    original_finished = replace(
+        a_started_event("original-finished"),
+        payload=ShellFinished(
+            original_shell,
+            Outcome.CANCELLED,
+            None,
+            None,
+        ),
+    )
+    replacement = (replacement_started, replacement_finished)
+    ordered_events = (
+        (original_started, *replacement, backgrounded)
+        if backgrounded_after_replacement
+        else (original_started, backgrounded, *replacement)
+    )
+    if has_late_shell_finish:
+        ordered_events = (*ordered_events, original_finished)
     canonical.record_translation(
         raw,
         "7",
         TranslationResult(
-            (
-                original_started,
-                backgrounded,
-                replacement_started,
-                replacement_finished,
-            ),
+            ordered_events,
             "translated",
         ),
         1001.0,
@@ -516,7 +541,10 @@ def test_version_fourteen_closes_a_codex_shell_duplicated_after_restart(tmp_path
                 encode_document(actor).decode(),
             ),
         )
-        connection.execute("UPDATE schema_version SET version = 14 WHERE id = 1")
+        connection.execute(
+            "UPDATE schema_version SET version = ? WHERE id = 1",
+            (old_version,),
+        )
 
     upgraded = main_database(path)
     upgraded.initialize()
@@ -1306,6 +1334,64 @@ def test_a_following_round_trips_without_a_driver_row(main):
     outputs = SqliteShellOutputRepository(main)
     outputs.save(a_following())
     assert outputs.find_for_session(SESSION) == (a_following(),)
+
+
+def test_one_shell_can_follow_several_output_files(main):
+    outputs = SqliteShellOutputRepository(main)
+    first = a_following()
+    second = replace(first, source_path="/tmp/second-output")
+
+    outputs.save(first)
+    outputs.save(second)
+
+    assert outputs.find_for_session(SESSION) == (first, second)
+    outputs.mark_finishing(SESSION, first.shell_id)
+    assert all(item.finishing for item in outputs.find_for_session(SESSION))
+    outputs.remove(SESSION, first.shell_id, first.source_path)
+    assert outputs.find_for_session(SESSION) == (
+        replace(second, state=ShellFollowState.FINISHING),
+    )
+
+
+def test_version_twenty_two_following_moves_to_the_several_file_key(tmp_path):
+    path = str(tmp_path / "main.db")
+    old_database = main_database(path)
+    old_outputs = SqliteShellOutputRepository(old_database)
+    old_outputs.save(a_following())
+    with old_database.write() as connection:
+        connection.execute("ALTER TABLE shell_output RENAME TO shell_output_new_key")
+        connection.execute(
+            """
+            CREATE TABLE shell_output(
+                session_id TEXT NOT NULL,
+                shell_id TEXT NOT NULL,
+                harness TEXT NOT NULL,
+                actor_id TEXT NOT NULL,
+                parent_actor_id TEXT,
+                source_path TEXT NOT NULL,
+                chunk_source_type TEXT NOT NULL,
+                delete_source INTEGER NOT NULL,
+                initial_size INTEGER NOT NULL,
+                initial_modified_at INTEGER NOT NULL,
+                wait_for_source_change INTEGER NOT NULL,
+                until TEXT NOT NULL CHECK(until IN ('shell_finished', 'session_finished')),
+                state TEXT NOT NULL CHECK(state IN ('active', 'finishing')),
+                created_at REAL NOT NULL,
+                PRIMARY KEY(session_id, shell_id)
+            )
+            """
+        )
+        connection.execute("INSERT INTO shell_output SELECT * FROM shell_output_new_key")
+        connection.execute("DROP TABLE shell_output_new_key")
+        connection.execute("UPDATE schema_version SET version=22 WHERE id=1")
+
+    upgraded = main_database(path)
+    upgraded.initialize()
+    outputs = SqliteShellOutputRepository(upgraded)
+    second = replace(a_following(), source_path="/tmp/second-output")
+    outputs.save(second)
+
+    assert outputs.find_for_session(SESSION) == (a_following(), second)
 
 
 def test_marking_finished_ends_only_a_foreground_following(main):

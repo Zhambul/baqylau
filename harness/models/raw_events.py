@@ -30,6 +30,7 @@ from domain.ids import (
     WindowId,
     stable_event_id,
 )
+from domain.shells import shell_output_source_key
 from domain.records import InterpretationAudit, RecordedTranslationDecision
 
 
@@ -234,9 +235,11 @@ def output_location_raw_event(
     actor_id: ActorId | None = None,
     parent_actor_id: ActorId | None = None,
 ) -> RawEvent:
+    source_key = shell_output_source_key(shell_output_located.source_path)
     return RawEvent(
         raw_event_id=RawEventId(
-            f"{harness}:output_location:{raw_event_source_context.session_id}:{shell_output_located.shell_id}"
+            f"{harness}:output_location:{raw_event_source_context.session_id}:"
+            f"{shell_output_located.shell_id}:{source_key}"
         ),
         harness=harness,
         source_type=OUTPUT_LOCATION_SOURCE_TYPE,
@@ -252,6 +255,7 @@ def output_location_raw_event(
         # raw event under its own identity, and a directive there would
         # masquerade as a read position.
         source_identity=(
-            f"{harness}:output_location:{raw_event_source_context.session_id}:{shell_output_located.shell_id}:directive"
+            f"{harness}:output_location:{raw_event_source_context.session_id}:"
+            f"{shell_output_located.shell_id}:{source_key}:directive"
         ),
     )

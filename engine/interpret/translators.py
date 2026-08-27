@@ -26,6 +26,7 @@ from domain.events import (
     ShellOutputLocated,
     TurnAborted,
 )
+from domain.shells import shell_output_source_key
 from domain.ids import AssignmentId, ShellId
 from domain.records import RecordedTranslationDecision
 from domain.values import ActorRole, OpenWorkKind, Outcome
@@ -55,8 +56,15 @@ class ShellOutputTranslator(CoreTranslator):
 
     def translate(self, raw_event: RawEvent) -> TranslationResult:
         located = decode_document(ShellOutputLocated, raw_event.payload)
+        source_key = shell_output_source_key(located.source_path)
         return TranslationResult(
-            (canonical_event(raw_event, "shell", str(located.shell_id), "output_located", located),),
+            (canonical_event(
+                raw_event,
+                "shell",
+                str(located.shell_id),
+                f"output_located:{source_key}",
+                located,
+            ),),
             RecordedTranslationDecision.TRANSLATED,
         )
 

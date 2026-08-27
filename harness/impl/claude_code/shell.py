@@ -1,54 +1,27 @@
-"""Claude Code shell-command rewriting needed by foreground observation."""
+"""Find and copy Claude Code shell output without running the command."""
 
 from __future__ import annotations
 
 import os
-import re
 import shlex
+from dataclasses import dataclass
 
-_STATEMENT_SEPARATOR = re.compile(r"\n|;|&&|\|\|")
-_CONTINUED_OPERATOR = re.compile(r"(\|\||&&|\|)[ \t]*\n[ \t]*")
-_CONTINUED_LINE = re.compile(r"\\[ \t]*\n[ \t]*")
-
-
-def _statements(command: str) -> list[str]:
-    command = _CONTINUED_LINE.sub(" ", command)
-    command = _CONTINUED_OPERATOR.sub(r"\1 ", command)
-    return [part for part in _STATEMENT_SEPARATOR.split(command) if part.strip()]
+import bashlex  # type: ignore[import-untyped]
 
 
-def _working_directory(
-    statements: list[str],
-    initial_directory: str,
-    *,
-    expand_home: bool = False,
-) -> tuple[str, bool]:
-    working_directory = initial_directory
-    known = True
-    for statement in statements:
-        try:
-            words = shlex.split(statement, posix=True)
-        except ValueError:
-            return working_directory, False
-        if not words or words[0] != "cd":
-            continue
-        if len(words) != 2:
-            known = False
-            continue
-        target = words[1]
-        if expand_home and (target == "~" or target.startswith("~/")):
-            target = os.path.expanduser(target)
-        if target == "-" or target.startswith("-") or any(
-            character in target for character in "$`*?["
-        ):
-            known = False
-        elif os.path.isabs(target):
-            working_directory, known = target, True
-        elif known:
-            working_directory = os.path.normpath(
-                os.path.join(working_directory, target)
-            )
-    return working_directory, known
+@dataclass(frozen=True)
+class RedirectedOutput:
+    path: str
+    append: bool
+
+
+@dataclass
+class ShellDirectory:
+    path: str
+    known: bool = True
+
+    def copy(self) -> ShellDirectory:
+        return ShellDirectory(self.path, self.known)
 
 
 def copy_output_to(command: str, output_path: str) -> str:
@@ -65,64 +38,174 @@ def copy_output_to(command: str, output_path: str) -> str:
     )
 
 
-_COPIED_OUTPUT_SUFFIX = re.compile(
-    r"\n\n\} > >\(tee -a (?P<path>\S+)\) 2> >\(tee -a (?P=path) >&2\)\s*\Z"
-)
+_OUTPUT_REDIRECTS = (">", ">>", ">|", "&>", "&>>")
+_APPEND_REDIRECTS = (">>", "&>>")
 
 
-def redirected_output(command: str, working_directory: str | None) -> tuple[str, bool] | None:
-    """Return the final statement's concrete stdout target and append mode."""
-    try:
-        words = shlex.split(command, posix=False)
-    except ValueError:
+def _literal_word(node: bashlex.ast.node) -> str | None:
+    if getattr(node, "kind", None) != "word":
         return None
-    if any(word.startswith("<<") for word in words):
+    parts = getattr(node, "parts", ())
+    if any(getattr(part, "kind", None) != "tilde" for part in parts):
         return None
-    statements = _statements(command)
-    if not statements:
+    word = str(node.word)
+    if word == "~" or word.startswith("~/"):
+        word = os.path.expanduser(word)
+    if not word or any(character in word for character in "$`*?["):
         return None
-    try:
-        words = shlex.split(statements[-1], posix=False)
-    except ValueError:
-        return None
+    return word
 
-    target = None
-    append = False
-    word_index = 0
-    while word_index < len(words):
-        word = words[word_index]
-        if word[:1] in ("'", '"'):
-            word_index += 1
+
+def _output_path(
+    node: bashlex.ast.node,
+    shell_directory: ShellDirectory,
+) -> str | None:
+    target = _literal_word(node)
+    if target is None or target == "-" or target.startswith("/dev/"):
+        return None
+    if os.path.isabs(target):
+        return os.path.normpath(target)
+    if not shell_directory.known:
+        return None
+    return os.path.normpath(os.path.join(shell_directory.path, target))
+
+
+def _word_nodes(command: bashlex.ast.node) -> list[bashlex.ast.node]:
+    return [part for part in getattr(command, "parts", ()) if part.kind == "word"]
+
+
+def _redirects(
+    command: bashlex.ast.node,
+    shell_directory: ShellDirectory,
+) -> list[RedirectedOutput]:
+    found: list[RedirectedOutput] = []
+    for part in getattr(command, "parts", ()):
+        redirect_type = getattr(part, "type", None)
+        if getattr(part, "kind", None) != "redirect" or redirect_type not in _OUTPUT_REDIRECTS:
             continue
-        if ">" in word and not word.startswith("2"):
-            match = re.match(r"^(?:&|1)?(>>?)(.*)$", word)
-            if match:
-                remainder = match.group(2)
-                if remainder.startswith("|") or remainder.startswith("("):
-                    return None
-                if remainder:
-                    target, append = remainder, match.group(1) == ">>"
-                elif word_index + 1 < len(words):
-                    next_word = words[word_index + 1]
-                    if ">" in next_word or next_word.startswith("("):
-                        return None
-                    target, append = next_word, match.group(1) == ">>"
-                    word_index += 1
-        word_index += 1
+        path = _output_path(getattr(part, "output", None), shell_directory)
+        if path is not None:
+            found.append(RedirectedOutput(path, redirect_type in _APPEND_REDIRECTS))
+    return found
 
-    if not target or target.startswith("&") or target.startswith("/dev/"):
-        return None
-    if len(target) >= 2 and target[0] in ("'", '"') and target[-1] == target[0]:
-        target = target[1:-1]
-    if not target or any(character in target for character in "$`*?[") \
-            or target.startswith("~"):
-        return None
-    if not os.path.isabs(target):
-        base, known = _working_directory(
-            statements[:-1],
-            working_directory or os.getcwd(),
+
+def _tee_outputs(
+    command: bashlex.ast.node,
+    shell_directory: ShellDirectory,
+) -> list[RedirectedOutput]:
+    words = _word_nodes(command)
+    if not words:
+        return []
+    executable = _literal_word(words[0])
+    if executable is None or os.path.basename(executable) != "tee":
+        return []
+    append = False
+    options = True
+    found: list[RedirectedOutput] = []
+    for word_node in words[1:]:
+        word = _literal_word(word_node)
+        if word is None:
+            continue
+        if options and word == "--":
+            options = False
+            continue
+        if options and word.startswith("-") and word != "-":
+            append = append or word == "--append" or (
+                not word.startswith("--") and "a" in word[1:]
+            )
+            continue
+        path = _output_path(word_node, shell_directory)
+        if path is not None:
+            found.append(RedirectedOutput(path, append))
+    return found
+
+
+def _change_directory(
+    command: bashlex.ast.node,
+    shell_directory: ShellDirectory,
+) -> None:
+    words = _word_nodes(command)
+    if not words or _literal_word(words[0]) != "cd":
+        return
+    if len(words) != 2:
+        shell_directory.known = False
+        return
+    target = _literal_word(words[1])
+    if target is None or target == "-" or target.startswith("-"):
+        shell_directory.known = False
+    elif os.path.isabs(target):
+        shell_directory.path = os.path.normpath(target)
+        shell_directory.known = True
+    elif shell_directory.known:
+        shell_directory.path = os.path.normpath(
+            os.path.join(shell_directory.path, target)
         )
-        if not known:
-            return None
-        target = os.path.join(base, target)
-    return target, append
+
+
+def _walk(
+    node: bashlex.ast.node,
+    shell_directory: ShellDirectory,
+    found: list[RedirectedOutput],
+) -> None:
+    kind = getattr(node, "kind", None)
+    if kind == "command":
+        found.extend(_redirects(node, shell_directory))
+        found.extend(_tee_outputs(node, shell_directory))
+        nested_words = _word_nodes(node) + [
+            part.output
+            for part in getattr(node, "parts", ())
+            if getattr(part, "kind", None) == "redirect"
+            and getattr(getattr(part, "output", None), "kind", None) == "word"
+        ]
+        for word in nested_words:
+            for part in getattr(word, "parts", ()):
+                nested = getattr(part, "command", None)
+                if nested is not None:
+                    _walk(nested, shell_directory.copy(), found)
+        _change_directory(node, shell_directory)
+        return
+    if kind == "pipeline":
+        for part in node.parts:
+            if getattr(part, "kind", None) != "pipe":
+                _walk(part, shell_directory.copy(), found)
+        return
+    if kind == "compound":
+        items = getattr(node, "list", ())
+        first_word = next(
+            (getattr(item, "word", None) for item in items if item.kind == "reservedword"),
+            None,
+        )
+        scoped = shell_directory.copy() if first_word == "(" else shell_directory
+        for item in items:
+            if getattr(item, "kind", None) != "reservedword":
+                _walk(item, scoped, found)
+        return
+    for part in getattr(node, "parts", ()):
+        if getattr(part, "kind", None) not in {"operator", "pipe", "reservedword"}:
+            _walk(part, shell_directory, found)
+
+
+def redirected_outputs(command: str, working_directory: str | None) -> tuple[RedirectedOutput, ...]:
+    """Return each concrete file that receives output from this command."""
+    try:
+        roots = bashlex.parse(command)
+    except (bashlex.errors.ParsingError, NotImplementedError):
+        return ()
+    found: list[RedirectedOutput] = []
+    shell_directory = ShellDirectory(working_directory or os.getcwd())
+    for root in roots:
+        _walk(root, shell_directory, found)
+
+    # One command can truncate and then append to the same file. Follow that
+    # file once, from the state before the command. Truncation takes priority.
+    unique: list[RedirectedOutput] = []
+    for output in found:
+        previous_index = next(
+            (index for index, previous in enumerate(unique) if previous.path == output.path),
+            None,
+        )
+        if previous_index is None:
+            unique.append(output)
+        elif unique[previous_index].append and not output.append:
+            unique[previous_index] = RedirectedOutput(output.path, False)
+    return tuple(unique)

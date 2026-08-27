@@ -831,13 +831,21 @@ class ToolCallSemantics:
     ) -> list[CanonicalEvent[EventPayload]]:
         """One tool_result block from the transcript, as facts.
 
-        The transcript names no tool and carries no input, so a call whose start
-        this translator never saw — a daemon that restarted mid-call — yields
-        nothing rather than a fact with a guessed kind. The hook delivery of the
-        same result stands on its own and converges on the same event ids.
+        The transcript names no tool and carries no input. Recover these fields
+        from the earlier tool-use record when the daemon restarted mid-call.
+        The hook delivery of the same result stands on its own and converges on
+        the same event ids.
         """
         if not self.known(raw_event, call_id):
-            return []
+            recovered = transcript.tool_call_before(
+                raw_event.source_name,
+                raw_event.source_position,
+                call_id,
+            )
+            if recovered is None:
+                return []
+            native_name, arguments = recovered
+            self.remember(raw_event, call_id, native_name, arguments)
         native_name, _arguments = self.recall(raw_event, call_id, None, None)
         kind = tool_kind(native_name)
         if kind not in TRANSCRIPT_RESULT_KINDS:

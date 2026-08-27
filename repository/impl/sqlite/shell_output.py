@@ -37,7 +37,7 @@ class SqliteShellOutputRepository(ShellOutputRepository):
         with self.sqlite_database.read() as connection:
             found = connection.execute(
                 "SELECT * FROM shell_output WHERE session_id=? "
-                "ORDER BY created_at, shell_id",
+                "ORDER BY created_at, shell_id, source_path",
                 (str(session_id),),
             ).fetchall()
         return tuple(
@@ -68,11 +68,12 @@ class SqliteShellOutputRepository(ShellOutputRepository):
                 (str(session_id), str(shell_id)),
             )
 
-    def remove(self, session_id: SessionId, shell_id: ShellId) -> None:
+    def remove(self, session_id: SessionId, shell_id: ShellId, source_path: str) -> None:
         with self.sqlite_database.write() as connection:
             connection.execute(
-                "DELETE FROM shell_output WHERE session_id=? AND shell_id=?",
-                (str(session_id), str(shell_id)),
+                "DELETE FROM shell_output "
+                "WHERE session_id=? AND shell_id=? AND source_path=?",
+                (str(session_id), str(shell_id), source_path),
             )
 
     def remove_expired(self, created_before: float) -> tuple[ShellOutputFollowing, ...]:
