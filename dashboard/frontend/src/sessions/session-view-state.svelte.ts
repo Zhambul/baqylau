@@ -28,7 +28,7 @@ import type {
   ViewMode,
 } from '../application/session-model';
 import type { Entry } from '../entries/model';
-import type { ControlOutcome } from '../controls/model';
+import type { StandardControlOutcome } from '../controls/model';
 import { pendingAttention } from '../entries/attention';
 import {
   buildFeedItems,
@@ -57,6 +57,7 @@ import {
   deliveredPrompt,
   mergeQueuedPrompts,
   promptMatches,
+  restoredPromptIsQueued,
 } from './optimistic-prompts';
 import { foldShellEntries, jobFolds, monitorFolds } from './shell-fold';
 
@@ -403,13 +404,15 @@ export class SessionViewState {
     this.dismissMenusSequence += 1;
   }
 
-  async interruptTurn(): Promise<ControlOutcome> {
+  async interruptTurn(): Promise<StandardControlOutcome> {
+    const queuedBeforeInterrupt = this.queuedPromptTexts;
     try {
       const result = await interrupt(this.sessionId, newRequestId());
       if (
         result.status === 'acknowledged' &&
-        result.kind === 'delivery' &&
-        result.restoredText.trim().length > 0
+        result.kind === 'interrupt' &&
+        result.restoredText.trim().length > 0 &&
+        !restoredPromptIsQueued(result.restoredText, queuedBeforeInterrupt)
       )
         this.restoreComposer(result.restoredText);
       return result;

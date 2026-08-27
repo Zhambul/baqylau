@@ -40,6 +40,11 @@ class ControlAcknowledgement(StrEnum):
     INDETERMINATE = "indeterminate"
 
 
+class MessageDeliveryStatus(StrEnum):
+    QUEUED = "queued"
+    SENT = "sent"
+
+
 class ConfirmationOutcome(StrEnum):
     CONFIRMED = "confirmed"
     NOT_NEEDED = "not_needed"
@@ -216,8 +221,7 @@ class DurableTitleResult(ControlResult):
 
 
 @dataclass(frozen=True)
-class DeliveryResult(ControlResult):
-    queued: bool = False
+class InterruptResult(ControlResult):
     restored_text: str = ""
     # An interrupt whose harness confirmed the abort in its OWN raw event (a
     # native record the ordinary translator will read independently) sets
@@ -225,6 +229,14 @@ class DeliveryResult(ControlResult):
     # nothing canonical says the turn ended — and the service falls back to
     # `InterruptRegistry` so the busy state can still clear.
     corroborated: bool = False
+
+
+@dataclass(frozen=True)
+class MessageDeliveryResult:
+    """The harness confirmed where one message is now."""
+
+    request_id: RequestId
+    status: MessageDeliveryStatus
 
 
 @dataclass(frozen=True)
@@ -260,5 +272,11 @@ class PlanChoicesResult(ControlResult):
 
 
 ControlOutcome: TypeAlias = (
-    ControlResult | DurableTitleResult | DeliveryResult | CommandResult | RewindResult | PlanChoicesResult
+    ControlResult
+    | DurableTitleResult
+    | InterruptResult
+    | MessageDeliveryResult
+    | CommandResult
+    | RewindResult
+    | PlanChoicesResult
 )

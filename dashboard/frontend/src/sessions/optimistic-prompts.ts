@@ -17,6 +17,14 @@ export function promptMatches(delivered: string, sent: string): boolean {
   return sent.length > 0 && delivered.endsWith(sent);
 }
 
+export function restoredPromptIsQueued(
+  restored: string,
+  queued: readonly string[],
+): boolean {
+  const text = restored.trim();
+  return queued.some((prompt) => promptMatches(text, prompt.trim()));
+}
+
 export function mergeQueuedPrompts(
   persisted: readonly QueuedPrompt[],
   optimistic: readonly QueuedPrompt[],

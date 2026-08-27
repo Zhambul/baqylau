@@ -47,9 +47,7 @@ def open_browser_session_list(browser_session_driver: BrowserSessionDriver) -> N
     browser_session_driver.open_session_list()
 
 
-@then(parsers.parse(
-    "the browser shows the {harness} usage row without reloading the document"
-))
+@then(parsers.parse("the browser shows the {harness} usage row without reloading the document"))
 def browser_shows_usage_without_reload(
     browser_session_driver: BrowserSessionDriver,
     harness: str,
@@ -63,18 +61,14 @@ def release_active_browser_work(
     sessions: Sessions,
     session_name: str,
 ) -> None:
-    working_directory = client.sessions.snapshot(
-        sessions.get(session_name)
-    ).data.session.working_directory
+    working_directory = client.sessions.snapshot(sessions.get(session_name)).data.session.working_directory
     Path(working_directory, BROWSER_ACTIVE_RELEASE).write_text(
         "release\n",
         encoding="utf-8",
     )
 
 
-@when(parsers.parse(
-    'I start browser session "{session_name}" as turn "{turn_name}" with prompt'
-))
+@when(parsers.parse('I start browser session "{session_name}" as turn "{turn_name}" with prompt'))
 def start_browser_session(
     browser_session_driver: BrowserSessionDriver,
     session_specs: SessionSpecs,
@@ -92,9 +86,7 @@ def start_browser_session(
     turns.bind(turn_name, started.turn)
 
 
-@when(parsers.parse(
-    'I resume browser session "{session_name}" as turn "{turn_name}" with prompt'
-))
+@when(parsers.parse('I resume browser session "{session_name}" as turn "{turn_name}" with prompt'))
 def resume_browser_session(
     browser_session_driver: BrowserSessionDriver,
     sessions: Sessions,
@@ -113,9 +105,7 @@ def resume_browser_session(
     turns.bind(turn_name, resumed.turn)
 
 
-@when(parsers.parse(
-    'I open fresh browser session form "{form_name}" for session "{session_name}"'
-))
+@when(parsers.parse('I open fresh browser session form "{form_name}" for session "{session_name}"'))
 def open_fresh_browser_session_form(
     browser_session_driver: BrowserSessionDriver,
     browser_session_forms: BrowserSessionForms,
@@ -131,10 +121,11 @@ def open_fresh_browser_session_form(
     )
 
 
-@when(parsers.parse(
-    'I open configured browser session form "{form_name}" using session configuration '
-    '"{configuration_name}"'
-))
+@when(
+    parsers.parse(
+        'I open configured browser session form "{form_name}" using session configuration "{configuration_name}"'
+    )
+)
 def open_configured_browser_session_form(
     browser_session_driver: BrowserSessionDriver,
     browser_session_forms: BrowserSessionForms,
@@ -150,9 +141,7 @@ def open_configured_browser_session_form(
     )
 
 
-@when(parsers.parse(
-    'I type \'{text}\' in browser session form "{form_name}"'
-))
+@when(parsers.parse("I type '{text}' in browser session form \"{form_name}\""))
 def type_in_browser_session_form(
     browser_session_driver: BrowserSessionDriver,
     browser_session_forms: BrowserSessionForms,
@@ -174,9 +163,7 @@ def close_browser_session_form(
     browser_session_driver.close_session_form(browser_session_forms.get(form_name))
 
 
-@then(parsers.parse(
-    'browser session form "{form_name}" contains exact draft \'{text}\''
-))
+@then(parsers.parse("browser session form \"{form_name}\" contains exact draft '{text}'"))
 def browser_session_form_contains_draft(
     browser_session_driver: BrowserSessionDriver,
     browser_session_forms: BrowserSessionForms,
@@ -189,9 +176,7 @@ def browser_session_form_contains_draft(
     )
 
 
-@when(parsers.parse(
-    'I switch browser session form "{form_name}" to resume mode'
-))
+@when(parsers.parse('I switch browser session form "{form_name}" to resume mode'))
 def switch_browser_session_form_to_resume(
     browser_session_driver: BrowserSessionDriver,
     browser_session_forms: BrowserSessionForms,
@@ -205,9 +190,7 @@ def switch_browser_session_form_to_resume(
     )
 
 
-@then(parsers.parse(
-    'browser session form "{form_name}" has not requested the resume catalog'
-))
+@then(parsers.parse('browser session form "{form_name}" has not requested the resume catalog'))
 def fresh_browser_session_form_does_not_request_resume_catalog(
     browser_session_driver: BrowserSessionDriver,
     browser_session_forms: BrowserSessionForms,
@@ -218,9 +201,7 @@ def fresh_browser_session_form_does_not_request_resume_catalog(
     )
 
 
-@then(parsers.parse(
-    'browser session form "{form_name}" requests the resume catalog'
-))
+@then(parsers.parse('browser session form "{form_name}" requests the resume catalog'))
 def browser_session_form_requests_resume_catalog(
     browser_session_driver: BrowserSessionDriver,
     browser_session_forms: BrowserSessionForms,
@@ -231,9 +212,7 @@ def browser_session_form_requests_resume_catalog(
     )
 
 
-@then(parsers.parse(
-    'browser session form "{form_name}" offers session "{session_name}"'
-))
+@then(parsers.parse('browser session form "{form_name}" offers session "{session_name}"'))
 def browser_session_form_offers_session(
     browser_session_driver: BrowserSessionDriver,
     browser_session_forms: BrowserSessionForms,
@@ -247,10 +226,11 @@ def browser_session_form_offers_session(
     browser_session_driver.assert_form_offers_source(form)
 
 
-@when(parsers.parse(
-    'I resume session "{session_name}" from browser session form "{form_name}" '
-    'as turn "{turn_name}" with prompt'
-))
+@when(
+    parsers.parse(
+        'I resume session "{session_name}" from browser session form "{form_name}" as turn "{turn_name}" with prompt'
+    )
+)
 def resume_from_browser_session_form(
     browser_session_driver: BrowserSessionDriver,
     browser_session_forms: BrowserSessionForms,
@@ -301,9 +281,7 @@ def open_session_in_browser(
     browser_session_driver.open_session(sessions.get(session_name))
 
 
-@when(parsers.parse(
-    'I send browser prompt to session "{session_name}" as turn "{turn_name}"'
-))
+@when(parsers.parse('I send browser prompt to session "{session_name}" as turn "{turn_name}"'))
 def send_browser_prompt(
     browser_session_driver: BrowserSessionDriver,
     sessions: Sessions,
@@ -344,9 +322,7 @@ def browser_composer_is_empty(
     browser_session_driver.assert_composer_draft("")
 
 
-@when(parsers.parse(
-    'I send the browser composer for session "{session_name}" as turn "{turn_name}"'
-))
+@when(parsers.parse('I send the browser composer for session "{session_name}" as turn "{turn_name}"'))
 def send_browser_composer_draft(
     browser_session_driver: BrowserSessionDriver,
     sessions: Sessions,
@@ -360,9 +336,7 @@ def send_browser_composer_draft(
     )
 
 
-@then(parsers.parse(
-    'session "{session_name}" has composer draft \'{text}\' after a fresh application read'
-))
+@then(parsers.parse("session \"{session_name}\" has composer draft '{text}' after a fresh application read"))
 def session_has_composer_draft_after_fresh_read(
     client: BaqylauClient,
     sessions: Sessions,
@@ -383,9 +357,7 @@ def session_has_composer_draft_after_fresh_read(
     )
 
 
-@then(parsers.parse(
-    'session "{session_name}" has no composer draft after a fresh application read'
-))
+@then(parsers.parse('session "{session_name}" has no composer draft after a fresh application read'))
 def session_has_no_composer_draft_after_fresh_read(
     client: BaqylauClient,
     sessions: Sessions,
@@ -414,9 +386,7 @@ def reload_browser_session(
     browser_session_driver.reload(sessions.get(session_name))
 
 
-@when(parsers.parse(
-    'I reproduce a rebuild cursor overtake for session "{session_name}"'
-))
+@when(parsers.parse('I reproduce a rebuild cursor overtake for session "{session_name}"'))
 def reproduce_rebuild_cursor_overtake(
     application_process: ApplicationProcess,
     sessions: Sessions,
@@ -457,7 +427,14 @@ def reload_browser_session_list(
     browser_session_driver.reload_session_list()
 
 
-@then(parsers.parse('the browser shows queued prompt \'{text}\''))
+@when("I stop the current turn in the browser")
+def stop_current_turn_in_browser(
+    browser_session_driver: BrowserSessionDriver,
+) -> None:
+    browser_session_driver.interrupt_turn()
+
+
+@then(parsers.parse("the browser shows queued prompt '{text}'"))
 def browser_shows_queued_prompt(
     browser_session_driver: BrowserSessionDriver,
     text: str,
@@ -465,7 +442,7 @@ def browser_shows_queued_prompt(
     browser_session_driver.assert_queued_prompt(text)
 
 
-@then(parsers.parse('the browser does not show queued prompt \'{text}\''))
+@then(parsers.parse("the browser does not show queued prompt '{text}'"))
 def browser_does_not_show_queued_prompt(
     browser_session_driver: BrowserSessionDriver,
     text: str,
@@ -473,21 +450,32 @@ def browser_does_not_show_queued_prompt(
     browser_session_driver.assert_no_queued_prompt(text)
 
 
-@then(parsers.parse(
-    'session "{session_name}" has queued prompt \'{text}\' after a fresh application read'
-))
+@then(parsers.parse("session \"{session_name}\" has queued prompt '{text}' after a fresh application read"))
 def session_has_queued_prompt_after_fresh_read(
     client: BaqylauClient,
     sessions: Sessions,
+    wait_policy: WaitPolicy,
     session_name: str,
     text: str,
 ) -> None:
-    queue = client.preferences.session_state(sessions.get(session_name)).composer.queue
-    assert queue is not None
-    assert [item.text for item in queue.items] == [text]
+    session = sessions.get(session_name)
+
+    def queued() -> bool | None:
+        queue = client.preferences.session_state(session).composer.queue
+        return (
+            True
+            if queue is not None and [item.text for item in queue.items] == [text]
+            else None
+        )
+
+    wait_for(
+        f"session {session_name!r} to keep queued prompt {text!r}",
+        queued,
+        timeout=wait_policy.feed,
+    )
 
 
-@then(parsers.parse('the browser shows the exact text \'{text}\''))
+@then(parsers.parse("the browser shows the exact text '{text}'"))
 def browser_shows_exact_text(
     browser_session_driver: BrowserSessionDriver,
     text: str,
@@ -511,9 +499,7 @@ def browser_feed_does_not_show_text_containing(
     browser_session_driver.assert_feed_text_containing_absent(text)
 
 
-@then(parsers.parse(
-    'the browser renders added and removed colors for file operation "{operation_name}"'
-))
+@then(parsers.parse('the browser renders added and removed colors for file operation "{operation_name}"'))
 def browser_renders_file_diff_colors(
     browser_session_driver: BrowserSessionDriver,
     file_operations: FileOperations,
@@ -524,9 +510,7 @@ def browser_renders_file_diff_colors(
     )
 
 
-@then(parsers.parse(
-    "the browser can load older session activity automatically containing '{text}'"
-))
+@then(parsers.parse("the browser can load older session activity automatically containing '{text}'"))
 def browser_offers_older_session_activity(
     browser_session_driver: BrowserSessionDriver,
     text: str,
@@ -541,9 +525,7 @@ def load_older_session_activity(
     browser_session_driver.load_older_history()
 
 
-@when(parsers.parse(
-    'I answer question "{question_name}" in the browser with option \'{option}\''
-))
+@when(parsers.parse("I answer question \"{question_name}\" in the browser with option '{option}'"))
 def answer_question_in_browser(
     browser_session_driver: BrowserSessionDriver,
     questions: Questions,
@@ -568,9 +550,7 @@ def discuss_question_in_browser(
     browser_session_driver.discuss_question(questions.get(question_name))
 
 
-@when(parsers.parse(
-    'I approve plan "{plan_name}" in the browser as action "{action_name}"'
-))
+@when(parsers.parse('I approve plan "{plan_name}" in the browser as action "{action_name}"'))
 def approve_plan_in_browser(
     browser_session_driver: BrowserSessionDriver,
     browser_actions: BrowserActions,
@@ -588,10 +568,7 @@ def approve_plan_in_browser(
     )
 
 
-@then(parsers.parse(
-    'plan "{plan_name}" is followed by final answer \'{text}\' '
-    'after browser action "{action_name}"'
-))
+@then(parsers.parse('plan "{plan_name}" is followed by final answer \'{text}\' after browser action "{action_name}"'))
 def plan_is_followed_by_browser_answer(
     client: BaqylauClient,
     browser_actions: BrowserActions,
@@ -627,9 +604,7 @@ def discuss_plan_in_browser(
     )
 
 
-@when(parsers.parse(
-    'I request plan changes \'{feedback}\' for plan "{plan_name}" in the browser'
-))
+@when(parsers.parse("I request plan changes '{feedback}' for plan \"{plan_name}\" in the browser"))
 def request_plan_changes_in_browser(
     browser_session_driver: BrowserSessionDriver,
     plans: Plans,
@@ -643,9 +618,7 @@ def request_plan_changes_in_browser(
     )
 
 
-@then(parsers.parse(
-    'the browser session card for "{session_name}" has status {status} and its canonical color'
-))
+@then(parsers.parse('the browser session card for "{session_name}" has status {status} and its canonical color'))
 def browser_session_card_has_status(
     browser_session_driver: BrowserSessionDriver,
     sessions: Sessions,
@@ -658,9 +631,7 @@ def browser_session_card_has_status(
     )
 
 
-@then(parsers.parse(
-    "the browser session header has status {status} and its canonical color"
-))
+@then(parsers.parse("the browser session header has status {status} and its canonical color"))
 def browser_session_header_has_status(
     browser_session_driver: BrowserSessionDriver,
     status: str,
@@ -668,7 +639,7 @@ def browser_session_header_has_status(
     browser_session_driver.assert_session_header_status(status)
 
 
-@then(parsers.parse('the browser session header has title \'{title}\''))
+@then(parsers.parse("the browser session header has title '{title}'"))
 def browser_session_header_has_title(
     browser_session_driver: BrowserSessionDriver,
     title: str,
@@ -676,10 +647,7 @@ def browser_session_header_has_title(
     browser_session_driver.assert_session_header_title(title)
 
 
-@then(parsers.parse(
-    'the browser attention badge for "{session_name}" has status {status} '
-    "and its canonical color"
-))
+@then(parsers.parse('the browser attention badge for "{session_name}" has status {status} and its canonical color'))
 def browser_attention_badge_has_status(
     browser_session_driver: BrowserSessionDriver,
     sessions: Sessions,
@@ -823,9 +791,7 @@ def browser_session_list_does_not_show_session(
     browser_session_driver.assert_session_card_absent(sessions.get(session_name))
 
 
-@then(parsers.parse(
-    'a fresh application session list does not contain session "{session_name}"'
-))
+@then(parsers.parse('a fresh application session list does not contain session "{session_name}"'))
 def fresh_application_session_list_excludes_session(
     client: BaqylauClient,
     sessions: Sessions,
@@ -836,9 +802,7 @@ def fresh_application_session_list_excludes_session(
     assert excluded not in found, f"application session list contains {excluded!r}"
 
 
-@then(parsers.parse(
-    'browser sessions "{first_name}" and "{second_name}" share the isolated project group'
-))
+@then(parsers.parse('browser sessions "{first_name}" and "{second_name}" share the isolated project group'))
 def browser_sessions_share_project_group(
     browser_session_driver: BrowserSessionDriver,
     repository_workspace: RepositoryWorkspace,
@@ -853,9 +817,7 @@ def browser_sessions_share_project_group(
     )
 
 
-@then(parsers.parse(
-    'browser resume "{session_name}" keeps its metadata and one live session'
-))
+@then(parsers.parse('browser resume "{session_name}" keeps its metadata and one live session'))
 def browser_resume_keeps_metadata_and_one_live_session(
     client: BaqylauClient,
     session_continuations: SessionContinuations,
@@ -866,9 +828,7 @@ def browser_resume_keeps_metadata_and_one_live_session(
     assert_one_live_session(client, continuation)
 
 
-@then(parsers.parse(
-    "the browser shows the {harness} {model} model usage limit for its default account"
-))
+@then(parsers.parse("the browser shows the {harness} {model} model usage limit for its default account"))
 def browser_shows_model_usage_limit(
     browser_session_driver: BrowserSessionDriver,
     harness: str,
@@ -877,14 +837,10 @@ def browser_shows_model_usage_limit(
     browser_session_driver.assert_default_model_usage_window(harness, model)
 
 
-@then(parsers.parse(
-    'browser session form "{form_name}" has no account selection'
-))
+@then(parsers.parse('browser session form "{form_name}" has no account selection'))
 def browser_session_form_has_no_account_selection(
     browser_session_driver: BrowserSessionDriver,
     browser_session_forms: BrowserSessionForms,
     form_name: str,
 ) -> None:
-    browser_session_driver.assert_session_form_has_no_account_selection(
-        browser_session_forms.get(form_name)
-    )
+    browser_session_driver.assert_session_form_has_no_account_selection(browser_session_forms.get(form_name))

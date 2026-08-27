@@ -30,6 +30,7 @@ from terminal.impl.null import null_plugin
 from terminal.impl.pty.plugin import pty_plugin
 from terminal.models import (
     ACTIVITY_PANE_TAG,
+    KeySendRequest,
     PaneAnchor,
     PaneOpenRequest,
     RGB,
@@ -40,6 +41,7 @@ from terminal.models import (
     TextSubmitRequest,
     WindowTagRequest,
 )
+from terminal.models.values import WindowId
 
 SUB_PROTOCOLS = {
     "tabs": TerminalTabs,
@@ -93,6 +95,17 @@ class FakeRemote:
     def raw(self, cmd, payload, want_response=False, timeout=None):
         # None = a socket miss, which is what makes the callers fall back
         self.raw_calls.append((cmd, payload, want_response))
+
+
+def test_kitty_encodes_the_terminal_escape_key() -> None:
+    remote = FakeRemote()
+
+    result = kitty_plugin(cast(KittyRemote, remote)).input.send_key(
+        KeySendRequest(WindowId("7"), "escape")
+    )
+
+    assert result.succeeded
+    assert remote.calls == [("send-key", "--match", "id:7", "esc")]
 
 
 def flag_value(arguments, flag):

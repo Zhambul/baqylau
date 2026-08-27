@@ -1,5 +1,10 @@
 import type { RequestId, SessionId } from '../app/domain-ids';
-import type { AttachmentReference, ControlOutcome } from '../controls/model';
+import type {
+  AttachmentReference,
+  ControlOutcome,
+  MessageSendOutcome,
+  StandardControlOutcome,
+} from '../controls/model';
 import { HttpFailure, apiClient, messageFrom, request } from './client';
 import type { ApiResult } from './client';
 import { translateControlOutcome } from './translators/controls';
@@ -12,6 +17,23 @@ async function outcome<Data>(
     throw new HttpFailure(result.response.status, messageFrom(result.error));
   }
   return translateControlOutcome(result.data ?? result.error);
+}
+
+async function messageOutcome<Data>(
+  operation: () => Promise<ApiResult<Data>>,
+): Promise<MessageSendOutcome> {
+  const translated = await outcome(operation);
+  if (translated.kind === 'basic' || translated.kind === 'message-delivery')
+    return translated;
+  throw new Error('message control returned another control result');
+}
+
+async function standardOutcome<Data>(
+  operation: () => Promise<ApiResult<Data>>,
+): Promise<StandardControlOutcome> {
+  const translated = await outcome(operation);
+  if (translated.kind !== 'message-delivery') return translated;
+  throw new Error('standard control returned a message delivery result');
 }
 
 function reference(attachment: AttachmentReference) {
@@ -30,8 +52,8 @@ export async function sendText(
   text: string,
   attachments: readonly AttachmentReference[],
   replaceTerminalDraft: boolean,
-): Promise<ControlOutcome> {
-  return outcome(() =>
+): Promise<MessageSendOutcome> {
+  return messageOutcome(() =>
     apiClient.POST('/api/sessions/{session_id}/controls/send-text', {
       params: { path: { session_id: sessionId } },
       body: {
@@ -47,8 +69,8 @@ export async function sendText(
 export async function interrupt(
   sessionId: SessionId,
   id: RequestId,
-): Promise<ControlOutcome> {
-  return outcome(() =>
+): Promise<StandardControlOutcome> {
+  return standardOutcome(() =>
     apiClient.POST('/api/sessions/{session_id}/controls/interrupt', {
       params: { path: { session_id: sessionId } },
       body: { request_id: id },
@@ -59,8 +81,8 @@ export async function interrupt(
 export async function background(
   sessionId: SessionId,
   id: RequestId,
-): Promise<ControlOutcome> {
-  return outcome(() =>
+): Promise<StandardControlOutcome> {
+  return standardOutcome(() =>
     apiClient.POST('/api/sessions/{session_id}/controls/background', {
       params: { path: { session_id: sessionId } },
       body: { request_id: id },
@@ -71,8 +93,8 @@ export async function background(
 export async function closeSession(
   sessionId: SessionId,
   id: RequestId,
-): Promise<ControlOutcome> {
-  return outcome(() =>
+): Promise<StandardControlOutcome> {
+  return standardOutcome(() =>
     apiClient.POST('/api/sessions/{session_id}/controls/close-session', {
       params: { path: { session_id: sessionId } },
       body: { request_id: id },
@@ -84,8 +106,8 @@ export async function renameSession(
   sessionId: SessionId,
   id: RequestId,
   name: string,
-): Promise<ControlOutcome> {
-  return outcome(() =>
+): Promise<StandardControlOutcome> {
+  return standardOutcome(() =>
     apiClient.POST('/api/sessions/{session_id}/controls/rename-session', {
       params: { path: { session_id: sessionId } },
       body: { request_id: id, name },
@@ -96,8 +118,8 @@ export async function renameSession(
 export async function autoNameSession(
   sessionId: SessionId,
   id: RequestId,
-): Promise<ControlOutcome> {
-  return outcome(() =>
+): Promise<StandardControlOutcome> {
+  return standardOutcome(() =>
     apiClient.POST('/api/sessions/{session_id}/controls/auto-name-session', {
       params: { path: { session_id: sessionId } },
       body: { request_id: id },
@@ -112,8 +134,8 @@ export async function applyRewind(
   targetText: string,
   newerPromptCount: number,
   mode: string,
-): Promise<ControlOutcome> {
-  return outcome(() =>
+): Promise<StandardControlOutcome> {
+  return standardOutcome(() =>
     apiClient.POST('/api/sessions/{session_id}/controls/apply-rewind', {
       params: { path: { session_id: sessionId } },
       body: {
@@ -130,8 +152,8 @@ export async function applyRewind(
 export async function compact(
   sessionId: SessionId,
   id: RequestId,
-): Promise<ControlOutcome> {
-  return outcome(() =>
+): Promise<StandardControlOutcome> {
+  return standardOutcome(() =>
     apiClient.POST('/api/sessions/{session_id}/controls/compact', {
       params: { path: { session_id: sessionId } },
       body: { request_id: id },
@@ -143,8 +165,8 @@ export async function selectModel(
   sessionId: SessionId,
   id: RequestId,
   modelId: string,
-): Promise<ControlOutcome> {
-  return outcome(() =>
+): Promise<StandardControlOutcome> {
+  return standardOutcome(() =>
     apiClient.POST('/api/sessions/{session_id}/controls/select-model', {
       params: { path: { session_id: sessionId } },
       body: { request_id: id, model_id: modelId },
@@ -156,8 +178,8 @@ export async function selectEffort(
   sessionId: SessionId,
   id: RequestId,
   effort: string,
-): Promise<ControlOutcome> {
-  return outcome(() =>
+): Promise<StandardControlOutcome> {
+  return standardOutcome(() =>
     apiClient.POST('/api/sessions/{session_id}/controls/select-effort', {
       params: { path: { session_id: sessionId } },
       body: { request_id: id, effort },
@@ -177,8 +199,8 @@ export async function answerQuestion(
       }[]
     | null,
   discussion: string | null,
-): Promise<ControlOutcome> {
-  return outcome(() =>
+): Promise<StandardControlOutcome> {
+  return standardOutcome(() =>
     apiClient.POST('/api/sessions/{session_id}/controls/answer-question', {
       params: { path: { session_id: sessionId } },
       body: {
@@ -202,8 +224,8 @@ export async function readPlanChoices(
   sessionId: SessionId,
   id: RequestId,
   attentionId: string,
-): Promise<ControlOutcome> {
-  return outcome(() =>
+): Promise<StandardControlOutcome> {
+  return standardOutcome(() =>
     apiClient.POST('/api/sessions/{session_id}/controls/read-plan-choices', {
       params: { path: { session_id: sessionId } },
       body: { request_id: id, attention_id: attentionId },
@@ -217,8 +239,8 @@ export async function decidePlan(
   attentionId: string,
   decision: string,
   feedback: string | null,
-): Promise<ControlOutcome> {
-  return outcome(() =>
+): Promise<StandardControlOutcome> {
+  return standardOutcome(() =>
     apiClient.POST('/api/sessions/{session_id}/controls/decide-plan', {
       params: { path: { session_id: sessionId } },
       body: {

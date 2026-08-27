@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from domain.ids import AssignmentId, AttentionId, SessionId, ShellId, TurnId
+from domain.ids import AssignmentId, AttentionId, RequestId, SessionId, ShellId, TurnId
 from domain.stored import STORED
 from domain.values import OpenWorkKind, PlanState, ProgressStream, TitleOrigin
 
@@ -75,6 +75,16 @@ class PlanDecisionObservation:
     feedback: str | None
     edited: bool
     turn_id: TurnId | None
+
+
+@dataclass(frozen=True)
+class MessageQueueObservation:
+    """A message that a harness confirmed in its queue."""
+
+    __pydantic_config__ = STORED
+
+    request_id: RequestId
+    text: str
 
 
 @dataclass(frozen=True)

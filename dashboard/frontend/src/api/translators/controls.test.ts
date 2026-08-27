@@ -25,20 +25,31 @@ describe('control outcome translator', () => {
         request_id: 'request-three',
         status: 'indeterminate',
         reason: null,
-        queued: false,
         restored_text: '',
         corroborated: false,
       }),
-    ).toMatchObject({ kind: 'delivery', status: 'indeterminate' });
+    ).toMatchObject({ kind: 'interrupt', status: 'indeterminate' });
+
+    expect(
+      translateControlOutcome({
+        request_id: 'request-four',
+        status: 'queued',
+      }),
+    ).toEqual({
+      kind: 'message-delivery',
+      requestId: 'request-four',
+      status: 'queued',
+    });
   });
 
   it('rejects malformed extended outcomes', () => {
     expect(() =>
       translateControlOutcome({
-        request_id: 'request-four',
+        request_id: 'request-five',
         status: 'acknowledged',
         reason: null,
-        queued: 'no',
+        restored_text: '',
+        corroborated: 'no',
       }),
     ).toThrow(ControlValidationFailure);
   });

@@ -73,11 +73,7 @@ def default_model_usage_window(
     model: str,
 ) -> tuple[UsageRowResponse, UsageWindowResponse] | None:
     """Select one default model window, or wait while no row exists."""
-    failures = [
-        f"{row.harness}: {row.collection_error}"
-        for row in rows
-        if row.collection_error is not None
-    ]
+    failures = [f"{row.harness}: {row.collection_error}" for row in rows if row.collection_error is not None]
     if failures:
         if all("timed out" in failure.casefold() for failure in failures):
             return None
@@ -86,22 +82,13 @@ def default_model_usage_window(
     if not harness_rows:
         return None
     if len(harness_rows) > 1:
-        raise AssertionError(
-            f"harness {harness!r} has {len(harness_rows)} usage rows"
-        )
+        raise AssertionError(f"harness {harness!r} has {len(harness_rows)} usage rows")
     row = harness_rows[0]
     if row.account_id is not None or row.switchable:
         raise AssertionError(f"harness {harness!r} published an account selection")
-    matches = [
-        (row, window)
-        for window in row.windows
-        if window.scope == "model" and window.model_id == model
-    ]
+    matches = [(row, window) for window in row.windows if window.scope == "model" and window.model_id == model]
     if len(matches) > 1:
-        raise AssertionError(
-            f"harness {harness!r} has {len(matches)} model usage "
-            f"windows for {model!r}"
-        )
+        raise AssertionError(f"harness {harness!r} has {len(matches)} model usage windows for {model!r}")
     return matches[0] if matches else None
 
 
@@ -139,27 +126,23 @@ class BrowserSessionDriver:
             timeout=self._milliseconds(self._wait_policy.feed),
         )
         if self._usage_document_marker == "pending":
-            marker = self._page.evaluate(
-                "() => globalThis.__baqylauUsageDocumentMarker"
-            )
+            marker = self._page.evaluate("() => globalThis.__baqylauUsageDocumentMarker")
             if not isinstance(marker, str):
                 raise AssertionError("the browser document marker is missing")
             self._usage_document_marker = marker
 
     def omit_usage_from_next_application_read(self, harness: str) -> None:
-        self._page.add_init_script(
-            "globalThis.__baqylauUsageDocumentMarker = crypto.randomUUID()"
-        )
+        self._page.add_init_script("globalThis.__baqylauUsageDocumentMarker = crypto.randomUUID()")
         self._usage_document_marker = "pending"
 
         def omit(route: Route) -> None:
             response = route.fetch()
             document = GlobalApplicationResponse.model_validate(response.json())
-            filtered = document.model_copy(update={
-                "usage_rows": tuple(
-                    row for row in document.usage_rows if row.harness != harness
-                ),
-            })
+            filtered = document.model_copy(
+                update={
+                    "usage_rows": tuple(row for row in document.usage_rows if row.harness != harness),
+                }
+            )
             route.fulfill(response=response, json=filtered.model_dump(mode="json"))
 
         self._page.route("**/api/application", omit, times=1)
@@ -168,21 +151,15 @@ class BrowserSessionDriver:
         marker = self._usage_document_marker
         if marker is None or marker == "pending":
             raise AssertionError("the initial application read was not intercepted")
-        name = self._page.locator(".aname").filter(
-            has_text=re.compile(rf"^{re.escape(harness)}$")
-        )
+        name = self._page.locator(".aname").filter(has_text=re.compile(rf"^{re.escape(harness)}$"))
         expect(name).to_be_visible(
             timeout=self._milliseconds(self._wait_policy.feed),
         )
-        current_marker = self._page.evaluate(
-            "() => globalThis.__baqylauUsageDocumentMarker"
-        )
+        current_marker = self._page.evaluate("() => globalThis.__baqylauUsageDocumentMarker")
         assert current_marker == marker, "the browser reloaded the document"
 
     def start(self, spec: SessionSpec, prompt: str) -> BrowserSessionStart:
-        known = frozenset(
-            item.session.session_id for item in self._client.sessions.list().sessions
-        )
+        known = frozenset(item.session.session_id for item in self._client.sessions.list().sessions)
         workspace = spec.workspace or self._workspace
         dialog = self._open_new_session()
         self._configure_fresh_session(dialog, spec, workspace)
@@ -191,15 +168,9 @@ class BrowserSessionDriver:
         session = self._wait_for_visible_session(known)
         snapshot = self._client.sessions.snapshot(session)
         if snapshot.data.session.harness != spec.harness:
-            raise AssertionError(
-                f"browser launched {snapshot.data.session.harness!r}, not "
-                f"{spec.harness!r}"
-            )
+            raise AssertionError(f"browser launched {snapshot.data.session.harness!r}, not {spec.harness!r}")
         if snapshot.data.session.working_directory != workspace:
-            raise AssertionError(
-                f"browser launched in {snapshot.data.session.working_directory!r}, "
-                f"not {workspace!r}"
-            )
+            raise AssertionError(f"browser launched in {snapshot.data.session.working_directory!r}, not {workspace!r}")
         turn = selectors.launched_turn(
             self._client.sessions.watch(session),
             self._wait_policy.feed,
@@ -213,9 +184,7 @@ class BrowserSessionDriver:
 
     def open_fresh_session_form(self, source: SessionRef) -> BrowserSessionFormRef:
         request_start_index = len(self._request_paths)
-        workspace = self._client.sessions.snapshot(
-            source
-        ).data.session.working_directory
+        workspace = self._client.sessions.snapshot(source).data.session.working_directory
         dialog = self._open_new_session()
         dialog.get_by_label("directory").fill(workspace)
         dialog.get_by_label("directory").press("Tab")
@@ -240,9 +209,7 @@ class BrowserSessionDriver:
         _form: BrowserSessionFormRef,
         text: str,
     ) -> None:
-        self._new_session_dialog().get_by_placeholder(
-            re.compile(r"what should .* start on\?")
-        ).fill(text)
+        self._new_session_dialog().get_by_placeholder(re.compile(r"what should .* start on\?")).fill(text)
 
     def close_session_form(self, _form: BrowserSessionFormRef) -> None:
         self._new_session_dialog().press("Escape")
@@ -253,11 +220,9 @@ class BrowserSessionDriver:
         _form: BrowserSessionFormRef,
         text: str,
     ) -> None:
-        expect(
-            self._new_session_dialog().get_by_placeholder(
-                re.compile(r"what should .* start on\?")
-            )
-        ).to_have_value(text)
+        expect(self._new_session_dialog().get_by_placeholder(re.compile(r"what should .* start on\?"))).to_have_value(
+            text
+        )
 
     def assert_session_form_has_no_account_selection(
         self,
@@ -287,10 +252,8 @@ class BrowserSessionDriver:
         self,
         form: BrowserSessionFormRef,
     ) -> None:
-        paths = self._request_paths[form.request_start_index:]
-        assert self._resume_catalog_requests(paths) == (), (
-            "a fresh browser session form requested the resume catalog"
-        )
+        paths = self._request_paths[form.request_start_index :]
+        assert self._resume_catalog_requests(paths) == (), "a fresh browser session form requested the resume catalog"
 
     def assert_form_requested_resume_catalog(
         self,
@@ -352,9 +315,7 @@ class BrowserSessionDriver:
         )
 
     def open_session(self, session: SessionRef) -> None:
-        response = self._page.goto(
-            f"{self._endpoint}#/s/{session.session_id}"
-        )
+        response = self._page.goto(f"{self._endpoint}#/s/{session.session_id}")
         # A hash-only navigation stays in the current document, so Playwright
         # correctly returns no HTTP response. A response that does exist must
         # still be successful.
@@ -369,21 +330,17 @@ class BrowserSessionDriver:
             timeout=self._milliseconds(self._wait_policy.feed),
         )
         close.click()
-        confirm = self._page.get_by_role(
-            "button", name="close session?", exact=True
-        )
+        confirm = self._page.get_by_role("button", name="close session?", exact=True)
         with self._page.expect_response(
-            lambda response: response.request.method == "POST"
-            and response.url.endswith(
-                f"/api/sessions/{session.session_id}/controls/close-session"
+            lambda response: (
+                response.request.method == "POST"
+                and response.url.endswith(f"/api/sessions/{session.session_id}/controls/close-session")
             ),
             timeout=self._milliseconds(self._wait_policy.feed),
         ) as response_info:
             confirm.click()
         if not response_info.value.ok:
-            raise AssertionError(
-                f"browser close returned HTTP {response_info.value.status}"
-            )
+            raise AssertionError(f"browser close returned HTTP {response_info.value.status}")
         expect(self._page).to_have_url(
             re.compile(r"/#/$"),
             timeout=self._milliseconds(self._wait_policy.feed),
@@ -411,9 +368,7 @@ class BrowserSessionDriver:
         composer.locator("textarea").fill(text)
 
     def assert_composer_draft(self, text: str) -> None:
-        expect(
-            self._page.get_by_label("message composer").locator("textarea")
-        ).to_have_value(
+        expect(self._page.get_by_label("message composer").locator("textarea")).to_have_value(
             text,
             timeout=self._milliseconds(self._wait_policy.feed),
         )
@@ -448,6 +403,13 @@ class BrowserSessionDriver:
             timeout=self._milliseconds(self._wait_policy.feed),
         )
 
+    def interrupt_turn(self) -> None:
+        stop = self._page.locator("button.actstop")
+        expect(stop).to_be_enabled(
+            timeout=self._milliseconds(self._wait_policy.feed),
+        )
+        stop.click()
+
     def assert_queued_prompt(self, text: str) -> None:
         queued = self._page.locator(".msg.prompt.queued").filter(has_text=text)
         expect(queued).to_have_count(
@@ -457,9 +419,7 @@ class BrowserSessionDriver:
         expect(queued.locator(".qbadge")).to_have_text("⧗ queued")
 
     def assert_no_queued_prompt(self, text: str) -> None:
-        expect(
-            self._page.locator(".msg.prompt.queued").filter(has_text=text)
-        ).to_have_count(
+        expect(self._page.locator(".msg.prompt.queued").filter(has_text=text)).to_have_count(
             0,
             timeout=self._milliseconds(self._wait_policy.feed),
         )
@@ -487,13 +447,10 @@ class BrowserSessionDriver:
         operations = [
             entry.body
             for entry in snapshot.entries
-            if entry.entry_id == reference.entry_id
-            and isinstance(entry.body, FileBodyResponse)
+            if entry.entry_id == reference.entry_id and isinstance(entry.body, FileBodyResponse)
         ]
         if len(operations) != 1:
-            raise AssertionError(
-                f"file operation {reference.entry_id!r} has {len(operations)} matches"
-            )
+            raise AssertionError(f"file operation {reference.entry_id!r} has {len(operations)} matches")
         if reference.actor_id != snapshot.lead().actor_id:
             response = self._page.goto(
                 f"{self._endpoint}#/s/{quote(reference.session.session_id, safe='')}"
@@ -504,10 +461,14 @@ class BrowserSessionDriver:
             expect(self._page.locator(".stream")).to_be_visible(
                 timeout=self._milliseconds(self._wait_policy.feed),
             )
-        block = self._page.locator(".stream .blk").filter(
-            has=self._page.locator(".bchips", has_text=operations[0].path),
-        ).filter(
-            has=self._page.locator(".bchips > span:first-child", has_text="Edit"),
+        block = (
+            self._page.locator(".stream .blk")
+            .filter(
+                has=self._page.locator(".bchips", has_text=operations[0].path),
+            )
+            .filter(
+                has=self._page.locator(".bchips > span:first-child", has_text="Edit"),
+            )
         )
         expect(block).to_have_count(
             1,
@@ -543,9 +504,7 @@ class BrowserSessionDriver:
             # sentinel has already been retired. Observe both outcomes until
             # either one is true instead of pinning a disappearing DOM node.
             if time.monotonic() >= deadline:
-                raise AssertionError(
-                    "browser exposed neither older history nor its load sentinel"
-                )
+                raise AssertionError("browser exposed neither older history nor its load sentinel")
             self._page.wait_for_timeout(25)
 
     def load_older_history(self) -> None:
@@ -622,9 +581,7 @@ class BrowserSessionDriver:
             if not isinstance(outcome, PlanChoicesResultResponse):
                 raise AssertionError("plan did not return browser choices")
             choices = [
-                choice
-                for choice in outcome.choices
-                if choice.feedback == (action == BrowserPlanAction.FEEDBACK)
+                choice for choice in outcome.choices if choice.feedback == (action == BrowserPlanAction.FEEDBACK)
             ]
             if action == BrowserPlanAction.APPROVE:
                 choices = [choice for choice in choices if not choice.feedback]
@@ -709,8 +666,7 @@ class BrowserSessionDriver:
             f"session {session.session_id!r} notification mute state {muted}",
             lambda: (
                 True
-                if self._client.preferences.session_state(session).preferences.notifications_muted
-                == muted
+                if self._client.preferences.session_state(session).preferences.notifications_muted == muted
                 else None
             ),
             timeout=self._wait_policy.feed,
@@ -733,11 +689,7 @@ class BrowserSessionDriver:
         )
         wait_for(
             f"global notification state {enabled}",
-            lambda: (
-                True
-                if self._client.application.state().notifications.enabled == enabled
-                else None
-            ),
+            lambda: True if self._client.application.state().notifications.enabled == enabled else None,
             timeout=self._wait_policy.feed,
         )
 
@@ -778,9 +730,7 @@ class BrowserSessionDriver:
     def assert_reconnected_without_reload(self) -> None:
         self.assert_connected()
         found = self._page.evaluate("() => globalThis.__baqylauE2eSseMarker")
-        assert found == SSE_DOCUMENT_MARKER, (
-            "the browser reloaded while the event stream reconnected"
-        )
+        assert found == SSE_DOCUMENT_MARKER, "the browser reloaded while the event stream reconnected"
         self._network_drop_expected = False
 
     def assert_session_card_visible(self, session: SessionRef) -> None:
@@ -806,9 +756,7 @@ class BrowserSessionDriver:
             1,
             timeout=self._milliseconds(self._wait_policy.feed),
         )
-        expect(project.locator(".dircount")).to_have_text(
-            f"{len(sessions)} sessions"
-        )
+        expect(project.locator(".dircount")).to_have_text(f"{len(sessions)} sessions")
         expect(headers.filter(has_text=worktree_directory)).to_have_count(0)
         for session in sessions:
             self.assert_session_card_visible(session)
@@ -835,44 +783,28 @@ class BrowserSessionDriver:
         assert set(names.all_text_contents()) == {"claude", "codex"}
         account_name = row.display_name
         account = self._page.locator(".acct").filter(
-            has=self._page.locator(".aname").filter(
-                has_text=re.compile(rf"^{re.escape(account_name)}$")
-            )
+            has=self._page.locator(".aname").filter(has_text=re.compile(rf"^{re.escape(account_name)}$"))
         )
         expect(account).to_have_count(1)
         model_bar = account.locator(".ubar").filter(
-            has=self._page.locator(".ulabel").filter(
-                has_text=re.compile(rf"^{re.escape(model_window.label)}$")
-            )
+            has=self._page.locator(".ulabel").filter(has_text=re.compile(rf"^{re.escape(model_window.label)}$"))
         )
         expect(model_bar).to_have_count(1)
-        expect(model_bar.locator(".upct")).to_have_text(
-            f"{model_window.used_percent}%"
-        )
+        expect(model_bar.locator(".upct")).to_have_text(f"{model_window.used_percent}%")
         expect(self._page.locator(".usage-collection-error")).to_have_count(0)
         weekly = next(
-            (
-                window
-                for window in row.windows
-                if window.scope == "account" and window.duration_minutes == 7 * 24 * 60
-            ),
+            (window for window in row.windows if window.scope == "account" and window.duration_minutes == 7 * 24 * 60),
             None,
         )
         if weekly is None or weekly.resets_at is None:
-            raise AssertionError(
-                f"account {account_name!r} has no weekly reset information"
-            )
+            raise AssertionError(f"account {account_name!r} has no weekly reset information")
         weekly_bar = account.locator(".ubar").filter(
-            has=self._page.locator(".ulabel").filter(
-                has_text=re.compile(rf"^{re.escape(weekly.label)}$")
-            )
+            has=self._page.locator(".ulabel").filter(has_text=re.compile(rf"^{re.escape(weekly.label)}$"))
         )
         expect(weekly_bar.locator(".ureset")).to_contain_text("resets")
 
     def assert_clean(self) -> None:
-        assert self._browser_failures == [], (
-            f"browser reported failures: {self._browser_failures}"
-        )
+        assert self._browser_failures == [], f"browser reported failures: {self._browser_failures}"
 
     def _open_new_session(self) -> Locator:
         self.open_session_list()
@@ -899,15 +831,9 @@ class BrowserSessionDriver:
         directory = dialog.get_by_label("directory")
         directory.fill(workspace)
         directory.press("Tab")
-        harnesses = tuple(
-            harness
-            for harness in self._client.harnesses.list()
-            if harness.name == spec.harness
-        )
+        harnesses = tuple(harness for harness in self._client.harnesses.list() if harness.name == spec.harness)
         if len(harnesses) != 1:
-            raise AssertionError(
-                f"harness {spec.harness!r} has {len(harnesses)} catalog rows"
-            )
+            raise AssertionError(f"harness {spec.harness!r} has {len(harnesses)} catalog rows")
         self._select(dialog, "harness", harnesses[0].display_name)
         catalog = self._client.harnesses.catalog(
             spec.harness,
@@ -917,27 +843,19 @@ class BrowserSessionDriver:
             accounts = [
                 row
                 for row in self._client.usage.state().usage_rows
-                if row.harness == spec.harness
-                and row.account_id == spec.account_id
-                and row.switchable
+                if row.harness == spec.harness and row.account_id == spec.account_id and row.switchable
             ]
             if len(accounts) != 1:
-                raise AssertionError(
-                    f"account {spec.account_id!r} has {len(accounts)} usage rows"
-                )
+                raise AssertionError(f"account {spec.account_id!r} has {len(accounts)} usage rows")
             self._select(dialog, "account", accounts[0].display_name)
         models = tuple(model for model in catalog.models if model.model_id == spec.model)
         if len(models) != 1:
-            raise AssertionError(
-                f"model {spec.model!r} has {len(models)} catalog rows"
-            )
+            raise AssertionError(f"model {spec.model!r} has {len(models)} catalog rows")
         model = models[0]
         self._select(dialog, "model", model.display_name)
         efforts = tuple(effort for effort in model.efforts if effort.value == spec.effort)
         if len(efforts) != 1:
-            raise AssertionError(
-                f"effort {spec.effort!r} has {len(efforts)} catalog rows"
-            )
+            raise AssertionError(f"effort {spec.effort!r} has {len(efforts)} catalog rows")
         self._select(dialog, "effort", efforts[0].display_name)
 
     def _select(self, dialog: Locator, label: str, option: str) -> None:
@@ -995,10 +913,14 @@ class BrowserSessionDriver:
         return tuple(path for path in paths if path == "/api/resumable-sessions")
 
     def _resume_option(self, source: SessionRef) -> Locator:
-        return self._new_session_dialog().get_by_role(
-            "listbox",
-            name="sessions to resume",
-        ).locator(f'[role="option"][data-session-id="{source.session_id}"]')
+        return (
+            self._new_session_dialog()
+            .get_by_role(
+                "listbox",
+                name="sessions to resume",
+            )
+            .locator(f'[role="option"][data-session-id="{source.session_id}"]')
+        )
 
     @staticmethod
     def _form_source(form: BrowserSessionFormRef) -> SessionRef:
@@ -1017,54 +939,32 @@ class BrowserSessionDriver:
         snapshot: SessionSnapshot,
         reference: QuestionRef,
     ) -> tuple[QuestionState, QuestionResponse]:
-        states = [
-            item
-            for item in snapshot.questions()
-            if item.attention_id == reference.attention_id
-        ]
+        states = [item for item in snapshot.questions() if item.attention_id == reference.attention_id]
         if len(states) != 1:
-            raise AssertionError(
-                f"question attention {reference.attention_id!r} has {len(states)} matches"
-            )
-        prompts = [
-            item
-            for item in states[0].questions
-            if item.question_id == reference.question_id
-        ]
+            raise AssertionError(f"question attention {reference.attention_id!r} has {len(states)} matches")
+        prompts = [item for item in states[0].questions if item.question_id == reference.question_id]
         if len(prompts) != 1:
-            raise AssertionError(
-                f"question {reference.question_id!r} has {len(prompts)} matches"
-            )
+            raise AssertionError(f"question {reference.question_id!r} has {len(prompts)} matches")
         return states[0], prompts[0]
 
     @staticmethod
     def _plan(snapshot: SessionSnapshot, reference: PlanRef) -> PlanState:
-        states = [
-            item
-            for item in snapshot.plans()
-            if item.attention_id == reference.attention_id
-        ]
+        states = [item for item in snapshot.plans() if item.attention_id == reference.attention_id]
         if len(states) != 1:
-            raise AssertionError(
-                f"plan attention {reference.attention_id!r} has {len(states)} matches"
-            )
+            raise AssertionError(f"plan attention {reference.attention_id!r} has {len(states)} matches")
         return states[0]
 
     def _wait_for_question_resolution(self, reference: QuestionRef) -> None:
         self._client.sessions.watch(reference.session).wait(
             "browser question action to resolve",
-            lambda snapshot: (
-                True if not self._question(snapshot, reference)[0].pending else None
-            ),
+            lambda snapshot: True if not self._question(snapshot, reference)[0].pending else None,
             timeout=self._wait_policy.feed,
         )
 
     def _wait_for_plan_resolution(self, reference: PlanRef, state: str) -> None:
         self._client.sessions.watch(reference.session).wait(
             f"browser plan action to record state {state!r}",
-            lambda snapshot: (
-                True if self._plan(snapshot, reference).state == state else None
-            ),
+            lambda snapshot: True if self._plan(snapshot, reference).state == state else None,
             timeout=self._wait_policy.feed,
         )
 

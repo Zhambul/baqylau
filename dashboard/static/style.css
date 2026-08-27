@@ -1075,10 +1075,7 @@ body.in-session #accounts { display: none; }
 .nsdictrow .nsinput { flex: 1; }
 
 /* ---- queued messages (Claude Code's mid-turn queue) ---------------------- */
-/* A message typed while a turn is running is queued and delivered at the turn
-   boundary. It rides at the TOP of the transcript (the .pinq pane, above the
-   newest-first stream so activity never buries it) as an amber "⧗ queued" prompt
-   bubble until its real prompt lands and drainQueue swaps it out. */
+/* A harness-queued message stays at the top until its real prompt arrives. */
 .pinq { margin: 0 0 2px; }
 .pinq[hidden] { display: none; }
 .msg.prompt.queued { border-left-color: var(--amber); }
@@ -1088,6 +1085,13 @@ body.in-session #accounts { display: none; }
   border-radius: 999px; vertical-align: middle;
   background: color-mix(in srgb, var(--amber) 18%, transparent);
   color: var(--amber); font: 600 10px/1.55 var(--sans);
+  letter-spacing: .04em; text-transform: none;
+}
+.sbadge {
+  display: inline-block; margin-left: 8px; padding: 0 7px;
+  border-radius: 999px; vertical-align: middle;
+  background: color-mix(in srgb, var(--done) 18%, transparent);
+  color: var(--done); font: 600 10px/1.55 var(--sans);
   letter-spacing: .04em; text-transform: none;
 }
 .msg.prompt.queued .qx {

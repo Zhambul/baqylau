@@ -36,10 +36,6 @@ class HarnessInfo:
     # Whether compaction yields readable context for people, rather than only
     # an opaque continuation item for the harness itself.
     supports_readable_compaction_context: bool = False
-    # A queued Enter is owned by the CLI and drains at its turn boundary. When
-    # false, the application keeps the item durable and submits it after the
-    # canonical turn-finished fact.
-    supports_native_text_queue: bool = False
     # Whether a launch MUST carry a first message. True for a harness that
     # announces its session only once the first TURN begins — its session-start
     # raw event lands with the first prompt, never at startup. Launched with an

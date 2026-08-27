@@ -7,8 +7,8 @@ from harness.contract import CanonicalEventReaction, HarnessController
 from harness.models import (
     ControlAcknowledgement,
     ControlContext,
-    ControlOutcome,
     ControlResult,
+    MessageDeliveryResult,
     RenameSession,
 )
 from terminal.adapter import TerminalAdapter
@@ -29,8 +29,10 @@ class SessionRenamer(CanonicalEventReaction):
         controller: HarnessController,
         rename_session: RenameSession,
         control_context: ControlContext,
-    ) -> ControlOutcome:
+    ) -> ControlResult:
         outcome = controller.execute(rename_session, control_context)
+        if isinstance(outcome, MessageDeliveryResult):
+            raise TypeError("rename control returned a message delivery result")
         if outcome.status != ControlAcknowledgement.ACKNOWLEDGED:
             return outcome
         terminal_outcome = self._terminal.rename_session_tab(

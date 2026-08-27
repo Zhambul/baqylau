@@ -16,7 +16,6 @@ from domain.values import TitleOrigin, content_text
 from harness.models import (
     AUTOMATIC_TITLE_SOURCE_TYPE,
     ControlAcknowledgement,
-    ControlOutcome,
     ControlResult,
     RawEvent,
     Session,
@@ -73,19 +72,18 @@ class AutomaticSessionNamer:
         self,
         session: Session,
         request_id: RequestId,
-        apply_title: Callable[[str], ControlOutcome],
-    ) -> ControlOutcome:
+        apply_title: Callable[[str], ControlResult],
+    ) -> ControlResult:
         key = f"requested:{session.session_id}:{request_id}"
-        job, inserted = self.jobs.register_running(
-            NamingJob(key, session.session_id, "", NamingJobState.RUNNING)
-        )
+        job, inserted = self.jobs.register_running(NamingJob(key, session.session_id, "", NamingJobState.RUNNING))
         if not inserted:
             if job.state == NamingJobState.COMPLETED and job.title:
                 return apply_title(job.title)
             return ControlResult(
                 request_id,
                 ControlAcknowledgement.INDETERMINATE,
-                "automatic naming request is already in progress" if job.state == NamingJobState.RUNNING
+                "automatic naming request is already in progress"
+                if job.state == NamingJobState.RUNNING
                 else "no small model is currently available",
             )
         try:
@@ -137,9 +135,7 @@ class AutomaticSessionNamer:
 
     def _generate(self, first_prompt: str, session_id: str) -> str:
         bounded = bounded_prompt(first_prompt)
-        response = self.models.small().send(
-            ModelPromptRequest(TITLE_PROMPT.format(prompt=bounded), session_id)
-        )
+        response = self.models.small().send(ModelPromptRequest(TITLE_PROMPT.format(prompt=bounded), session_id))
         return normalize_title(response.text)
 
     def _session_prompt(self, session: Session) -> str:
@@ -148,9 +144,7 @@ class AutomaticSessionNamer:
             (
                 entry.body
                 for entry in entries
-                if isinstance(entry.body, MessageBody)
-                and entry.body.role == "user"
-                and entry.body.phase == "prompt"
+                if isinstance(entry.body, MessageBody) and entry.body.role == "user" and entry.body.phase == "prompt"
             ),
             None,
         )
@@ -192,9 +186,7 @@ class AutomaticSessionNamer:
 
 def bounded_prompt(prompt: str) -> str:
     plain = "".join(
-        character
-        for character in prompt
-        if character in "\n\t" or not unicodedata.category(character).startswith("C")
+        character for character in prompt if character in "\n\t" or not unicodedata.category(character).startswith("C")
     )
     return plain.strip()[:FIRST_PROMPT_LIMIT]
 
@@ -206,9 +198,7 @@ def normalize_title(title: str) -> str:
     cleaned = html.unescape(HTML_TAG.sub("", lines[0]))
     cleaned = MARKDOWN_LINK.sub(r"\1", cleaned)
     cleaned = MARKUP.sub("", cleaned)
-    cleaned = "".join(
-        character for character in cleaned if not unicodedata.category(character).startswith("C")
-    )
+    cleaned = "".join(character for character in cleaned if not unicodedata.category(character).startswith("C"))
     cleaned = WHITESPACE.sub(" ", cleaned).strip(" \"'“”‘’")
     words = cleaned.split()
     if len(words) < 3:

@@ -158,7 +158,7 @@ Feature: sessions cross dashboard and terminal boundaries
       | harness | model        |
       | codex   | gpt-5.6-luna |
 
-  Scenario Outline: interrupting a busy terminal returns its tab to done
+  Scenario Outline: terminal Escape starts a prompt queued from the dashboard
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I start journey session "primary" from the terminal as turn "interrupted terminal work" with prompt
       """
@@ -168,18 +168,51 @@ Feature: sessions cross dashboard and terminal boundaries
       """
     And I name the only running foreground command in turn "interrupted terminal work" containing 'time.sleep(30)' "interrupted terminal command"
     Then the terminal tab for journey session "primary" has color executing
-    When I request interruption in session "primary" as control "interrupt busy terminal"
-    Then control "interrupt busy terminal" response is accepted
-    And control "interrupt busy terminal" outcome is acknowledged
+    When I continue journey session "primary" from the dashboard as turn "work after terminal interrupt" with prompt
+      """
+      Reply only with TERMINAL_INTERRUPT_QUEUE_DONE.
+      """
+    Then session "primary" has queued prompt 'Reply only with TERMINAL_INTERRUPT_QUEUE_DONE.' after a fresh application read
+    When I interrupt journey session "primary" from its terminal
+    Then turn "interrupted terminal work" has state aborted
     And command "interrupted terminal command" has state cancelled
+    And turn "work after terminal interrupt" completes
+    And turn "work after terminal interrupt" has final answer 'TERMINAL_INTERRUPT_QUEUE_DONE'
+    And session "primary" has no queued prompts after a fresh application read
     And the lead in session "primary" has status awaiting_response
     And the terminal tab for journey session "primary" has color awaiting_response
     And session "primary" has no running work
 
     Examples:
-      | harness     | model        |
-      | codex       | gpt-5.6-luna |
-      | claude_code | haiku        |
+      | harness     | model |
+      | claude_code | haiku |
+
+  Scenario Outline: terminal Escape keeps a prompt queued from the dashboard
+    Given session configuration "primary" uses <harness> with model <model> and low effort
+    When I start journey session "primary" from the terminal as turn "interrupted terminal work" with prompt
+      """
+      Run `python -c 'import time; time.sleep(30); print("should-not-finish")'`
+      as a foreground shell command. Do not run it in the background. Wait for
+      it before you reply.
+      """
+    And I name the only running foreground command in turn "interrupted terminal work" containing 'time.sleep(30)' "interrupted terminal command"
+    Then the terminal tab for journey session "primary" has color executing
+    When I continue journey session "primary" from the dashboard as turn "queued work" with prompt
+      """
+      Reply only with CODEX_TERMINAL_QUEUE_STAYS.
+      """
+    Then session "primary" has queued prompt 'Reply only with CODEX_TERMINAL_QUEUE_STAYS.' after a fresh application read
+    When I interrupt journey session "primary" from its terminal
+    Then turn "interrupted terminal work" has state aborted
+    And command "interrupted terminal command" has state cancelled
+    And the lead in session "primary" has status awaiting_response
+    And the terminal tab for journey session "primary" has color awaiting_response
+    And session "primary" has queued prompt 'Reply only with CODEX_TERMINAL_QUEUE_STAYS.' after a fresh application read
+    And session "primary" has no running work
+
+    Examples:
+      | harness | model        |
+      | codex   | gpt-5.6-luna |
 
   Scenario Outline: renaming a completed session keeps its terminal tab done
     Given session configuration "primary" uses <harness> with model <model> and low effort

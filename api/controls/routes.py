@@ -27,7 +27,12 @@ from api.controls.models.control_outcome_response import ControlOutcomeResponse
 from api.controls.models.launch_response import LaunchResponse
 from api.responses import with_body
 from domain.ids import HarnessName, SessionId
-from harness.models import ControlAcknowledgement, ControlOutcome, LaunchStatus
+from harness.models import (
+    ControlAcknowledgement,
+    ControlOutcome,
+    LaunchStatus,
+    MessageDeliveryResult,
+)
 
 router = APIRouter()
 
@@ -68,7 +73,11 @@ def launch(
 def _respond(outcome: ControlOutcome, response: Response) -> ControlOutcomeResponse:
     """The status is set ON the injected response rather than by wrapping the body
     in one, which is what lets the handler return the outcome ITSELF."""
-    response.status_code = CONTROL_STATUS[outcome.status]
+    response.status_code = (
+        200
+        if isinstance(outcome, MessageDeliveryResult)
+        else CONTROL_STATUS[outcome.status]
+    )
     return mapper.control_outcome(outcome)
 
 

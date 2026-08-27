@@ -437,10 +437,9 @@ InterruptTracking = Annotated[InterruptRegistry, Depends(interrupt_registry)]
 @singleton
 def control_effects(
     raw: RawEvents,
-    workspaces: Workspaces,
     read_model: SessionDataStore,
 ) -> ControlEffectRecorder:
-    return ControlEffectRecorder(raw, workspaces, read_model)
+    return ControlEffectRecorder(raw, read_model)
 
 
 ControlEffects = Annotated[ControlEffectRecorder, Depends(control_effects)]
@@ -757,7 +756,6 @@ def reactions(
     workspaces: Workspaces,
     harnesses: Registry,
     jobs: NamingJobs,
-    control_service: Controls,
     titles: SessionTitles,
 ) -> tuple[CanonicalEventReaction, ...]:
     """What a committed fact CAUSES, in dependency order, on the reaction loop."""
@@ -765,7 +763,7 @@ def reactions(
         AutomaticNamingReaction(harnesses, jobs),
         titles,
         PaneCanonicalEventReaction(adapter, session_storage, widths),
-        QueuedPromptCanonicalEventReaction(workspaces, control_service),
+        QueuedPromptCanonicalEventReaction(workspaces),
         InterruptCanonicalEventReaction(interrupts),
     )
 

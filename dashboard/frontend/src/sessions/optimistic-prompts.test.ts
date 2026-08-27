@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { mergeQueuedPrompts, promptMatches } from './optimistic-prompts';
+import {
+  mergeQueuedPrompts,
+  promptMatches,
+  restoredPromptIsQueued,
+} from './optimistic-prompts';
 
 describe('promptMatches', () => {
   it('allows attachment and restored-draft prefixes', () => {
@@ -11,6 +15,20 @@ describe('promptMatches', () => {
 
   it('never matches an empty send', () => {
     expect(promptMatches('anything', '')).toBe(false);
+  });
+});
+
+describe('restoredPromptIsQueued', () => {
+  it('does not restore a queued prompt after an interrupt starts it', () => {
+    expect(
+      restoredPromptIsQueued('next queued prompt', ['next queued prompt']),
+    ).toBe(true);
+  });
+
+  it('keeps a different terminal draft', () => {
+    expect(restoredPromptIsQueued('unfinished draft', ['next prompt'])).toBe(
+      false,
+    );
   });
 });
 

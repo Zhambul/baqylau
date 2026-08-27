@@ -239,9 +239,9 @@ Feature: the browser controls real harness sessions
       | codex       | gpt-5.6-luna | no      |
       | claude_code | haiku        | no           |
 
-  Scenario Outline: a browser keeps and drains a prompt queued during active work
+  Scenario Outline: a browser interrupt starts its queued prompt
     Given session configuration "primary" uses <harness> with model <model> and low effort
-    And session configuration "primary" uses <account> account
+    And session configuration "primary" uses no account
     When I launch session "primary" as turn "active work" with prompt
       """
       Run `while [ ! -f .baqylau-browser-active-release ]; do sleep 0.2; done; printf 'browser-active-finished\n'`
@@ -258,20 +258,52 @@ Feature: the browser controls real harness sessions
     And session "primary" has queued prompt 'Reply with the exact marker BROWSER_QUEUED_DONE and no other text.' after a fresh application read
     When I reload browser session "primary"
     Then the browser shows queued prompt 'Reply with the exact marker BROWSER_QUEUED_DONE and no other text.'
-    When I release active browser work in session "primary"
-    And I name a successful shell attempt in turn "active work" containing 'baqylau-browser-active-release' "active command"
-    Then command "active command" has state succeeded
-    And turn "queued work" produces its final answer after command "active command" finishes
+    When I stop the current turn in the browser
+    Then command "observed active command" has state cancelled
+    And turn "active work" has state aborted
     And turn "queued work" completes
     And turn "queued work" has final answer 'BROWSER_QUEUED_DONE'
     And the browser does not show queued prompt 'Reply with the exact marker BROWSER_QUEUED_DONE and no other text.'
+    And the browser composer is empty
     And session "primary" has no queued prompts after a fresh application read
+    And the lead in session "primary" has status awaiting_response
     And session "primary" has no running work
 
     Examples:
-      | harness     | model        | account |
-      | codex       | gpt-5.6-luna | no      |
-      | claude_code | haiku        | no           |
+      | harness     | model |
+      | claude_code | haiku |
+
+  Scenario Outline: a browser interrupt keeps its queued prompt visible
+    Given session configuration "primary" uses <harness> with model <model> and low effort
+    And session configuration "primary" uses no account
+    When I launch session "primary" as turn "active work" with prompt
+      """
+      Run `python -c 'import time; time.sleep(30); print("should-not-finish")'`
+      as a foreground shell command. Do not run it in the background. Wait for
+      it before you reply.
+      """
+    And I name the only running command in turn "active work" containing 'time.sleep(30)' "active command"
+    And I open session "primary" in the browser
+    And I send browser prompt to session "primary" as turn "queued work"
+      """
+      Reply only with CODEX_BROWSER_QUEUE_STAYS.
+      """
+    Then the browser shows queued prompt 'Reply only with CODEX_BROWSER_QUEUE_STAYS.'
+    And session "primary" has queued prompt 'Reply only with CODEX_BROWSER_QUEUE_STAYS.' after a fresh application read
+    When I stop the current turn in the browser
+    Then command "active command" has state cancelled
+    And turn "active work" has state aborted
+    And the lead in session "primary" has status awaiting_response
+    And the browser shows queued prompt 'Reply only with CODEX_BROWSER_QUEUE_STAYS.'
+    And the browser composer is empty
+    When I reload browser session "primary"
+    Then the browser shows queued prompt 'Reply only with CODEX_BROWSER_QUEUE_STAYS.'
+    And session "primary" has queued prompt 'Reply only with CODEX_BROWSER_QUEUE_STAYS.' after a fresh application read
+    And session "primary" has no running work
+
+    Examples:
+      | harness | model        |
+      | codex   | gpt-5.6-luna |
 
   Scenario Outline: a browser loads older activity from one consistent feed
     Given session configuration "primary" uses <harness> with model <model> and low effort

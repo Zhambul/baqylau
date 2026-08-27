@@ -155,6 +155,7 @@
   }
 
   function outcomeFailure(outcome: ControlOutcome): string | null {
+    if (outcome.kind === 'message-delivery') return null;
     if (outcome.status === 'acknowledged') return null;
     if (outcome.reason !== null && outcome.reason.length > 0)
       return outcome.reason;
@@ -206,7 +207,7 @@
         dispatchDraft(text);
         return;
       }
-      if (outcome.kind === 'delivery' && outcome.queued) {
+      if (outcome.kind === 'message-delivery' && outcome.status === 'queued') {
         view.settlePendingPrompt(requestId, 'dropped', 'queued');
         view.queuePendingPrompt(requestId, text);
       }

@@ -155,7 +155,7 @@ def _send_prompt(
     lead = before.lead()
     expected = lead.statistics.prompt_count + 1
     receipt = client.sessions.send(session, prompt)
-    if receipt.status_code != 200 or receipt.outcome.status != "acknowledged":
+    if receipt.status_code != 200 or receipt.outcome.status not in ("sent", "queued"):
         raise AssertionError(
             f"send action {receipt.request_id!r} was not accepted: {receipt.outcome}"
         )
@@ -240,7 +240,7 @@ def revise_restored_draft(
         prompt,
         replace_terminal_draft=True,
     )
-    if receipt.status_code != 200 or receipt.outcome.status != "acknowledged":
+    if receipt.status_code != 200 or receipt.outcome.status not in ("sent", "queued"):
         raise AssertionError(
             f"draft revision {receipt.request_id!r} was not accepted: {receipt.outcome}"
         )

@@ -8,7 +8,11 @@ from typing import TypeAlias
 from pydantic import BaseModel
 
 from api.common.models.values.plan_choice import PlanChoiceResponse
-from harness.models import ConfirmationOutcome, ControlAcknowledgement
+from harness.models import (
+    ConfirmationOutcome,
+    ControlAcknowledgement,
+    MessageDeliveryStatus,
+)
 
 
 class ControlResultResponse(BaseModel):
@@ -19,14 +23,18 @@ class ControlResultResponse(BaseModel):
     reason: str | None
 
 
-class DeliveryResultResponse(ControlResultResponse):
-    """send-text and interrupt. `queued` is the server's verdict that the text
-    landed mid-turn; `corroborated` marks an interrupt the harness confirmed in
-    its own raw events rather than one read off its screen."""
+class InterruptResultResponse(ControlResultResponse):
+    """The result of an interrupt request."""
 
-    queued: bool
     restored_text: str
     corroborated: bool
+
+
+class MessageDeliveryResultResponse(BaseModel):
+    """The location that the harness confirmed for one message."""
+
+    request_id: str
+    status: MessageDeliveryStatus
 
 
 class CommandResultResponse(ControlResultResponse):
@@ -44,7 +52,8 @@ class PlanChoicesResultResponse(ControlResultResponse):
 
 ControlOutcomeResponse: TypeAlias = (
     ControlResultResponse
-    | DeliveryResultResponse
+    | InterruptResultResponse
+    | MessageDeliveryResultResponse
     | CommandResultResponse
     | RewindResultResponse
     | PlanChoicesResultResponse

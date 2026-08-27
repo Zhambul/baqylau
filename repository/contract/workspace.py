@@ -1,8 +1,8 @@
-"""Your unsent work on one session, stored across four tables.
+"""Local composer work and the harness queue mirror, stored across four tables.
 
-`find` assembles them into one `SessionWorkspace`, UNFILTERED: dropping a draft
-whose text has since been delivered, or a dialog whose attention is no longer
-pending, needs canonical facts and belongs to the service above.
+`find` assembles them into one `SessionWorkspace`, UNFILTERED. Canonical facts
+add and remove queue items, drop a delivered draft, and drop a dialog whose
+attention is no longer pending. That filtering belongs to the service above.
 """
 
 from __future__ import annotations

@@ -127,7 +127,11 @@
     class={['msg', presentation.className, extraClass]}
     data-item-group={presentation.group}
   >
-    <span class="who">{presentation.label}</span>
+    <span class="who"
+      >{presentation.label}{#if presentation.conversationKind === 'prompt'}<span
+          class="sbadge">✓ sent</span
+        >{/if}</span
+    >
     {#if presentation.questions.length > 0}
       <div class="md">
         {#each presentation.questions as question (question.questionId)}

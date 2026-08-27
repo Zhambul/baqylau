@@ -63,6 +63,10 @@ SPLIT_LOCATIONS = {"vertical": "vsplit", "horizontal": "hsplit"}
 EMPTY_TAGS: Mapping[str, str] = {}
 
 
+def _key_name(key: str) -> str:
+    return "esc" if key == "escape" else key
+
+
 def _hex(rgb: RGB) -> str:
     return f"#{rgb.red:02x}{rgb.green:02x}{rgb.blue:02x}"
 
@@ -338,7 +342,10 @@ class KittyInput(TerminalInput):
         # never sees \x1b as Escape). rc 0 only says the call was accepted —
         # kitty reports no per-window delivery errors for send-key.
         failed = self.kitty_remote.run(
-            "send-key", "--match", match.window(key_send_request.window_id), key_send_request.key
+            "send-key",
+            "--match",
+            match.window(key_send_request.window_id),
+            _key_name(key_send_request.key),
         )
         return KeySendResponse(not failed, "terminal key input failed" if failed else None)
 

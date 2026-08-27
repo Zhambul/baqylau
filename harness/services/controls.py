@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import threading
 import time
-from collections.abc import Callable
+from _thread import LockType
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Protocol
 
 from audit.models import AuditDocument
@@ -25,10 +28,11 @@ from harness.models import (
     ControlRequest,
     ControlResult,
     DecidePlan,
-    DeliveryResult,
     DurableTitleResult,
     Interrupt,
     InterruptRegistry,
+    MessageDeliveryResult,
+    MessageDeliveryStatus,
     OpenRewind,
     ReadPlanChoices,
     RenameSession,
@@ -57,8 +61,8 @@ class AutomaticSessionNaming(Protocol):
         self,
         session: Session,
         request_id: RequestId,
-        _apply_title: Callable[[str], ControlOutcome],
-    ) -> ControlOutcome: ...
+        _apply_title: Callable[[str], ControlResult],
+    ) -> ControlResult: ...
 
 
 class SessionRenaming(Protocol):
@@ -67,7 +71,28 @@ class SessionRenaming(Protocol):
         _harness_controller: HarnessController,
         rename_session: RenameSession,
         control_context: ControlContext,
-    ) -> ControlOutcome: ...
+    ) -> ControlResult: ...
+
+
+def _control_result(outcome: ControlOutcome) -> ControlResult:
+    if isinstance(outcome, MessageDeliveryResult):
+        raise TypeError("non-message control returned a message delivery result")
+    return outcome
+
+
+class _SessionControlGate:
+    """Run one terminal gesture at a time for each session."""
+
+    def __init__(self) -> None:
+        self._guard = threading.Lock()
+        self._locks: dict[SessionId, LockType] = {}
+
+    @contextmanager
+    def enter(self, session_id: SessionId) -> Iterator[None]:
+        with self._guard:
+            lock = self._locks.setdefault(session_id, threading.Lock())
+        with lock:
+            yield
 
 
 # Every control gesture's OUTCOME, recorded at the one dispatch point every
@@ -107,7 +132,7 @@ def _audit_control(
                 control=getattr(request, "control_name", ""),
                 request_id=request.request_id,
                 status=outcome.status if outcome is not None else "raised",
-                reason=(outcome.reason if outcome is not None else "") or "",
+                reason=(getattr(outcome, "reason", "") if outcome is not None else "") or "",
                 ms=round(elapsed * 1000),
             ),
         )
@@ -140,86 +165,58 @@ class HarnessControlService(HarnessReactorContext):
         self.control_effects = control_effect_recorder
         self.automatic_namer = automatic_session_naming
         self.session_renamer = session_renaming
+        self._control_gate = _SessionControlGate()
 
     # One typed public method per gesture — the request type IS the parameter,
     # so a caller never builds a bare `ControlRequest` and this class never
     # branches on a command word. Every one of them flows through `_audited`,
     # the single core that times the gesture, calls the harness, and writes
     # the one audit row.
-    def send_text(self, send_text: SendText) -> ControlOutcome:
-        return self._audited(send_text)
+    def send_text(self, send_text: SendText) -> ControlResult | MessageDeliveryResult:
+        return self._dispatch(send_text)
 
-    def send_queued_text(self, send_text: SendText) -> ControlOutcome:
-        """Deliver a durable item after a canonical idle boundary.
+    def interrupt(self, interrupt: Interrupt) -> ControlResult:
+        return _control_result(self._dispatch(interrupt))
 
-        The session-data projection can still report the just-finished turn as
-        active while reactions for that same fact are running.  The canonical
-        boundary is the stronger fact, so the drain path explicitly supplies
-        the idle state instead of re-queueing the item forever.
-        """
-        session = self.sessions.find(send_text.session_id)
-        if (
-            session is not None
-            and session.plugin is not None
-            and session.plugin.info.supports_native_text_queue
-        ):
-            # The native queue accepted the original Enter and owns delivery.
-            # Its eventual prompt fact removes the durable UI copy.
-            return DeliveryResult(
-                send_text.request_id,
-                ControlAcknowledgement.ACKNOWLEDGED,
-                queued=True,
-            )
-        outcome = self._audited(send_text, lead_active=False)
-        if (
-            isinstance(outcome, DeliveryResult)
-            and outcome.status == ControlAcknowledgement.ACKNOWLEDGED
-            and not outcome.queued
-        ):
-            # A plugin without a native queue gets one idle submit. Remove the
-            # item now so a slash command, which has no native prompt fact,
-            # cannot run again at each later turn boundary.
-            self.control_effects.text_delivered(send_text)
-        return outcome
+    def background(self, background: Background) -> ControlResult:
+        return _control_result(self._dispatch(background))
 
-    def interrupt(self, interrupt: Interrupt) -> ControlOutcome:
-        return self._audited(interrupt)
+    def close_session(self, close_session: CloseSession) -> ControlResult:
+        return _control_result(self._dispatch(close_session))
 
-    def background(self, background: Background) -> ControlOutcome:
-        return self._audited(background)
+    def rename_session(self, rename_session: RenameSession) -> ControlResult:
+        return _control_result(self._dispatch(rename_session))
 
-    def close_session(self, close_session: CloseSession) -> ControlOutcome:
-        return self._audited(close_session)
+    def auto_name_session(self, auto_name_session: AutoNameSession) -> ControlResult:
+        return _control_result(self._dispatch(auto_name_session))
 
-    def rename_session(self, rename_session: RenameSession) -> ControlOutcome:
-        return self._audited(rename_session)
+    def open_rewind(self, open_rewind: OpenRewind) -> ControlResult:
+        return _control_result(self._dispatch(open_rewind))
 
-    def auto_name_session(self, auto_name_session: AutoNameSession) -> ControlOutcome:
-        return self._audited(auto_name_session)
+    def apply_rewind(self, apply_rewind: ApplyRewind) -> ControlResult:
+        return _control_result(self._dispatch(apply_rewind))
 
-    def open_rewind(self, open_rewind: OpenRewind) -> ControlOutcome:
-        return self._audited(open_rewind)
+    def compact(self, compact: Compact) -> ControlResult:
+        return _control_result(self._dispatch(compact))
 
-    def apply_rewind(self, apply_rewind: ApplyRewind) -> ControlOutcome:
-        return self._audited(apply_rewind)
+    def select_model(self, select_model: SelectModel) -> ControlResult:
+        return _control_result(self._dispatch(select_model))
 
-    def compact(self, compact: Compact) -> ControlOutcome:
-        return self._audited(compact)
+    def select_effort(self, select_effort: SelectEffort) -> ControlResult:
+        return _control_result(self._dispatch(select_effort))
 
-    def select_model(self, select_model: SelectModel) -> ControlOutcome:
-        return self._audited(select_model)
+    def answer_question(self, answer_question: AnswerQuestion) -> ControlResult:
+        return _control_result(self._dispatch(answer_question))
 
-    def select_effort(self, select_effort: SelectEffort) -> ControlOutcome:
-        return self._audited(select_effort)
+    def read_plan_choices(self, read_plan_choices: ReadPlanChoices) -> ControlResult:
+        return _control_result(self._dispatch(read_plan_choices))
 
-    def answer_question(self, answer_question: AnswerQuestion) -> ControlOutcome:
-        return self._audited(answer_question)
+    def decide_plan(self, decide_plan: DecidePlan) -> ControlResult:
+        return _control_result(self._dispatch(decide_plan))
 
-    def read_plan_choices(self, read_plan_choices: ReadPlanChoices) -> ControlOutcome:
-        return self._audited(read_plan_choices)
-
-    def decide_plan(self, decide_plan: DecidePlan) -> ControlOutcome:
-        return self._audited(decide_plan)
+    def _dispatch(self, request: ControlRequest) -> ControlOutcome:
+        with self._control_gate.enter(request.session_id):
+            return self._audited(request)
 
     def _audited(
         self,
@@ -233,11 +230,7 @@ class HarnessControlService(HarnessReactorContext):
         )
         started = time.monotonic()
         try:
-            outcome = (
-                self._execute(request)
-                if lead_active is None
-                else self._execute(request, lead_active=lead_active)
-            )
+            outcome = self._execute(request) if lead_active is None else self._execute(request, lead_active=lead_active)
         except Exception:
             _audit_control(self.audit, request, None, time.monotonic() - started)
             raise
@@ -250,17 +243,12 @@ class HarnessControlService(HarnessReactorContext):
             self._record_plan_decision(request, pending_entry)
         if (
             isinstance(request, SendText)
-            and isinstance(outcome, DeliveryResult)
-            and outcome.status == ControlAcknowledgement.ACKNOWLEDGED
-            and outcome.queued
+            and isinstance(outcome, MessageDeliveryResult)
+            and outcome.status == MessageDeliveryStatus.QUEUED
         ):
-            self.control_effects.text_queued(request)
-            # Persist first, then check for the missed-wakeup ordering where
-            # the turn finished between the controller's stale active read and
-            # this write. If it is idle now, delivery cannot be left waiting
-            # for a turn-finished reaction that already ran.
-            if not self._lead_active(request.session_id):
-                self.send_queued_text(request)
+            session = self.sessions.find(request.session_id)
+            if session is not None:
+                self.control_effects.message_queued(session, request)
         if isinstance(request, CloseSession) and outcome.status == ControlAcknowledgement.ACKNOWLEDGED:
             session = self.sessions.find(request.session_id)
             if session is not None:
@@ -277,10 +265,7 @@ class HarnessControlService(HarnessReactorContext):
             session = self.sessions.find(request.session_id)
             if session is not None:
                 self.control_effects.session_renamed(session, request)
-        if (
-            isinstance(request, (SelectModel, SelectEffort))
-            and outcome.status == ControlAcknowledgement.ACKNOWLEDGED
-        ):
+        if isinstance(request, (SelectModel, SelectEffort)) and outcome.status == ControlAcknowledgement.ACKNOWLEDGED:
             session = self.sessions.find(request.session_id)
             if session is not None:
                 self.control_effects.selection_changed(session, request)
@@ -310,20 +295,6 @@ class HarnessControlService(HarnessReactorContext):
             decide_plan,
             pending_session_entry,
         )
-
-    def _lead_active(self, session_id: SessionId) -> bool:
-        data = self.read_model.read(session_id)
-        if data is None:
-            return False
-        lead = next(
-            (
-                actor
-                for actor in data.actors
-                if actor.actor_id == data.session.lead_actor_id
-            ),
-            None,
-        )
-        return bool(lead and lead.statistics.active_since_internal is not None)
 
     def _execute(
         self,
@@ -359,10 +330,7 @@ class HarnessControlService(HarnessReactorContext):
             ),
             pending_attention=self._pending_attention(request),
         )
-        if (
-            isinstance(request, AutoNameSession)
-            and not plugin.info.supports_native_automatic_renaming
-        ):
+        if isinstance(request, AutoNameSession) and not plugin.info.supports_native_automatic_renaming:
             return self.automatic_namer.requested_name(
                 session,
                 request.request_id,
@@ -377,7 +345,7 @@ class HarnessControlService(HarnessReactorContext):
         auto_name_session: AutoNameSession,
         control_context: ControlContext,
         title: str,
-    ) -> ControlOutcome:
+    ) -> ControlResult:
         session = control_context.session
         plugin = session.plugin
         if plugin is None or plugin.controller is None:
@@ -396,10 +364,7 @@ class HarnessControlService(HarnessReactorContext):
             rename,
             control_context,
         )
-        if (
-            isinstance(outcome, DurableTitleResult)
-            and outcome.status == ControlAcknowledgement.ACKNOWLEDGED
-        ):
+        if isinstance(outcome, DurableTitleResult) and outcome.status == ControlAcknowledgement.ACKNOWLEDGED:
             self.control_effects.session_renamed(session, rename)
         return outcome
 

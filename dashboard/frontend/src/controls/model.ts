@@ -13,11 +13,16 @@ type BasicControlOutcome = ControlEnvelope & {
   readonly kind: 'basic';
 };
 
-type DeliveryControlOutcome = ControlEnvelope & {
-  readonly kind: 'delivery';
-  readonly queued: boolean;
+type InterruptControlOutcome = ControlEnvelope & {
+  readonly kind: 'interrupt';
   readonly restoredText: string;
   readonly corroborated: boolean;
+};
+
+type MessageDeliveryOutcome = {
+  readonly kind: 'message-delivery';
+  readonly requestId: RequestId;
+  readonly status: 'queued' | 'sent';
 };
 
 type CommandControlOutcome = ControlEnvelope & {
@@ -38,10 +43,18 @@ type PlanChoicesControlOutcome = ControlEnvelope & {
 
 export type ControlOutcome =
   | BasicControlOutcome
-  | DeliveryControlOutcome
+  | InterruptControlOutcome
+  | MessageDeliveryOutcome
   | CommandControlOutcome
   | RewindControlOutcome
   | PlanChoicesControlOutcome;
+
+export type StandardControlOutcome = Exclude<
+  ControlOutcome,
+  MessageDeliveryOutcome
+>;
+
+export type MessageSendOutcome = BasicControlOutcome | MessageDeliveryOutcome;
 
 export type AttachmentReference = {
   readonly localPath: string;

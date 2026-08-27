@@ -91,6 +91,8 @@ NO_ANSI = "the pty terminal reads plain screens only"
 # for free; a pseudo-terminal has no window manager and no such convention, so
 # this establishes one.
 WINDOW_ID_VARIABLE = "BAQYLAU_PTY_WINDOW_ID"
+TERM_VARIABLE = "TERM"
+TERM_VALUE = "xterm-256color"
 SUBMIT_PAINT_TIMEOUT_SECONDS = 2.0
 
 
@@ -131,6 +133,9 @@ class PtyWindows:
         # environment: this is the one value the terminal knows and the program
         # cannot be told by anyone else.
         child_environment[WINDOW_ID_VARIABLE] = window_id
+        # The PTY owns this terminal type. An inherited `TERM=dumb` makes a TUI
+        # use a line-input fallback even though it runs on a capable PTY.
+        child_environment[TERM_VARIABLE] = TERM_VALUE
         window = open_window(window_id, tuple(command), working_directory, child_environment)
         if window is not None:
             with self.lock:

@@ -27,7 +27,7 @@
     cycleLiveSession,
     handleReadlineKey,
   } from '../shared/browser/keyboard';
-  import type { ControlOutcome } from '../controls/model';
+  import type { StandardControlOutcome } from '../controls/model';
   import type { SessionViewState } from '../sessions/session-view-state.svelte';
   import { AppState } from './app-state.svelte';
   import { setAppState } from './app-context';
@@ -242,7 +242,10 @@
     view.beginRewind();
   }
 
-  function showControlFailure(heading: string, result: ControlOutcome): void {
+  function showControlFailure(
+    heading: string,
+    result: StandardControlOutcome,
+  ): void {
     if (result.status === 'acknowledged') return;
     appState.showToast(
       'ask',

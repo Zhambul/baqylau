@@ -75,16 +75,23 @@ function confirmation(
 }
 
 export function translateControlOutcome(value: unknown): ControlOutcome {
+  const deliveryStatus = text(value, 'status');
+  if (deliveryStatus === 'queued' || deliveryStatus === 'sent') {
+    return {
+      kind: 'message-delivery',
+      requestId: requestId(text(value, 'request_id')),
+      status: deliveryStatus,
+    };
+  }
   const envelope = {
     requestId: requestId(text(value, 'request_id')),
     status: status(value),
     reason: optionalText(value, 'reason'),
   };
-  if (has(value, 'queued')) {
+  if (has(value, 'corroborated')) {
     return {
       ...envelope,
-      kind: 'delivery',
-      queued: flag(value, 'queued'),
+      kind: 'interrupt',
       restoredText: text(value, 'restored_text'),
       corroborated: flag(value, 'corroborated'),
     };

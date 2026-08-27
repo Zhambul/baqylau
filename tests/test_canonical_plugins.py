@@ -30,7 +30,8 @@ from harness.models import (
     CloseSession,
     ControlContext,
     ControlResult,
-    DeliveryResult,
+    InterruptResult,
+    MessageDeliveryResult,
     DurableTitleResult,
     HarnessHookRequest,
     InterruptRegistry,
@@ -157,6 +158,7 @@ from harness.impl.codex.canonical import rollout as codex_rollout
 from harness.impl.codex.canonical.records import SessionMetaPayload, TurnContextRecord
 from harness.impl.codex.continuity import RewindContinuity
 from harness.impl.codex.controls import backtrack, composer
+from harness.impl.codex.controls import controller as codex_controller
 from harness.impl.codex.controls.controller import _rollout_abort_state
 from harness.impl.codex.model import BaseInstructionsSourceType, CodexEffort, CodexModel
 from harness.impl.codex.launcher import CodexLauncher
@@ -4030,7 +4032,7 @@ def test_closing_an_active_session_confirms_the_interrupt_before_it_closes_the_t
 
     def interrupt(_handler, request, _context):
         calls.append(request)
-        return DeliveryResult(
+        return InterruptResult(
             request.request_id,
             "acknowledged",
             corroborated=True,
@@ -4101,11 +4103,48 @@ def test_claude_active_send_retries_until_the_native_queue_accepts_it(
         ),
     )
 
-    assert outcome.status == "acknowledged"
-    assert outcome.queued is True
+    assert isinstance(outcome, MessageDeliveryResult)
+    assert outcome.status == "queued"
     assert delivered == [
         ("queued native prompt", False),
         ("queued native prompt", False),
+    ]
+
+
+def test_codex_active_send_uses_the_harness_queue(monkeypatch, tmp_path):
+    commands = []
+
+    def run(command, **options):
+        commands.append((command, options))
+        return SimpleNamespace(returncode=0, stdout="queued\n", stderr="")
+
+    monkeypatch.setattr(codex_controller.subprocess, "run", run)
+    session = Session(
+        SessionId("session-one"),
+        ActorId("session-one:lead"),
+        str(tmp_path / "rollout.jsonl"),
+        str(tmp_path),
+    )
+    request = SendText(
+        session_id=session.session_id,
+        request_id="request-one",
+        text="queued Codex prompt",
+    )
+
+    outcome = ProviderGraph().registry.plugin("codex").controller.execute(
+        request,
+        control_context(session, FakeTerminal().plugin(), lead_active=True),
+    )
+
+    assert isinstance(outcome, MessageDeliveryResult)
+    assert outcome.status == "queued"
+    assert commands[0][0] == [
+        "codex",
+        "queue",
+        "--thread",
+        "session-one",
+        "--message",
+        "queued Codex prompt",
     ]
 
 
@@ -4142,8 +4181,7 @@ def test_claude_active_send_is_not_called_queued_without_native_confirmation(
         ),
     )
 
-    assert outcome.status == "indeterminate"
-    assert outcome.queued is False
+    assert outcome.status == "rejected"
     assert outcome.reason == "Claude Code did not confirm the message"
 
 
@@ -4320,7 +4358,7 @@ def test_claude_attachment_delivery_keeps_the_prompt_visible_for_verification(
         control_context(session, terminal.plugin()),
     )
 
-    assert outcome.status == "acknowledged"
+    assert outcome.status == "sent"
     assert delivered == [
         (
             'Image attachment "marker.png": /work/marker.png\nInspect the attached image.',
@@ -10740,6 +10778,91 @@ def test_claude_interrupt_marker_aborts_the_turn_and_cancels_its_shell():
     assert aborted_turn.turn_id == started_turn.turn_id
 
 
+def test_claude_queued_prompt_after_interrupt_starts_a_new_turn():
+    translator = ClaudeCanonicalTranslator()
+    first = translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "first-prompt",
+                "message": {"role": "user", "content": "Run a long command"},
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="first-prompt",
+        )
+    )
+    queued = translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "queued-prompt",
+                "promptSource": "queued",
+                "message": {"role": "user", "content": "Continue after stop"},
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="queued-prompt",
+        )
+    )
+    marker = translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "interrupt-marker",
+                "interruptedMessageId": "message-one",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "[Request interrupted by user for tool use]",
+                        }
+                    ],
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="interrupt-marker",
+        )
+    )
+    answer = translator.translate(
+        raw_event(
+            {
+                "type": "assistant",
+                "uuid": "queued-answer",
+                "message": {
+                    "id": "queued-answer",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "continued"}],
+                    "stop_reason": "end_turn",
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="queued-answer",
+        )
+    )
+    stopped = translator.translate(
+        raw_event(
+            {"hook_event_name": "Stop", "hook_event_id": "queued-stop"},
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="queued-stop",
+        )
+    )
+
+    first_turn = payloads(first, TurnStarted)[0].turn_id
+    queued_turn = payloads(queued, TurnStarted)[0].turn_id
+    assert queued_turn is not None and queued_turn != first_turn
+    assert payloads(queued, TurnAborted)[0].turn_id == first_turn
+    assert payloads(queued, MessageCreated)[0].turn_id == queued_turn
+    assert payloads(marker, TurnAborted) == []
+    assert all(event.turn_id == first_turn for event in marker.canonical_events)
+    assert payloads(answer, MessageCreated)[0].turn_id == queued_turn
+    assert payloads(stopped, TurnFinished)[0].turn_id == queued_turn
+
+
 def test_claude_file_facts_converge_from_either_evidence_stream():
     """A file's path is in the call and its diff is in the result, so the fact is
     built at result time from both. Either stream can carry it — the hook's own
@@ -11317,7 +11440,7 @@ def test_codex_message_keeps_its_native_turn_identity():
                     "internal_chat_message_metadata_passthrough": {
                         "turn_id": "turn-one",
                         "create_time": 1787403595.261263,
-                        "content_item_kinds": ["unknown"],
+                        "content_item_kinds": ["assistant.text"],
                     },
                 },
             },

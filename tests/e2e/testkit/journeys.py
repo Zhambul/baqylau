@@ -108,7 +108,7 @@ class JourneyDriver:
         lead = before.lead()
         if origin == JourneyOrigin.DASHBOARD:
             receipt = self._client.sessions.send(journey.session, prompt)
-            if receipt.status_code != 200 or receipt.outcome.status != "acknowledged":
+            if receipt.status_code != 200 or receipt.outcome.status not in ("sent", "queued"):
                 raise AssertionError(f"dashboard continuation was not accepted: {receipt.outcome}")
             cursor_before = receipt.cursor_before
         else:
@@ -162,6 +162,21 @@ class JourneyDriver:
         if not outcome.succeeded:
             raise AssertionError(f"native command was not delivered: {outcome.reason}")
 
+    def interrupt_from_terminal(self, journey: SessionJourneyRef) -> None:
+        """Press Escape twice without an HTTP control.
+
+        The first event can leave the composer input mode. The second event
+        then reaches the active-turn interrupt binding.
+        """
+        for _attempt in range(2):
+            outcome = self._terminal.input.send_key(
+                KeySendRequest(WindowId(journey.window_id), "escape")
+            )
+            if not outcome.succeeded:
+                raise AssertionError(
+                    f"terminal interrupt was not delivered: {outcome.reason}"
+                )
+
     def start_new_native_session(
         self,
         journey: SessionJourneyRef,
@@ -185,23 +200,17 @@ class JourneyDriver:
             ]
             if len(candidates) > 1:
                 raise AssertionError(
-                    f"native /new produced multiple sessions in window "
-                    f"{journey.window_id!r}: {candidates}"
+                    f"native /new produced multiple sessions in window {journey.window_id!r}: {candidates}"
                 )
             if candidates:
                 return SessionRef(candidates[0])
-            retry = self._terminal.input.send_key(
-                KeySendRequest(WindowId(journey.window_id), "enter")
-            )
+            retry = self._terminal.input.send_key(KeySendRequest(WindowId(journey.window_id), "enter"))
             if not retry.succeeded:
                 raise AssertionError(f"native /new prompt was not submitted: {retry.reason}")
             return None
 
         session = wait_for(
-            lambda: (
-                f"native /new in window {journey.window_id!r} to announce one session; "
-                f"found {candidates}"
-            ),
+            lambda: f"native /new in window {journey.window_id!r} to announce one session; found {candidates}",
             announced,
             timeout=self._wait_policy.session_announcement,
         )
@@ -302,8 +311,7 @@ class JourneyDriver:
         )
         if completed.returncode != 0:
             raise AssertionError(
-                f"unattended {spec.harness} exited with {completed.returncode}: "
-                f"{completed.stderr.strip()}"
+                f"unattended {spec.harness} exited with {completed.returncode}: {completed.stderr.strip()}"
             )
         session = SessionRef(self._unattended_session_id(spec.harness, completed.stdout))
         self._client.sessions.wait_until_finished(session, self._wait_policy.cleanup)

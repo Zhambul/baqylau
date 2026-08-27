@@ -178,6 +178,7 @@ class PromptTranscriptRecord:
     text: str
     meta: bool = False
     interrupted: bool = False
+    queued: bool = False
     kind: TranscriptKind = TranscriptKind.PROMPT
 
 
@@ -593,6 +594,7 @@ def parse_line(s: str) -> TranscriptRecord | None:
                 content,
                 _injected(user, content),
                 bool(user.interruptedMessageId),
+                user.promptSource == "queued",
             )
         if isinstance(content, list):
             blocks: list[records.ToolResultBlock] = []

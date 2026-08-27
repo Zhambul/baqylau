@@ -831,9 +831,10 @@ def test_owned_packages_never_use_raw_dictionaries_or_jsonvalue():
         "engine/sessiondata/session.py": {"known"},
         "engine/sessiondata/naming.py": {"EMPTY_DISPLAY_BY_HARNESS"},
         "harness/models/interrupts.py": {"_marked_at"},
-        "harness/models/selections.py": {"_efforts", "_models"},
-        "harness/registry.py": {"_plugins"},
-        "harness/services/control_effects.py": {"assignments", "shells", "turns"},
+            "harness/models/selections.py": {"_efforts", "_models"},
+            "harness/registry.py": {"_plugins"},
+            "harness/services/controls.py": {"_locks"},
+            "harness/services/control_effects.py": {"assignments", "shells", "turns"},
         "harness/impl/claude_code/catalog.py": {"COMMAND_PROMPT_FLOORS"},
         "harness/impl/claude_code/canonical/messages.py": {
             "BACKGROUND_OUTCOMES",

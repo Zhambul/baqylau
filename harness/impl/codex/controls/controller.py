@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import time
 from collections.abc import Mapping
 
@@ -22,8 +23,10 @@ from harness.models import (
     ControlResult,
     DurableTitleResult,
     DecidePlan,
-    DeliveryResult,
+    InterruptResult,
     Interrupt,
+    MessageDeliveryResult,
+    MessageDeliveryStatus,
     PlanChoice,
     PlanChoicesResult,
     ReadPlanChoices,
@@ -100,45 +103,76 @@ def _submit(request: ControlRequest, control_context: ControlContext, text: str)
     return _result(request, result.succeeded, result.reason or "terminal text was not delivered")
 
 
+def _message(send_text: SendText) -> str:
+    attachments = " ".join(attachment.local_path for attachment in send_text.attachments)
+    return attachments + ("\n" if attachments and send_text.text else "") + send_text.text
+
+
+def _queue(send_text: SendText) -> ControlResult | MessageDeliveryResult:
+    command = [
+        "codex",
+        "queue",
+        "--thread",
+        str(send_text.session_id),
+        "--message",
+        send_text.text,
+    ]
+    for attachment in send_text.attachments:
+        command.extend(("--image", attachment.local_path))
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return ControlResult(
+            send_text.request_id,
+            ControlAcknowledgement.REJECTED,
+            f"Codex did not accept the message: {error}",
+        )
+    if completed.returncode != 0:
+        reason = (completed.stderr or completed.stdout).strip()
+        return ControlResult(
+            send_text.request_id,
+            ControlAcknowledgement.REJECTED,
+            reason or "Codex did not accept the message",
+        )
+    return MessageDeliveryResult(send_text.request_id, MessageDeliveryStatus.QUEUED)
+
+
 class SendTextHandler(ControlHandler):
     def __call__(
         self,
         request: ControlRequest,
         control_context: ControlContext,
-    ) -> DeliveryResult:
+    ) -> ControlResult | MessageDeliveryResult:
         if not isinstance(request, SendText):
             raise TypeError("send_text handler requires SendText")
         window_id = control_context.terminal_window_id
         if window_id is None:
-            return DeliveryResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
+            return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
         if control_context.lead_active:
-            # Codex's TUI does not provide a passive native queue: submitting
-            # during an active unified exec aborts that turn at its next tool
-            # boundary. Keep the request in Baqylau's durable queue; the
-            # canonical turn-finish reaction submits it once the lead is idle.
-            return DeliveryResult(
-                request.request_id,
-                ControlAcknowledgement.ACKNOWLEDGED,
-                queued=True,
-            )
+            return _queue(request)
         if request.replace_terminal_draft:
             try:
                 composer.clear(_TerminalDriver(control_context.terminal), window_id)
             except composer.ComposerError as error:
-                return DeliveryResult(
+                return ControlResult(
                     request.request_id,
-                    ControlAcknowledgement.INDETERMINATE,
+                    ControlAcknowledgement.REJECTED,
                     str(error),
                 )
-        attachment_text = " ".join(attachment.local_path for attachment in request.attachments)
-        message = attachment_text + ("\n" if attachment_text and request.text else "") + request.text
-        result = _submit(request, control_context, message)
-        return DeliveryResult(
-            result.request_id,
-            result.status,
-            result.reason,
-            queued=False,
-        )
+        result = _submit(request, control_context, _message(request))
+        if result.status != ControlAcknowledgement.ACKNOWLEDGED:
+            return ControlResult(
+                result.request_id,
+                ControlAcknowledgement.REJECTED,
+                result.reason,
+            )
+        return MessageDeliveryResult(result.request_id, MessageDeliveryStatus.SENT)
 
 
 def _rollout_abort_state(path: str, position: int) -> tuple[bool, bool]:
@@ -173,14 +207,14 @@ class InterruptHandler(ControlHandler):
         self,
         request: ControlRequest,
         control_context: ControlContext,
-    ) -> DeliveryResult:
+    ) -> InterruptResult:
         session = control_context.session
         terminal = control_context.terminal
         if not isinstance(request, Interrupt):
             raise TypeError("interrupt handler requires Interrupt")
         window_id = control_context.terminal_window_id
         if window_id is None:
-            return DeliveryResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
+            return InterruptResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
         try:
             position = os.path.getsize(session.source_reference)
         except OSError:
@@ -196,16 +230,16 @@ class InterruptHandler(ControlHandler):
             while time.monotonic() < deadline:
                 time.sleep(0.1)
                 if position >= 0:
-                    aborted, queued = _rollout_abort_state(session.source_reference, position)
+                    aborted, _queued = _rollout_abort_state(session.source_reference, position)
                     if aborted:
                         # The rollout already carries `turn_aborted`: the
                         # ordinary pull source will read this same record on
                         # its next tick and turn it canonical on its own —
                         # no fallback needed.
-                        return DeliveryResult(
-                            request.request_id, ControlAcknowledgement.ACKNOWLEDGED, queued=queued, corroborated=True
+                        return InterruptResult(
+                            request.request_id, ControlAcknowledgement.ACKNOWLEDGED, corroborated=True
                         )
-        return DeliveryResult(
+        return InterruptResult(
             request.request_id,
             ControlAcknowledgement.INDETERMINATE if delivered else ControlAcknowledgement.REJECTED,
             "turn_aborted was not observed" if delivered else "interrupt key was not delivered",

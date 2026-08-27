@@ -95,6 +95,17 @@ def test_a_headless_tab_rename_is_a_completed_noop(terminal):
     assert response.reason is None
 
 
+def test_headless_terminal_publishes_its_terminal_type(terminal):
+    window_id = _open(
+        terminal,
+        (sys.executable, "-c", "import os; print(os.environ['TERM'])"),
+    )
+
+    screen = _await_screen(terminal[0], window_id, "xterm-256color")
+
+    assert "xterm-256color" in screen
+
+
 def test_window_close_kills_a_tool_that_escaped_into_its_own_session(
     terminal,
     tmp_path,
@@ -213,6 +224,28 @@ def test_window_metadata_falls_back_when_process_details_are_temporarily_denied(
     assert pty_module._window_processes(window) == (
         pty_module.WindowProcess(731, ("codex", "resume")),
     )
+
+
+def test_terminal_replies_to_program_queries(terminal):
+    query_program = (
+        "import os, tty; "
+        "tty.setraw(0); "
+        "queries = ["
+        "b'\\x1b[6n', b'\\x1b[c', b'\\x1b[?u', "
+        "b'\\x1b]10;?\\x1b\\\\', b'\\x1b]11;?\\x07']; "
+        "replies = []; "
+        "[(os.write(1, query), replies.append(os.read(0, 64))) "
+        "for query in queries]; "
+        "os.write(1, b'QUERY REPLIES ' + b' '.join(reply.hex().encode() "
+        "for reply in replies) + b'\\n')"
+    )
+    window_id = _open(terminal, (sys.executable, "-c", query_program))
+
+    screen = _await_screen(plugin=terminal[0], window_id=window_id, contains="QUERY REPLIES")
+
+    assert "1b5b" in screen
+    assert "1b5d31303b7267623a" in screen
+    assert "1b5d31313b7267623a" in screen
 
 
 def test_the_screen_is_what_is_visible_not_everything_that_was_printed(terminal):

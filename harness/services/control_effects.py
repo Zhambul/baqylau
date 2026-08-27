@@ -17,7 +17,6 @@ from domain.entries import (
 )
 from domain.ids import AssignmentId, RawEventId, SessionId, ShellId, TurnId
 from domain.values import OpenWorkKind, PlanState, TitleOrigin
-from domain.workspace import QueuedMessage
 from harness.models import (
     CONTROL_SOURCE_TYPE,
     CloseSession,
@@ -32,6 +31,7 @@ from harness.models import (
 from harness.models.directives import (
     EffortSelectionObservation,
     ModelSelectionObservation,
+    MessageQueueObservation,
     PlanDecisionObservation,
     ProcessExit,
     ProcessExitState,
@@ -40,7 +40,6 @@ from harness.models.directives import (
 )
 from repository.contract.facts import RawEventRepository
 from repository.contract.session_data import SessionDataRepository
-from repository.contract.workspace import SessionWorkspaceRepository
 from repository.mapper.documents import encode_document
 
 
@@ -50,41 +49,40 @@ class ControlEffectRecorder:
     def __init__(
         self,
         raw_event_repository: RawEventRepository,
-        session_workspace_repository: SessionWorkspaceRepository,
         session_data_repository: SessionDataRepository,
     ) -> None:
         self.raw_events = raw_event_repository
-        self.workspaces = session_workspace_repository
         self.session_data = session_data_repository
 
-    def text_queued(self, send_text: SendText) -> None:
-        """Keep an accepted mid-turn send until its native prompt arrives."""
-        attachments = " ".join(
-            attachment.local_path for attachment in send_text.attachments
-        )
+    def message_queued(self, session: Session, send_text: SendText) -> None:
+        """Record a queue acceptance that the harness confirmed."""
+        if session.plugin is None:
+            raise ValueError(f"session has no attached harness plugin: {session.session_id}")
+        attachments = " ".join(attachment.local_path for attachment in send_text.attachments)
         text = attachments + ("\n" if attachments and send_text.text else "")
         text += send_text.text
         text = text.strip()
         if not text:
             return
-        self.workspaces.enqueue_composer_message(
-            send_text.session_id,
-            QueuedMessage(send_text.request_id, text),
-            "send",
-        )
-
-    def text_delivered(self, send_text: SendText) -> None:
-        """Remove an item after a plugin accepts one idle-boundary submit.
-
-        A plugin with a native queue keeps the item until a native prompt
-        confirms delivery. A plugin without one submits the item after the
-        turn and must remove it at that point. Slash commands do not create a
-        native prompt. If they stay in this queue, each later turn boundary
-        submits the same command again.
-        """
-        self.workspaces.remove_queued_message(
-            send_text.session_id,
-            send_text.request_id,
+        harness = session.plugin.info.name
+        identity = f"{harness}:control:{send_text.session_id}:{send_text.request_id}:message_queued"
+        self.raw_events.record(
+            (
+                RawEvent(
+                    raw_event_id=RawEventId(identity),
+                    harness=harness,
+                    source_type=CONTROL_SOURCE_TYPE,
+                    source_name="message_queued",
+                    source_position=str(send_text.request_id),
+                    session_id=send_text.session_id,
+                    actor_id=session.lead_actor_id,
+                    parent_actor_id=None,
+                    observed_at=time.time(),
+                    encoding="json",
+                    payload=encode_document(MessageQueueObservation(send_text.request_id, text)),
+                    source_identity=f"{harness}:control:{send_text.session_id}",
+                ),
+            )
         )
 
     def plan_decided(
@@ -180,24 +178,25 @@ class ControlEffectRecorder:
         else:
             source_name = "effort_selection"
             payload = encode_document(EffortSelectionObservation(selection.effort))
-        identity = (
-            f"{harness}:control:{selection.session_id}:"
-            f"{selection.request_id}:{source_name}"
+        identity = f"{harness}:control:{selection.session_id}:{selection.request_id}:{source_name}"
+        self.raw_events.record(
+            (
+                RawEvent(
+                    raw_event_id=RawEventId(identity),
+                    harness=harness,
+                    source_type=CONTROL_SOURCE_TYPE,
+                    source_name=source_name,
+                    source_position=str(selection.request_id),
+                    session_id=selection.session_id,
+                    actor_id=session.lead_actor_id,
+                    parent_actor_id=None,
+                    observed_at=time.time(),
+                    encoding="json",
+                    payload=payload,
+                    source_identity=f"{harness}:control:{selection.session_id}",
+                ),
+            )
         )
-        self.raw_events.record((RawEvent(
-            raw_event_id=RawEventId(identity),
-            harness=harness,
-            source_type=CONTROL_SOURCE_TYPE,
-            source_name=source_name,
-            source_position=str(selection.request_id),
-            session_id=selection.session_id,
-            actor_id=session.lead_actor_id,
-            parent_actor_id=None,
-            observed_at=time.time(),
-            encoding="json",
-            payload=payload,
-            source_identity=f"{harness}:control:{selection.session_id}",
-        ),))
 
     def work_before_close(
         self,
@@ -228,10 +227,7 @@ class ControlEffectRecorder:
             raise ValueError(f"session has no attached harness plugin: {session.session_id}")
         observed_at = time.time()
         harness = session.plugin.info.name
-        finish_identity = (
-            f"{harness}:control:{close_session.session_id}:"
-            f"{close_session.request_id}:session_finish"
-        )
+        finish_identity = f"{harness}:control:{close_session.session_id}:{close_session.request_id}:session_finish"
         raw_events = [
             RawEvent(
                 raw_event_id=RawEventId(finish_identity),

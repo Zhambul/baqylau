@@ -12,7 +12,8 @@ from api.controls.models.control_outcome_response import (
     CommandResultResponse,
     ControlOutcomeResponse,
     ControlResultResponse,
-    DeliveryResultResponse,
+    InterruptResultResponse,
+    MessageDeliveryResultResponse,
     PlanChoicesResultResponse,
     RewindResultResponse,
 )
@@ -20,8 +21,9 @@ from api.controls.models.launch_response import LaunchResponse
 from harness.models import (
     CommandResult,
     ControlOutcome,
-    DeliveryResult,
+    InterruptResult,
     LaunchResult,
+    MessageDeliveryResult,
     PlanChoicesResult,
     RewindResult,
 )
@@ -36,13 +38,18 @@ def launch(launch_result: LaunchResult) -> LaunchResponse:
 
 
 def control_outcome(outcome: ControlOutcome) -> ControlOutcomeResponse:
-    identity, status, reason = outcome.request_id, outcome.status, outcome.reason
-    if isinstance(outcome, DeliveryResult):
-        return DeliveryResultResponse(
+    if isinstance(outcome, MessageDeliveryResult):
+        return MessageDeliveryResultResponse(
+            request_id=outcome.request_id,
+            status=outcome.status,
+        )
+    identity, status = outcome.request_id, outcome.status
+    reason = outcome.reason
+    if isinstance(outcome, InterruptResult):
+        return InterruptResultResponse(
             request_id=identity,
             status=status,
             reason=reason,
-            queued=outcome.queued,
             restored_text=outcome.restored_text,
             corroborated=outcome.corroborated,
         )

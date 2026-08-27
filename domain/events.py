@@ -15,6 +15,7 @@ from domain.ids import (
     HarnessName,
     MessageId,
     RawEventId,
+    RequestId,
     ReasoningId,
     SessionId,
     ShellId,
@@ -158,6 +159,14 @@ class MessageCreated(EventPayload):
     phase: MessagePhase | None
     reply_to: MessageId | None
     recipient_actor_id: ActorId | None = None
+
+
+@dataclass(frozen=True)
+class MessageQueued(EventPayload):
+    """A harness accepted a message into its queue."""
+
+    request_id: RequestId
+    content: Content
 
 
 @dataclass(frozen=True)
@@ -504,6 +513,7 @@ EVENT_TYPES: dict[type[EventPayload], str] = {
     TurnFinished: "turn.finished",
     TurnAborted: "turn.aborted",
     MessageCreated: "message.created",
+    MessageQueued: "message.queued",
     ReasoningCreated: "reasoning.created",
     ShellStarted: "shell.started",
     ShellInputProvided: "shell.input_provided",
@@ -537,4 +547,4 @@ PAYLOAD_TYPES: dict[str, type[EventPayload]] = {event_type: payload for payload,
 # Bumped whenever a stored shape's fields change in a way an old row cannot
 # read. A harness registers with the version it was built against; a mismatch
 # fails at boot rather than at the first row nobody can decode.
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19

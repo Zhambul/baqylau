@@ -274,7 +274,7 @@ class WorkDriver:
             request_prompt,
             attachments=attachments,
         )
-        if receipt.status_code != 200 or receipt.outcome.status != "acknowledged":
+        if receipt.status_code != 200 or receipt.outcome.status not in ("sent", "queued"):
             raise AssertionError(
                 f"send action {receipt.request_id!r} was not accepted: {receipt.outcome}"
             )
@@ -546,7 +546,7 @@ class WorkDriver:
         before = self._client.sessions.snapshot(session)
         lead = before.lead()
         receipt = self._client.sessions.send(session, prompt)
-        if receipt.status_code != 200 or receipt.outcome.status != "acknowledged":
+        if receipt.status_code != 200 or receipt.outcome.status not in ("sent", "queued"):
             raise AssertionError(
                 f"send action {receipt.request_id!r} was not accepted: {receipt.outcome}"
             )

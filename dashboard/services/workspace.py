@@ -1,14 +1,14 @@
-"""Your unsent work on one session: drafts, a queue, a half-made choice.
+"""Composer state for one session: local drafts and the harness queue mirror.
 
-The session page keeps state the session itself never sees — the message you
-are still typing, the ones you queued behind it, the option you highlighted in
-a dialog, the view density you chose. It lives here so a reload, a second tab
-or another device picks up exactly where the last one left off.
+The session does not see a draft or an incomplete dialog answer. The harness
+does see queued messages and owns their delivery. Baqylau keeps a durable
+mirror of that queue so a reload, a second tab, or another device shows the
+same state.
 
 The STORING is the repository's; what is left here is the filtering, which
-needs canonical facts: a draft is dropped once its text has actually been
-DELIVERED as a prompt, and a dialog draft is dropped once its attention stops
-being pending.
+needs canonical facts: a queued item is added after `message.queued`, a draft
+and one matching queue item are dropped after the real prompt arrives, and a
+dialog draft is dropped once its attention stops being pending.
 """
 
 from __future__ import annotations
@@ -23,8 +23,7 @@ from domain.events import (
     CanonicalEvent,
     EventPayload,
     MessageCreated,
-    TurnAborted,
-    TurnFinished,
+    MessageQueued,
 )
 from domain.ids import AttentionId, SessionId
 from domain.preferences import DEFAULT_VIEW_MODE, ViewMode
@@ -35,12 +34,12 @@ from domain.workspace import (
     ComposerState,
     DialogDraft,
     DialogState,
+    QueuedMessage,
 )
 from domain.entries import QuestionAskedBody
 from domain.sessiondata import SessionTask
 from domain.values import AttentionPrompt
 from harness.contract import CanonicalEventReaction
-from harness.models import ControlOutcome, SendText
 from repository.contract.session_data import SessionDataRepository
 from harness.models import TerminalSessionState
 from repository.contract.audit import AuditReadRepository
@@ -59,9 +58,6 @@ class TerminalSessionReader(Protocol):
 
     def state(self, session_id: SessionId) -> TerminalSessionState: ...
 
-
-class QueuedTextSender(Protocol):
-    def send_queued_text(self, send_text: SendText) -> ControlOutcome: ...
 
 # A finished task list is dismissed for most sessions eventually, so the table
 # is bounded by session; the prune runs inside the write that triggers it.
@@ -220,32 +216,26 @@ def _prompt_matches(queued_text: str, delivered_text: str) -> bool:
 
 
 class QueuedPromptCanonicalEventReaction(CanonicalEventReaction):
-    """Remove one durable queued send when native execution drains it."""
+    """Keep a read-model mirror of messages in the harness queue."""
 
     def __init__(
         self,
         session_workspace_repository: SessionWorkspaceRepository,
-        queued_text_sender: QueuedTextSender | None = None,
     ) -> None:
         self.workspaces = session_workspace_repository
-        self.sender = queued_text_sender
 
     def react(self, canonical_event: CanonicalEvent[EventPayload]) -> None:
         payload = canonical_event.payload
+        if isinstance(payload, MessageQueued):
+            self.workspaces.enqueue_composer_message(
+                canonical_event.session_id,
+                QueuedMessage(payload.request_id, content_text(payload.content)),
+                "harness",
+            )
+            return
         workspace = self.workspaces.find(canonical_event.session_id)
         queue = workspace.queue if workspace is not None else None
         if queue is None or not queue.items:
-            return
-        if isinstance(payload, (TurnFinished, TurnAborted)):
-            if self.sender is not None:
-                head = queue.items[0]
-                self.sender.send_queued_text(
-                    SendText(
-                        canonical_event.session_id,
-                        head.request_id,
-                        head.text,
-                    )
-                )
             return
         if (
             not isinstance(payload, MessageCreated)

@@ -1228,17 +1228,17 @@ export interface components {
             cost_in_usd: string | null;
         };
         /**
-         * AnswerDecision
+         * AnswerDecisionBody
          * @enum {string}
          */
-        AnswerDecision: "answer" | "discuss";
+        AnswerDecisionBody: "answer" | "discuss";
         /** AnswerQuestionRequest */
         AnswerQuestionRequest: {
             /** Request Id */
             request_id: string;
             /** Attention Id */
             attention_id: string;
-            decision: components["schemas"]["AnswerDecision"];
+            decision: components["schemas"]["AnswerDecisionBody"];
             /** Answers */
             answers?: components["schemas"]["AnswerSelectionBody"][] | null;
             /** Discussion */
@@ -1547,25 +1547,6 @@ export interface components {
             decision: string;
             /** Feedback */
             feedback?: string | null;
-        };
-        /**
-         * DeliveryResultResponse
-         * @description send-text and interrupt. `queued` is the server's verdict that the text
-         *     landed mid-turn; `corroborated` marks an interrupt the harness confirmed in
-         *     its own raw events rather than one read off its screen.
-         */
-        DeliveryResultResponse: {
-            /** Request Id */
-            request_id: string;
-            status: components["schemas"]["ControlAcknowledgement"];
-            /** Reason */
-            reason: string | null;
-            /** Queued */
-            queued: boolean;
-            /** Restored Text */
-            restored_text: string;
-            /** Corroborated */
-            corroborated: boolean;
         };
         /** DiagnosticsCheckpointResponse */
         DiagnosticsCheckpointResponse: {
@@ -1890,6 +1871,21 @@ export interface components {
             /** Request Id */
             request_id: string;
         };
+        /**
+         * InterruptResultResponse
+         * @description The result of an interrupt request.
+         */
+        InterruptResultResponse: {
+            /** Request Id */
+            request_id: string;
+            status: components["schemas"]["ControlAcknowledgement"];
+            /** Reason */
+            reason: string | null;
+            /** Restored Text */
+            restored_text: string;
+            /** Corroborated */
+            corroborated: boolean;
+        };
         /** LaunchResponse */
         LaunchResponse: {
             status: components["schemas"]["LaunchStatus"];
@@ -1947,6 +1943,20 @@ export interface components {
             /** Reply To */
             reply_to: string | null;
         };
+        /**
+         * MessageDeliveryResultResponse
+         * @description The location that the harness confirmed for one message.
+         */
+        MessageDeliveryResultResponse: {
+            /** Request Id */
+            request_id: string;
+            status: components["schemas"]["MessageDeliveryStatus"];
+        };
+        /**
+         * MessageDeliveryStatus
+         * @enum {string}
+         */
+        MessageDeliveryStatus: "queued" | "sent";
         /**
          * MessagePhase
          * @description `end_turn` names what the raw event says — the message a model STOPPED
@@ -3473,7 +3483,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description Sent, but the effect is unconfirmed — the browser reconciles from the stream. */
@@ -3482,7 +3492,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description The request names something unknown, or cannot be acted on as posed. */
@@ -3500,7 +3510,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
@@ -3535,7 +3545,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description Sent, but the effect is unconfirmed — the browser reconciles from the stream. */
@@ -3544,7 +3554,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description The request names something unknown, or cannot be acted on as posed. */
@@ -3562,7 +3572,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
@@ -3597,7 +3607,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description Sent, but the effect is unconfirmed — the browser reconciles from the stream. */
@@ -3606,7 +3616,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description The request names something unknown, or cannot be acted on as posed. */
@@ -3624,7 +3634,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
@@ -3659,7 +3669,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description Sent, but the effect is unconfirmed — the browser reconciles from the stream. */
@@ -3668,7 +3678,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description The request names something unknown, or cannot be acted on as posed. */
@@ -3686,7 +3696,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
@@ -3721,7 +3731,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description Sent, but the effect is unconfirmed — the browser reconciles from the stream. */
@@ -3730,7 +3740,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description The request names something unknown, or cannot be acted on as posed. */
@@ -3748,7 +3758,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
@@ -3783,7 +3793,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description Sent, but the effect is unconfirmed — the browser reconciles from the stream. */
@@ -3792,7 +3802,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description The request names something unknown, or cannot be acted on as posed. */
@@ -3810,7 +3820,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
@@ -3845,7 +3855,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description Sent, but the effect is unconfirmed — the browser reconciles from the stream. */
@@ -3854,7 +3864,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description The request names something unknown, or cannot be acted on as posed. */
@@ -3872,7 +3882,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
@@ -3907,7 +3917,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description Sent, but the effect is unconfirmed — the browser reconciles from the stream. */
@@ -3916,7 +3926,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description The request names something unknown, or cannot be acted on as posed. */
@@ -3934,7 +3944,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
@@ -3969,7 +3979,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description Sent, but the effect is unconfirmed — the browser reconciles from the stream. */
@@ -3978,7 +3988,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description The request names something unknown, or cannot be acted on as posed. */
@@ -3996,7 +4006,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
@@ -4031,7 +4041,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description Sent, but the effect is unconfirmed — the browser reconciles from the stream. */
@@ -4040,7 +4050,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description The request names something unknown, or cannot be acted on as posed. */
@@ -4058,7 +4068,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
@@ -4093,7 +4103,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description Sent, but the effect is unconfirmed — the browser reconciles from the stream. */
@@ -4102,7 +4112,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description The request names something unknown, or cannot be acted on as posed. */
@@ -4120,7 +4130,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
@@ -4155,7 +4165,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description Sent, but the effect is unconfirmed — the browser reconciles from the stream. */
@@ -4164,7 +4174,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description The request names something unknown, or cannot be acted on as posed. */
@@ -4182,7 +4192,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
@@ -4217,7 +4227,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description Sent, but the effect is unconfirmed — the browser reconciles from the stream. */
@@ -4226,7 +4236,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description The request names something unknown, or cannot be acted on as posed. */
@@ -4244,7 +4254,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
@@ -4279,7 +4289,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description Sent, but the effect is unconfirmed — the browser reconciles from the stream. */
@@ -4288,7 +4298,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description The request names something unknown, or cannot be acted on as posed. */
@@ -4306,7 +4316,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["DeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
+                    "application/json": components["schemas"]["ControlResultResponse"] | components["schemas"]["InterruptResultResponse"] | components["schemas"]["MessageDeliveryResultResponse"] | components["schemas"]["CommandResultResponse"] | components["schemas"]["RewindResultResponse"] | components["schemas"]["PlanChoicesResultResponse"];
                 };
             };
             /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */

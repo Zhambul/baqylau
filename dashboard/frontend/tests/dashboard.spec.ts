@@ -300,6 +300,10 @@ test('keeps activity details readable and expandable', async ({ page }) => {
   const queued = page.locator('.msg.prompt.queued');
   await expect(queued).toContainText('show this complete queued message');
   await expect(queued.locator('.qbadge')).toHaveText('⧗ queued');
+  const sent = page.locator('.msg.prompt').filter({
+    hasText: 'Check the current frontend and preserve its design.',
+  });
+  await expect(sent.locator('.sbadge')).toHaveText('✓ sent');
 
   const edit = page.locator('.blk').filter({
     has: page.locator('.bchips', {

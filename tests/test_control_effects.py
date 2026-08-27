@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from types import SimpleNamespace
 from typing import cast
@@ -22,8 +24,8 @@ from domain.events import (
     ActorStarted,
     CanonicalEvent,
     EffortChanged,
-    EventPayload,
     MessageCreated,
+    MessageQueued,
     ModelChanged,
     PlanResolved,
     SessionFinished,
@@ -73,8 +75,12 @@ from harness.models import (
     CloseSession,
     plan_resolution_phase,
     ControlAcknowledgement,
+    ControlResult,
     DecidePlan,
-    DeliveryResult,
+    Interrupt,
+    InterruptRegistry,
+    MessageDeliveryResult,
+    MessageDeliveryStatus,
     DurableTitleResult,
     RenameSession,
     SelectEffort,
@@ -85,12 +91,18 @@ from harness.models import (
 from harness.contract import HarnessPlugin
 from harness.models.raw_events import RawEvent
 from harness.services.control_effects import ControlEffectRecorder
-from harness.services.controls import HarnessControlService
+from harness.services.controls import (
+    AutomaticSessionNaming,
+    HarnessControlService,
+    SessionRenaming,
+)
 from harness.services.launch_effects import SessionLaunchEffectRecorder
 from repository.contract.facts import RawEventRepository
 from repository.contract.session_data import SessionDataRepository
 from repository.contract.sessions import SessionRepository
 from repository.contract.workspace import SessionWorkspaceRepository
+from terminal.adapter import TerminalAdapter
+from terminal.contract import TerminalPlugin
 
 
 class RawEvents:
@@ -285,7 +297,6 @@ def test_confirmed_plan_decision_becomes_one_canonical_resolution(
     raw_events = RawEvents()
     recorder = ControlEffectRecorder(
         cast(RawEventRepository, raw_events),
-        cast(SessionWorkspaceRepository, Workspaces()),
         cast(SessionDataRepository, SessionEntries()),
     )
     session_id = SessionId("session-one")
@@ -349,7 +360,6 @@ def test_confirmed_parked_rename_becomes_one_canonical_title_change() -> None:
     raw_events = RawEvents()
     recorder = ControlEffectRecorder(
         cast(RawEventRepository, raw_events),
-        cast(SessionWorkspaceRepository, Workspaces()),
         cast(SessionDataRepository, SessionEntries()),
     )
     session_id = SessionId("session-one")
@@ -413,7 +423,6 @@ def test_confirmed_selections_become_canonical_state_changes(
     raw_events = RawEvents()
     recorder = ControlEffectRecorder(
         cast(RawEventRepository, raw_events),
-        cast(SessionWorkspaceRepository, Workspaces()),
         cast(SessionDataRepository, SessionEntries()),
     )
     session = Session(
@@ -452,11 +461,20 @@ def test_an_accepted_mid_turn_send_is_saved_by_request_identity(
     attachments,
     expected,
 ):
-    workspaces = Workspaces()
+    raw_events = RawEvents()
     recorder = ControlEffectRecorder(
-        cast(RawEventRepository, RawEvents()),
-        cast(SessionWorkspaceRepository, workspaces),
+        cast(RawEventRepository, raw_events),
         cast(SessionDataRepository, SessionEntries()),
+    )
+    session = Session(
+        SessionId("session-one"),
+        ActorId("actor-one"),
+        "rollout.jsonl",
+        "/work",
+        plugin=cast(
+            HarnessPlugin,
+            SimpleNamespace(info=SimpleNamespace(name=HarnessName.CODEX)),
+        ),
     )
     request = SendText(
         SessionId("session-one"),
@@ -465,14 +483,45 @@ def test_an_accepted_mid_turn_send_is_saved_by_request_identity(
         attachments=attachments,
     )
 
-    recorder.text_queued(request)
+    recorder.message_queued(session, request)
 
-    assert len(workspaces.queued) == 1
-    session_id, message, origin = workspaces.queued[0]
-    assert session_id == "session-one"
-    assert message.request_id == "request-one"
-    assert message.text == expected
-    assert origin == "send"
+    assert len(raw_events.items) == 1
+    translated = ControlTranslator().translate(raw_events.items[0])
+    assert translated.canonical_events[0].payload == MessageQueued(
+        RequestId("request-one"),
+        TextContent(expected),
+    )
+
+
+def test_a_message_queued_fact_updates_the_reload_safe_mirror() -> None:
+    workspaces = Workspaces()
+    reaction = QueuedPromptCanonicalEventReaction(cast(SessionWorkspaceRepository, workspaces))
+
+    reaction.react(
+        CanonicalEvent(
+            event_id=CanonicalEventId("message-queued"),
+            session_id=SessionId("session-one"),
+            actor_id=ActorId("actor-one"),
+            turn_id=TurnId("turn-one"),
+            parent_actor_id=None,
+            harness=HarnessName.CODEX,
+            occurred_at=1.0,
+            terminal_window_id=None,
+            harness_process_id=None,
+            payload=MessageQueued(
+                RequestId("request-one"),
+                TextContent("do this next"),
+            ),
+        )
+    )
+
+    assert workspaces.queued == [
+        (
+            SessionId("session-one"),
+            QueuedMessage(RequestId("request-one"), "do this next"),
+            "harness",
+        )
+    ]
 
 
 def test_a_confirmed_close_cancels_each_open_work_identity():
@@ -521,7 +570,6 @@ def test_a_confirmed_close_cancels_each_open_work_identity():
     raw_events = RawEvents()
     recorder = ControlEffectRecorder(
         cast(RawEventRepository, raw_events),
-        cast(SessionWorkspaceRepository, Workspaces()),
         cast(SessionDataRepository, SessionEntries(entries)),
     )
     session = Session(
@@ -558,192 +606,43 @@ def test_a_confirmed_close_cancels_each_open_work_identity():
     assert translated[3].payload.outcome == Outcome.CANCELLED
 
 
-@pytest.mark.parametrize(
-    ("status", "queued", "saved"),
-    (
-        (ControlAcknowledgement.ACKNOWLEDGED, True, True),
-        (ControlAcknowledgement.ACKNOWLEDGED, False, False),
-        (ControlAcknowledgement.INDETERMINATE, True, False),
-    ),
-)
-def test_only_an_acknowledged_queued_send_is_persisted(
-    monkeypatch,
-    status,
-    queued,
-    saved,
-):
+@pytest.mark.parametrize("status", (MessageDeliveryStatus.QUEUED, MessageDeliveryStatus.SENT))
+def test_only_a_harness_queued_message_is_recorded(monkeypatch, status):
     recorded = []
-    service = object.__new__(HarnessControlService)
-    service.audit = cast(
-        AuditRecorder,
-        SimpleNamespace(state_file=lambda *_args, **_kwargs: None),
-    )
-    service.control_effects = cast(
-        ControlEffectRecorder,
-        SimpleNamespace(text_queued=lambda request: recorded.append(request)),
-    )
-    service.sessions = cast(
-        SessionRepository,
-        SimpleNamespace(find=lambda _session_id: None),
-    )
-    monkeypatch.setattr(
-        service,
-        "_execute",
-        lambda request: DeliveryResult(
-            request.request_id,
-            status,
-            queued=queued,
-        ),
-    )
-    monkeypatch.setattr(service, "_lead_active", lambda _session_id: True)
-    request = SendText(
-        SessionId("session-one"),
-        RequestId("request-one"),
-        text="do this next",
-    )
-
-    service.send_text(request)
-
-    assert recorded == ([request] if saved else [])
-
-
-def test_a_send_that_misses_the_turn_boundary_drains_after_it_is_persisted(
-    monkeypatch,
-) -> None:
-    recorded = []
-    delivered = []
-    executions: list[bool | None] = []
-    service = object.__new__(HarnessControlService)
-    service.audit = cast(
-        AuditRecorder,
-        SimpleNamespace(state_file=lambda *_args, **_kwargs: None),
-    )
-    service.control_effects = cast(
-        ControlEffectRecorder,
-        SimpleNamespace(
-            text_queued=lambda request: recorded.append(request),
-            text_delivered=lambda request: delivered.append(request),
-        ),
-    )
-    service.sessions = cast(
-        SessionRepository,
-        SimpleNamespace(find=lambda _session_id: None),
-    )
-
-    def execute(_request, *, lead_active=None):
-        executions.append(lead_active)
-        return DeliveryResult(
-            RequestId("request-one"),
-            ControlAcknowledgement.ACKNOWLEDGED,
-            queued=lead_active is not False,
-        )
-
-    monkeypatch.setattr(service, "_execute", execute)
-    monkeypatch.setattr(service, "_lead_active", lambda _session_id: False)
-    request = SendText(
-        SessionId("session-one"),
-        RequestId("request-one"),
-        text="do this next",
-    )
-
-    outcome = service.send_text(request)
-
-    assert isinstance(outcome, DeliveryResult)
-    assert outcome.queued is True
-    assert recorded == [request]
-    assert delivered == [request]
-    assert executions == [None, False]
-
-
-def test_a_drained_slash_command_is_not_sent_at_a_later_turn_boundary(
-    monkeypatch,
-) -> None:
-    request = SendText(
-        SessionId("session-one"),
-        RequestId("request-one"),
-        text="/plan",
-    )
-    queue = DurableQueue()
-    queue.items = [QueuedMessage(request.request_id, request.text)]
-    executions = []
-    service = object.__new__(HarnessControlService)
-    service.audit = cast(
-        AuditRecorder,
-        SimpleNamespace(state_file=lambda *_args, **_kwargs: None),
-    )
-    service.sessions = cast(
-        SessionRepository,
-        SimpleNamespace(find=lambda _session_id: None),
-    )
-    service.control_effects = ControlEffectRecorder(
-        cast(RawEventRepository, RawEvents()),
-        cast(SessionWorkspaceRepository, queue),
-        cast(SessionDataRepository, SessionEntries()),
-    )
-
-    def execute(sent, *, lead_active=None):
-        executions.append((sent, lead_active))
-        return DeliveryResult(
-            sent.request_id,
-            ControlAcknowledgement.ACKNOWLEDGED,
-            queued=False,
-        )
-
-    monkeypatch.setattr(service, "_execute", execute)
-    reaction = QueuedPromptCanonicalEventReaction(
-        cast(SessionWorkspaceRepository, queue),
-        service,
-    )
-    finished: CanonicalEvent[EventPayload] = CanonicalEvent(
-        event_id=CanonicalEventId("turn-finished"),
-        session_id=request.session_id,
-        actor_id=ActorId("actor-one"),
-        turn_id=TurnId("turn-one"),
-        parent_actor_id=None,
-        harness=HarnessName.CODEX,
-        occurred_at=2.0,
-        terminal_window_id=None,
-        harness_process_id=None,
-        payload=TurnFinished(None, Outcome.SUCCEEDED),
-    )
-
-    reaction.react(finished)
-    reaction.react(replace(finished, event_id=CanonicalEventId("turn-finished-again")))
-
-    assert executions == [(request, False)]
-    assert queue.items == []
-
-
-def test_a_native_queue_is_not_submitted_again_at_the_turn_boundary(
-    monkeypatch,
-) -> None:
     session = Session(
         SessionId("session-one"),
         ActorId("actor-one"),
-        "transcript.jsonl",
+        "rollout.jsonl",
         "/work",
         plugin=cast(
             HarnessPlugin,
-            SimpleNamespace(
-                info=SimpleNamespace(supports_native_text_queue=True),
-            ),
+            SimpleNamespace(info=SimpleNamespace(name=HarnessName.CODEX)),
         ),
     )
     service = object.__new__(HarnessControlService)
+    service.audit = cast(
+        AuditRecorder,
+        SimpleNamespace(state_file=lambda *_args, **_kwargs: None),
+    )
+    service.control_effects = cast(
+        ControlEffectRecorder,
+        SimpleNamespace(message_queued=lambda found, request: recorded.append((found, request))),
+    )
     service.sessions = cast(SessionRepository, Sessions(session))
     monkeypatch.setattr(
         service,
-        "_audited",
-        lambda *_args, **_kwargs: pytest.fail("native queued text was resubmitted"),
+        "_execute",
+        lambda request: MessageDeliveryResult(request.request_id, status),
+    )
+    request = SendText(
+        SessionId("session-one"),
+        RequestId("request-one"),
+        text="do this next",
     )
 
-    outcome = service.send_queued_text(
-        SendText(session.session_id, RequestId("request-one"), "next prompt")
-    )
+    service._audited(request)
 
-    assert isinstance(outcome, DeliveryResult)
-    assert outcome.status == ControlAcknowledgement.ACKNOWLEDGED
-    assert outcome.queued is True
+    assert recorded == ([(session, request)] if status == "queued" else [])
 
 
 def test_only_a_confirmed_durable_rename_is_recorded(monkeypatch) -> None:
@@ -780,9 +679,62 @@ def test_only_a_confirmed_durable_rename_is_recorded(monkeypatch) -> None:
         ),
     )
 
-    service.rename_session(request)
+    service._audited(request)
 
     assert recorded == [(session, request)]
+
+
+def test_an_interrupt_waits_for_an_active_message_delivery(monkeypatch) -> None:
+    service = HarnessControlService(
+        cast(SessionRepository, SimpleNamespace()),
+        cast(TerminalAdapter, SimpleNamespace()),
+        cast(TerminalPlugin, SimpleNamespace()),
+        cast(SessionDataRepository, SimpleNamespace()),
+        cast(AuditRecorder, SimpleNamespace()),
+        InterruptRegistry(),
+        cast(ControlEffectRecorder, SimpleNamespace()),
+        cast(AutomaticSessionNaming, SimpleNamespace()),
+        cast(SessionRenaming, SimpleNamespace()),
+    )
+    send_started = threading.Event()
+    release_send = threading.Event()
+    interrupt_started = threading.Event()
+
+    def audited(request):
+        if isinstance(request, SendText):
+            send_started.set()
+            assert release_send.wait(1)
+            return MessageDeliveryResult(
+                request.request_id,
+                MessageDeliveryStatus.QUEUED,
+            )
+        interrupt_started.set()
+        return ControlResult(
+            request.request_id,
+            ControlAcknowledgement.ACKNOWLEDGED,
+        )
+
+    monkeypatch.setattr(service, "_audited", audited)
+    send = SendText(
+        SessionId("session-one"),
+        RequestId("send-one"),
+        text="queue this",
+    )
+    interrupt = Interrupt(
+        SessionId("session-one"),
+        RequestId("interrupt-one"),
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        send_result = workers.submit(service.send_text, send)
+        assert send_started.wait(1)
+        interrupt_result = workers.submit(service.interrupt, interrupt)
+        assert not interrupt_started.wait(0.1)
+        release_send.set()
+
+        assert send_result.result().status == MessageDeliveryStatus.QUEUED
+        assert interrupt_result.result().status == ControlAcknowledgement.ACKNOWLEDGED
+        assert interrupt_started.is_set()
 
 
 def test_each_native_prompt_consumes_only_one_equal_queued_send():
@@ -815,13 +767,9 @@ def test_each_native_prompt_consumes_only_one_equal_queued_send():
     assert workspaces.items == []
 
 
-def test_a_queued_codex_prompt_is_submitted_after_the_active_turn_finishes():
+def test_a_turn_finish_does_not_submit_a_queued_prompt():
     workspaces = DurableQueue()
-    sent = []
-    reaction = QueuedPromptCanonicalEventReaction(
-        workspaces,
-        SimpleNamespace(send_queued_text=lambda request: sent.append(request)),
-    )
+    reaction = QueuedPromptCanonicalEventReaction(workspaces)
     reaction.react(
         CanonicalEvent(
             event_id=CanonicalEventId("active-turn-finished"),
@@ -837,7 +785,5 @@ def test_a_queued_codex_prompt_is_submitted_after_the_active_turn_finishes():
         )
     )
 
-    assert len(sent) == 1
-    assert sent[0].request_id == "request-one"
-    assert sent[0].text == "same prompt"
     assert workspaces.removed == []
+    assert len(workspaces.items) == 2

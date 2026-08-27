@@ -74,9 +74,7 @@ def close_journey_terminal(
     journey_driver.stop_terminal(session_journeys.get(session_name))
 
 
-@when(parsers.parse(
-    'I submit native command \'{command}\' to journey session "{session_name}"'
-))
+@when(parsers.parse("I submit native command '{command}' to journey session \"{session_name}\""))
 def submit_native_journey_command(
     journey_driver: JourneyDriver,
     session_journeys: SessionJourneys,
@@ -89,10 +87,21 @@ def submit_native_journey_command(
     )
 
 
-@when(parsers.parse(
-    'I start journey session "{new_name}" with native /new in journey session '
-    '"{old_name}" as turn "{turn_name}" with prompt'
-))
+@when(parsers.parse('I interrupt journey session "{session_name}" from its terminal'))
+def interrupt_journey_session_from_terminal(
+    journey_driver: JourneyDriver,
+    session_journeys: SessionJourneys,
+    session_name: str,
+) -> None:
+    journey_driver.interrupt_from_terminal(session_journeys.get(session_name))
+
+
+@when(
+    parsers.parse(
+        'I start journey session "{new_name}" with native /new in journey session '
+        '"{old_name}" as turn "{turn_name}" with prompt'
+    )
+)
 def start_new_native_journey_session(
     journey_driver: JourneyDriver,
     session_journeys: SessionJourneys,
@@ -112,9 +121,7 @@ def start_new_native_journey_session(
     turns.bind(turn_name, started.turn)
 
 
-@then(parsers.parse(
-    'journey session "{new_name}" reuses the terminal from journey session "{old_name}"'
-))
+@then(parsers.parse('journey session "{new_name}" reuses the terminal from journey session "{old_name}"'))
 def journey_session_reuses_terminal(
     session_journeys: SessionJourneys,
     new_name: str,
@@ -126,10 +133,12 @@ def journey_session_reuses_terminal(
     assert new.window_id == old.window_id
 
 
-@when(parsers.parse(
-    'I run unattended session "{detached_name}" with the terminal environment '
-    'from journey session "{host_name}" and prompt'
-))
+@when(
+    parsers.parse(
+        'I run unattended session "{detached_name}" with the terminal environment '
+        'from journey session "{host_name}" and prompt'
+    )
+)
 def run_unattended_session_with_host_environment(
     journey_driver: JourneyDriver,
     session_specs: SessionSpecs,

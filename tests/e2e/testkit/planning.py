@@ -108,7 +108,7 @@ class PlanWorkDriver:
 
     @staticmethod
     def _require_acknowledged(receipt: ActionReceipt, action: str) -> None:
-        if receipt.status_code != 200 or receipt.outcome.status != "acknowledged":
+        if receipt.status_code != 200 or receipt.outcome.status not in ("sent", "queued"):
             raise AssertionError(
                 f"{action} action {receipt.request_id!r} was not accepted: "
                 f"{receipt.outcome}"

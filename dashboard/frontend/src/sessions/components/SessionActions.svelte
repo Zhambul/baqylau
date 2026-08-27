@@ -10,7 +10,7 @@
     selectModel,
   } from '../../api/controls';
   import { getAppState } from '../../app/app-context';
-  import type { ControlOutcome } from '../../controls/model';
+  import type { StandardControlOutcome } from '../../controls/model';
   import { newRequestId } from '../../shared/browser/identity';
   import type { SessionViewState } from '../session-view-state.svelte';
 
@@ -94,7 +94,7 @@
     if (confirmTimer !== null) clearTimeout(confirmTimer);
   });
 
-  function resultFailure(result: ControlOutcome): string | null {
+  function resultFailure(result: StandardControlOutcome): string | null {
     if (result.status === 'acknowledged') return null;
     return (
       result.reason ??
@@ -106,8 +106,8 @@
 
   async function run(
     action: Action,
-    operation: () => Promise<ControlOutcome>,
-  ): Promise<ControlOutcome | null> {
+    operation: () => Promise<StandardControlOutcome>,
+  ): Promise<StandardControlOutcome | null> {
     if (active !== null) return null;
     active = action;
     failure = null;

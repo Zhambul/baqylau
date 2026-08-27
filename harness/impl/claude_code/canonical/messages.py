@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 import hashlib
-
 import os
+from collections.abc import Mapping
+from dataclasses import replace
 
 from pydantic import ValidationError
 
@@ -440,7 +440,15 @@ def translate_transcript(
             phase,
             None,
         )
-        turn_id = turn_semantics.current(raw_event) if record.interrupted else None
+        interrupted_turn_id = None
+        abort_already_emitted = False
+        if record.interrupted:
+            interrupted_turn_id, abort_already_emitted = turn_semantics.interrupted(
+                raw_event
+            )
+        elif record.queued and role == MessageRole.USER:
+            interrupted_turn_id = turn_semantics.replace_for_queued_prompt(raw_event)
+        turn_id = interrupted_turn_id if record.interrupted else None
         created = event(
             raw_event,
             "message",
@@ -451,8 +459,7 @@ def translate_transcript(
             occurred_at=occurred_at,
         )
         if record.interrupted:
-            turn_semantics.close(raw_event)
-            return [
+            return [created] if abort_already_emitted else [
                 created,
                 event(
                     raw_event,
@@ -468,7 +475,26 @@ def translate_transcript(
             # A synthetic or parent-authored prompt is machinery or a brief; a
             # turn belongs to the person who asked for one.
             return [created]
-        return [*prompt_turn(raw_event, turn_semantics, native_identity, occurred_at), created]
+        interrupted = (
+            [
+                event(
+                    raw_event,
+                    "turn",
+                    str(interrupted_turn_id),
+                    "aborted",
+                    TurnAborted(None),
+                    turn_id=interrupted_turn_id,
+                    occurred_at=occurred_at,
+                )
+            ]
+            if interrupted_turn_id is not None
+            else []
+        )
+        started = prompt_turn(
+            raw_event, turn_semantics, native_identity, occurred_at
+        )
+        created = replace(created, turn_id=turn_semantics.current(raw_event))
+        return [*interrupted, *started, created]
     if isinstance(record, transcript.SlashCommandTranscriptRecord):
         return slash_command(
             raw_event, record, native_identity, occurred_at, turn_semantics, selection_semantics
@@ -858,8 +884,10 @@ def translate_transcript(
                 if finished is not None:
                     events.append(finished)
                     loaded_skill_texts.add(text_index)
-        interrupted_turn_id = (
-            turn_semantics.current(raw_event) if record.interrupted else None
+        interrupted_turn_id, abort_already_emitted = (
+            turn_semantics.interrupted(raw_event)
+            if record.interrupted
+            else (None, False)
         )
         blocks = record.blocks
         # The line's `toolUseResult` sidecar carries what only the native
@@ -918,8 +946,14 @@ def translate_transcript(
                 payload,
                 turn_id=interrupted_turn_id,
             ))
-        if record.interrupted:
-            turn_semantics.close(raw_event)
+        if record.interrupted and interrupted_turn_id is not None:
+            events = [
+                replace(item, turn_id=interrupted_turn_id)
+                if item.turn_id is None
+                else item
+                for item in events
+            ]
+        if record.interrupted and not abort_already_emitted:
             events.append(event(
                 raw_event,
                 "turn",

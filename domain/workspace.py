@@ -1,8 +1,8 @@
-"""Your unsent work on one session — the state the session itself never sees.
+"""Local composer work and the durable mirror of the harness message queue.
 
-The message you are still typing, the ones you queued behind it, the option you
-highlighted in a dialog. Not a fact about the session: a fact about you, which
-is why it is stored rather than folded from raw events.
+The message you are still typing and the option you highlighted in a dialog are
+local work. A queued message is a harness fact. It is stored here as a read
+model so the UI can restore it after a reload.
 
 These shapes lived inside the dashboard service that also wrote their SQL. They
 are here so the repository can hand them back and the service can stay a

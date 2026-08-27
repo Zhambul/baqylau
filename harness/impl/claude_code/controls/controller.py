@@ -27,8 +27,10 @@ from harness.models import (
     ControlResult,
     DurableTitleResult,
     DecidePlan,
-    DeliveryResult,
+    InterruptResult,
     Interrupt,
+    MessageDeliveryResult,
+    MessageDeliveryStatus,
     OpenRewind,
     PlanChoice,
     PlanChoicesResult,
@@ -351,13 +353,13 @@ class SendTextHandler(ControlHandler):
         self,
         request: ControlRequest,
         control_context: ControlContext,
-    ) -> DeliveryResult:
+    ) -> ControlResult | MessageDeliveryResult:
         terminal = control_context.terminal
         if not isinstance(request, SendText):
             raise TypeError("send_text handler requires SendText")
         window_id = control_context.terminal_window_id
         if window_id is None:
-            return DeliveryResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
+            return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
         driver = _TerminalDriver(terminal)
         if request.replace_terminal_draft:
             input_state = ClaudeCodeTerminalProbe().input_state(terminal.viewport, window_id)
@@ -371,14 +373,15 @@ class SendTextHandler(ControlHandler):
             ensure_submit=bool(request.attachments),
         )
         if native_state is not None:
-            return DeliveryResult(
+            return MessageDeliveryResult(
                 request.request_id,
-                ControlAcknowledgement.ACKNOWLEDGED,
-                queued=native_state == NATIVE_TEXT_QUEUED,
+                MessageDeliveryStatus.QUEUED
+                if native_state == NATIVE_TEXT_QUEUED
+                else MessageDeliveryStatus.SENT,
             )
-        return DeliveryResult(
+        return ControlResult(
             request.request_id,
-            ControlAcknowledgement.INDETERMINATE,
+            ControlAcknowledgement.REJECTED,
             reason,
         )
 
@@ -388,13 +391,13 @@ class InterruptHandler(ControlHandler):
         self,
         request: ControlRequest,
         control_context: ControlContext,
-    ) -> DeliveryResult:
+    ) -> InterruptResult:
         terminal = control_context.terminal
         if not isinstance(request, Interrupt):
             raise TypeError("interrupt handler requires Interrupt")
         window_id = control_context.terminal_window_id
         if window_id is None:
-            return DeliveryResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
+            return InterruptResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
         try:
             position = os.path.getsize(control_context.session.source_reference)
         except OSError:
@@ -420,14 +423,14 @@ class InterruptHandler(ControlHandler):
                         terminal.viewport,
                         window_id,
                     )
-                    return DeliveryResult(
+                    return InterruptResult(
                         request.request_id,
                         ControlAcknowledgement.ACKNOWLEDGED,
                         restored_text=(input_state.typed_text if input_state and input_state.typed_text else ""),
                         corroborated=True,
                     )
         input_state = ClaudeCodeTerminalProbe().input_state(terminal.viewport, window_id)
-        return DeliveryResult(
+        return InterruptResult(
             request.request_id,
             (ControlAcknowledgement.INDETERMINATE if delivered else ControlAcknowledgement.REJECTED),
             ("native interrupt marker was not observed" if delivered else "interrupt key was not delivered"),
@@ -469,28 +472,27 @@ class BackgroundHandler(ControlHandler):
     a browser click and a test both.
     """
 
-    def __call__(self, request: ControlRequest, control_context: ControlContext) -> DeliveryResult:
+    def __call__(self, request: ControlRequest, control_context: ControlContext) -> ControlResult:
         if not isinstance(request, Background):
             raise TypeError("background handler requires Background")
         terminal = control_context.terminal
         window_id = control_context.terminal_window_id
         if window_id is None:
-            return DeliveryResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
+            return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
         deadline = time.monotonic() + BACKGROUND_OFFER_TIMEOUT_SECONDS
         while BACKGROUND_OFFER_MARKER not in _flattened(_screen_text(terminal, window_id)):
             if time.monotonic() >= deadline:
-                return DeliveryResult(
+                return ControlResult(
                     request.request_id,
                     ControlAcknowledgement.REJECTED,
                     "no command is offering to be backgrounded",
                 )
             time.sleep(BACKGROUND_POLL_SECONDS)
         delivered = terminal.input.send_key(KeySendRequest(NativeWindowId(str(window_id)), BACKGROUND_CHORD)).succeeded
-        return DeliveryResult(
+        return ControlResult(
             request.request_id,
             ControlAcknowledgement.ACKNOWLEDGED if delivered else ControlAcknowledgement.INDETERMINATE,
             None if delivered else "backgrounding chord was not delivered",
-            queued=False,
         )
 
 

@@ -4,7 +4,7 @@ An interrupt is a screen heuristic (an escape key sent, the screen stopped
 changing) — some harnesses' raw event streams carry no record distinguishing
 a turn cut short from one that finished on its own, so nothing canonical
 ever settles the turn. `HarnessControlService` marks this registry exactly
-when a control's `DeliveryResult` says `acknowledged` but not `corroborated`;
+when a control's `InterruptResult` says `acknowledged` but not `corroborated`;
 a harness whose own translator will pick up a native abort record on its own
 next read never marks it at all. `engine.interpret.interrupts` reads it back
 to emit the one fallback fact this registry exists for.
