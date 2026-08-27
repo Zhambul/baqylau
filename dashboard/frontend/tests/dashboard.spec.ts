@@ -687,9 +687,12 @@ test('keeps the new-session and resume-preview modal boundaries', async ({
     'search all sessions in this directory…',
   );
   await search.fill('Frontend parity');
-  const row = dialog.getByText('Frontend parity work');
+  const row = dialog
+    .getByRole('option')
+    .filter({ hasText: 'Frontend parity work' });
   await expect(row).toBeVisible();
-  await row.dblclick();
+  await row.focus();
+  await page.keyboard.press('Space');
 
   const preview = page.getByRole('dialog', {
     name: 'Preview Frontend parity work',
