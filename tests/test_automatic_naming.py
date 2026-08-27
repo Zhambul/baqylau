@@ -272,7 +272,10 @@ def test_title_normalization_rejects_empty_or_too_short_results(title: str) -> N
 def test_first_prompt_enqueues_once_and_a_restart_cannot_claim_it_twice(tmp_path) -> None:
     repository = SqliteNamingJobRepository(main_database(str(tmp_path / "main.db")))
     registry = HarnessRegistry()
-    registry.register(codex_plugin)
+    registry.register(replace(
+        codex_plugin,
+        info=replace(codex_plugin.info, supports_native_initial_naming=False),
+    ))
     reaction = AutomaticNamingReaction(registry, repository)
 
     reaction.react(prompt_event())
@@ -286,12 +289,19 @@ def test_first_prompt_enqueues_once_and_a_restart_cannot_claim_it_twice(tmp_path
     assert restarted.claim_next() is None
 
 
-def test_native_automatic_naming_never_enqueues_a_model_job(tmp_path) -> None:
+@pytest.mark.parametrize("harness", (HarnessName.CODEX, HarnessName.CLAUDE_CODE))
+def test_native_initial_naming_never_enqueues_a_model_job(
+    tmp_path,
+    harness: HarnessName,
+) -> None:
     repository = SqliteNamingJobRepository(main_database(str(tmp_path / "main.db")))
     registry = HarnessRegistry()
+    registry.register(codex_plugin)
     registry.register(claude_plugin)
 
-    AutomaticNamingReaction(registry, repository).react(prompt_event(claude=True))
+    AutomaticNamingReaction(registry, repository).react(
+        prompt_event(claude=harness == HarnessName.CLAUDE_CODE)
+    )
 
     assert repository.claim_next() is None
 

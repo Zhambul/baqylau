@@ -171,7 +171,9 @@ class BrowserSessionDriver:
         name = self._page.locator(".aname").filter(
             has_text=re.compile(rf"^{re.escape(harness)}$")
         )
-        expect(name).to_be_visible(timeout=15_000)
+        expect(name).to_be_visible(
+            timeout=self._milliseconds(self._wait_policy.feed),
+        )
         current_marker = self._page.evaluate(
             "() => globalThis.__baqylauUsageDocumentMarker"
         )
@@ -504,7 +506,9 @@ class BrowserSessionDriver:
             )
         block = self._page.locator(".stream .blk").filter(
             has=self._page.locator(".bchips", has_text=operations[0].path),
-        ).filter(has=self._page.locator(".tdiff .removed"))
+        ).filter(
+            has=self._page.locator(".bchips > span:first-child", has_text="Edit"),
+        )
         expect(block).to_have_count(
             1,
             timeout=self._milliseconds(self._wait_policy.feed),
@@ -513,8 +517,12 @@ class BrowserSessionDriver:
             block.locator(".bhead").click()
         removed = block.locator(".tdiff .removed").first
         added = block.locator(".tdiff .added").first
-        expect(removed).to_be_visible()
-        expect(added).to_be_visible()
+        expect(removed).to_be_visible(
+            timeout=self._milliseconds(self._wait_policy.feed),
+        )
+        expect(added).to_be_visible(
+            timeout=self._milliseconds(self._wait_policy.feed),
+        )
         self._assert_mixed_background(removed, "--red", 24)
         self._assert_mixed_background(added, "--green", 24)
         expect(removed).to_have_attribute("aria-label", re.compile(r"^removed line "))

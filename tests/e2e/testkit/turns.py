@@ -116,18 +116,28 @@ def wait_until_complete(
         final_answers = enders(snapshot, current)
         if current.actor_id is None:
             raise AssertionError("turn does not have a resolved actor identity")
+        finishes = [
+            entry
+            for entry in snapshot.entries
+            if entry.actor_id == current.actor_id
+            and entry.turn_id == current.turn_id
+            and isinstance(entry.body, TurnFinishedBodyResponse)
+        ]
         prompt_count = snapshot.actor(current.actor_id).statistics.prompt_count
         if len(final_answers) > 1:
             raise AssertionError(f"turn {name!r} has {len(final_answers)} final answers")
+        if len(finishes) > 1:
+            raise AssertionError(f"turn {name!r} has {len(finishes)} completion facts")
         return (
             True
             if len(final_answers) == 1
+            and len(finishes) == 1
             and prompt_count >= current.expected_prompt_count
             else None
         )
 
     client.sessions.watch(current.session).wait(
-        f"turn {name!r} to have exactly one final answer and its prompt",
+        f"turn {name!r} to have one final answer, prompt, and completion fact",
         completed,
         timeout=timeout,
     )

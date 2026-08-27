@@ -73,7 +73,7 @@ STEP_TIMEOUT_S = 2.5   # a key press → its screen effect visible
 KEY_GAP_S = 0.12       # beat between successive blind key presses
 SUBMIT_TIMEOUT_S = 4.0  # final submit → dialog gone (the tool round-trips)
 NAV_STEPS = 24         # max up/down presses to walk the cursor to a target row
-KEY_EFFECT_TIMEOUT_S = 1.5  # a cursor key can be descheduled behind other CLIs
+KEY_EFFECT_TIMEOUT_S = 5.0  # a cursor key can be descheduled behind other CLIs
 DIALOG_MIN_LINES = 60  # keep option rows visible while the web drives the dialog
 
 
@@ -142,13 +142,19 @@ def cursor_to(
         if askscreen.cursor_row(before) is not None:
             break
         screen_driver.send_key(win, "down")
-        screendrive.poll_until(
+        screen, changed = screendrive.poll_until(
             screen_driver,
             win,
             _screen_changed_or_has_cursor(before),
             KEY_EFFECT_TIMEOUT_S,
             sleep,
         )
+        if not changed:
+            raise AskError(
+                "cursor",
+                "down key had no visible effect while revealing the cursor",
+                screen=screen,
+            )
 
     prev = object()
     for _ in range(NAV_STEPS):               # normalize to the first row
@@ -176,13 +182,19 @@ def cursor_to(
             return screen
         before = screen
         screen_driver.send_key(win, "down")
-        screendrive.poll_until(
+        screen, changed = screendrive.poll_until(
             screen_driver,
             win,
             _screen_changed(before),
             KEY_EFFECT_TIMEOUT_S,
             sleep,
         )
+        if not changed:
+            raise AskError(
+                "cursor",
+                "down key had no visible effect while selecting %s" % what,
+                screen=screen,
+            )
     visible = [
         (row.digit, row.label, row.cursor, row.check)
         for row in rows(screen)

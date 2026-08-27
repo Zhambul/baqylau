@@ -22,6 +22,7 @@ from domain.events import (
     ActorStarted,
     CanonicalEvent,
     EffortChanged,
+    EventPayload,
     MessageCreated,
     ModelChanged,
     PlanResolved,
@@ -610,6 +611,7 @@ def test_a_send_that_misses_the_turn_boundary_drains_after_it_is_persisted(
     monkeypatch,
 ) -> None:
     recorded = []
+    delivered = []
     executions: list[bool | None] = []
     service = object.__new__(HarnessControlService)
     service.audit = cast(
@@ -618,7 +620,10 @@ def test_a_send_that_misses_the_turn_boundary_drains_after_it_is_persisted(
     )
     service.control_effects = cast(
         ControlEffectRecorder,
-        SimpleNamespace(text_queued=lambda request: recorded.append(request)),
+        SimpleNamespace(
+            text_queued=lambda request: recorded.append(request),
+            text_delivered=lambda request: delivered.append(request),
+        ),
     )
     service.sessions = cast(
         SessionRepository,
@@ -646,7 +651,67 @@ def test_a_send_that_misses_the_turn_boundary_drains_after_it_is_persisted(
     assert isinstance(outcome, DeliveryResult)
     assert outcome.queued is True
     assert recorded == [request]
+    assert delivered == [request]
     assert executions == [None, False]
+
+
+def test_a_drained_slash_command_is_not_sent_at_a_later_turn_boundary(
+    monkeypatch,
+) -> None:
+    request = SendText(
+        SessionId("session-one"),
+        RequestId("request-one"),
+        text="/plan",
+    )
+    queue = DurableQueue()
+    queue.items = [QueuedMessage(request.request_id, request.text)]
+    executions = []
+    service = object.__new__(HarnessControlService)
+    service.audit = cast(
+        AuditRecorder,
+        SimpleNamespace(state_file=lambda *_args, **_kwargs: None),
+    )
+    service.sessions = cast(
+        SessionRepository,
+        SimpleNamespace(find=lambda _session_id: None),
+    )
+    service.control_effects = ControlEffectRecorder(
+        cast(RawEventRepository, RawEvents()),
+        cast(SessionWorkspaceRepository, queue),
+        cast(SessionDataRepository, SessionEntries()),
+    )
+
+    def execute(sent, *, lead_active=None):
+        executions.append((sent, lead_active))
+        return DeliveryResult(
+            sent.request_id,
+            ControlAcknowledgement.ACKNOWLEDGED,
+            queued=False,
+        )
+
+    monkeypatch.setattr(service, "_execute", execute)
+    reaction = QueuedPromptCanonicalEventReaction(
+        cast(SessionWorkspaceRepository, queue),
+        service,
+    )
+    finished: CanonicalEvent[EventPayload] = CanonicalEvent(
+        event_id=CanonicalEventId("turn-finished"),
+        session_id=request.session_id,
+        actor_id=ActorId("actor-one"),
+        turn_id=TurnId("turn-one"),
+        parent_actor_id=None,
+        harness=HarnessName.CODEX,
+        occurred_at=2.0,
+        terminal_window_id=None,
+        harness_process_id=None,
+        payload=TurnFinished(None, Outcome.SUCCEEDED),
+    )
+
+    reaction.react(finished)
+    reaction.react(replace(finished, event_id=CanonicalEventId("turn-finished-again")))
+
+    assert executions == [(request, False)]
+    assert queue.items == []
 
 
 def test_a_native_queue_is_not_submitted_again_at_the_turn_boundary(

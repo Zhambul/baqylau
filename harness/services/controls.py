@@ -170,7 +170,17 @@ class HarnessControlService(HarnessReactorContext):
                 ControlAcknowledgement.ACKNOWLEDGED,
                 queued=True,
             )
-        return self._audited(send_text, lead_active=False)
+        outcome = self._audited(send_text, lead_active=False)
+        if (
+            isinstance(outcome, DeliveryResult)
+            and outcome.status == ControlAcknowledgement.ACKNOWLEDGED
+            and not outcome.queued
+        ):
+            # A plugin without a native queue gets one idle submit. Remove the
+            # item now so a slash command, which has no native prompt fact,
+            # cannot run again at each later turn boundary.
+            self.control_effects.text_delivered(send_text)
+        return outcome
 
     def interrupt(self, interrupt: Interrupt) -> ControlOutcome:
         return self._audited(interrupt)

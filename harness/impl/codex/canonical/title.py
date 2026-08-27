@@ -8,8 +8,10 @@
 # `$CODEX_HOME/state_<N>.sqlite` (or `~/.codex/state_<N>.sqlite`), table
 # `threads`, columns `name` and `title`, keyed by the thread uuid (== the
 # rollout's uuid == the session id for a standalone host). Current Codex uses
-# `name` for an explicit `/rename` and `title` for its generated title. Older
-# indexes have only `title`.
+# `name` for both its generated short title and an explicit `/rename`. The
+# store has no origin field. A Baqylau control record keeps a person-selected
+# title separately, so native index observations use automatic precedence.
+# Older indexes have only `title`.
 # The numbered filename is VERSION-FRAGILE (state_5 on the dev machine,
 # 2026-07), so it is resolved by globbing and taking the highest N. It is not
 # ours: we do not create it, version it, or set a pragma on it.
@@ -177,9 +179,9 @@ class CodexThreadTitleRepository(NativeSessionTitleRepository):
         if not row:
             return None
         if current_schema:
-            custom = str(row[0]).strip() if row[0] is not None else ""
-            if custom:
-                return CodexNativeTitle(custom, TitleOrigin.CUSTOM)
+            name = str(row[0]).strip() if row[0] is not None else ""
+            if name:
+                return CodexNativeTitle(name, TitleOrigin.AUTOMATIC)
             automatic = str(row[1]).strip() if row[1] is not None else ""
         else:
             automatic = str(row[0]).strip() if row[0] is not None else ""

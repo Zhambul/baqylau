@@ -143,6 +143,38 @@ def name_running_foreground_command(
 
 
 @when(parsers.parse(
+    'I name the only running command in turn "{turn_name}" containing \'{command}\' "{name}"'
+))
+@when(parsers.parse(
+    'I name the only running command in work "{turn_name}" containing \'{command}\' "{name}"'
+))
+def name_running_command(
+    client: BaqylauClient,
+    turns: Turns,
+    shells: Shells,
+    wait_policy: WaitPolicy,
+    turn_name: str,
+    command: str,
+    name: str,
+) -> None:
+    """Bind a running command when the harness can move it to background."""
+    turn = selectors.turn(
+        client.sessions.watch(turns.get(turn_name).session),
+        turns.get(turn_name),
+        wait_policy.turn,
+    )
+    turns.replace(turn_name, turn)
+    found = selectors.shell(
+        client.sessions.watch(turn.session),
+        turn_reference=turn,
+        command_contains=command,
+        predicate=lambda item: item.state is None,
+        timeout=wait_policy.turn,
+    )
+    shells.bind(name, found)
+
+
+@when(parsers.parse(
     'I name the only background job in turn "{turn_name}" containing \'{command}\' "{name}"'
 ))
 @when(parsers.parse(

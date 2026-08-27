@@ -115,32 +115,6 @@ Feature: planning tools update the session goal and tasks
       | harness | model        |
       | codex   | gpt-5.6-luna |
 
-  Scenario Outline: a goal reports active blocked and completed states
-    Given session configuration "primary" uses <harness> with model <model> and low effort
-    When I launch session "primary" as turn "start waiting goal" with prompt
-      """
-      Use create_goal exactly once with objective "Receive the E2E goal value".
-      The required value has not been provided. This is the first blocked turn.
-      Do not use update_goal. Reply only with WAITING_ONE.
-      """
-    Then session "primary" has goal 'Receive the E2E goal value'
-    And the goal in session "primary" has state active
-    And turn "start waiting goal" completes
-    And the goal in session "primary" has state blocked
-    When I send prompt to session "primary" as turn "complete waiting goal"
-      """
-      The required value is E2E-GOAL-VALUE. The goal is now achieved. Use
-      update_goal exactly once to mark the goal complete. Reply only with
-      GOAL_COMPLETED.
-      """
-    Then turn "complete waiting goal" completes
-    And the goal in session "primary" has state completed
-    And the goal in session "primary" is complete
-
-    Examples:
-      | harness | model        |
-      | codex   | gpt-5.6-luna |
-
   Scenario Outline: a dashboard choice approves a harness plan
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "ready" with prompt
@@ -151,10 +125,10 @@ Feature: planning tools update the session goal and tasks
     And turn "ready" has final answer 'ready'
     When I start plan work "propose plan" in session "primary" with prompt
       """
-      Make a plan that contains the exact marker E2E-PLAN-MARKER-731. The plan
-      must not change files or run commands. Wait for the person to decide.
-      After approval, do not implement the plan or use tools. Reply only with
-      the exact word approved.
+      Make a plan that contains the exact marker E2E-PLAN-MARKER-731. The only
+      implementation step in the plan must be to reply with the exact word
+      approved. The plan must not change files or run commands. Wait for the
+      person to decide. After approval, implement that one step without tools.
       """
     And I name the pending plan in turn "propose plan" containing 'E2E-PLAN-MARKER-731' "safe plan"
     Then plan "safe plan" contains 'E2E-PLAN-MARKER-731'

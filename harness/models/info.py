@@ -29,6 +29,9 @@ class HarnessInfo:
     supports_attachments: bool = False
     default_for_launch: bool = False
     supports_accounts: bool = False
+    # The harness creates a useful title after the first prompt. This is
+    # separate from an interactive command that requests a new title.
+    supports_native_initial_naming: bool = False
     supports_native_automatic_renaming: bool = False
     # Whether compaction yields readable context for people, rather than only
     # an opaque continuation item for the harness itself.

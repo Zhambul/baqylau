@@ -2,6 +2,8 @@
 
 from typing import cast
 
+import pytest
+
 from domain.ids import WindowId
 from harness.impl.claude_code.canonical.records import Question, QuestionOption
 from harness.impl.claude_code.controls import askdialog
@@ -58,6 +60,34 @@ def test_cursor_navigation_reveals_a_selected_row_above_the_viewport():
     )
 
     assert "❯ 1. Blue" in screen
+
+
+def test_cursor_navigation_does_not_repeat_an_unverified_down_key():
+    class FrozenDriver:
+        def __init__(self) -> None:
+            self.keys: list[str] = []
+
+        def get_text(self, window_id: WindowId) -> str:
+            del window_id
+            return "  1. Blue\n  2. Green\nEnter to select"
+
+        def send_key(self, window_id: WindowId, key: str) -> bool:
+            del window_id
+            self.keys.append(key)
+            return True
+
+    driver = FrozenDriver()
+
+    with pytest.raises(askdialog.AskError, match="down key had no visible effect"):
+        cursor_to(
+            cast(ScreenDriver, driver),
+            WindowId("window"),
+            lambda row: row.digit == "2",
+            lambda _seconds: None,
+            "option 2",
+        )
+
+    assert driver.keys == ["down"]
 
 
 def test_question_driver_restores_temporary_viewport_growth(monkeypatch):

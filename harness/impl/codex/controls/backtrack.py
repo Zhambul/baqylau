@@ -9,6 +9,8 @@ from typing import Protocol
 
 from domain.ids import WindowId
 
+from harness.impl.codex.controls import composer
+
 POLL_SECONDS = 0.1
 STEP_TIMEOUT_SECONDS = 10.0
 ESCAPE_HINT = "esc again to edit previous message"
@@ -132,9 +134,13 @@ def drive(
     if newer_prompt_count < 0:
         raise BacktrackError("target", "newer prompt count must not be negative")
 
-    # A draft changes the meaning of Escape. Clear both sides of the cursor.
-    if not driver.send_key(window_id, "ctrl+u", "ctrl+k"):
-        raise BacktrackError("clear", "the composer draft was not cleared")
+    # A canonical turn finish can arrive a few frames before the native
+    # composer. Wait for the composer and confirm that it is empty before an
+    # Escape. An early Escape can land in the prior turn and do nothing.
+    try:
+        composer.clear(driver, window_id, sleep=sleep)
+    except composer.ComposerError as error:
+        raise BacktrackError("clear", str(error)) from error
     if not driver.send_key(window_id, "escape"):
         raise BacktrackError("open", "the first escape was not delivered")
     hint = _wait(

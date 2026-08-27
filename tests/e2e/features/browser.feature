@@ -248,7 +248,7 @@ Feature: the browser controls real harness sessions
       as a foreground shell command. Do not run it in the background. Wait for
       it, and then reply only with BROWSER_ACTIVE_DONE.
       """
-    And I name the only running foreground command in turn "active work" containing 'baqylau-browser-active-release' "observed active command"
+    And I name the only running command in turn "active work" containing 'baqylau-browser-active-release' "observed active command"
     And I open session "primary" in the browser
     And I send browser prompt to session "primary" as turn "queued work"
       """

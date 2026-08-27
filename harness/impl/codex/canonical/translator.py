@@ -1409,6 +1409,11 @@ class CodexCanonicalTranslator(HarnessTranslator):
             )
             return []
         if isinstance(record, ActorActivityRecord):
+            # Current Codex gives completion notices their own synthetic id.
+            # The child task record owns the assignment result, so this mirror
+            # has no collaboration call and no separate canonical fact.
+            if record.activity == "completed":
+                return []
             call_id = CodexCallId(record.call_id or "")
             call = self._collaboration_call(raw_event, call_id)
             if call is None:

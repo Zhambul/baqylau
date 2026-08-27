@@ -1,6 +1,6 @@
 PY ?= .venv/bin/python
 NPM ?= npm
-E2E_WORKERS ?= 1
+E2E_WORKERS ?= 20
 BROWSER_E2E_WORKERS ?= 4
 E2E_DIST ?= load
 FRONTEND_DIR = dashboard/frontend
@@ -63,10 +63,9 @@ test-browser-drift: build-frontend browser-live-e2e
 browser-live-e2e:
 	BAQYLAU_E2E_BROWSER=1 $(PY) -m pytest tests/e2e/browser -q -x -n $(E2E_WORKERS) --dist $(E2E_DIST) --maxschedchunk 1 $(E2E)
 
-# Complete end-to-end gate. Every suite uses its measured maximum reliable
-# parallelism; suite boundaries remain serial because mixing browser-live and
-# API-live workloads overloads the native harnesses even when worker count is
-# capped. The frontend is built only once.
+# Complete end-to-end gate. Every suite uses its measured parallelism. Suite
+# boundaries stay serial, so one failure stops before the next token-spending
+# layer starts. The frontend is built only once.
 e2e: build-frontend
 	$(MAKE) --no-print-directory test-drift
 	$(MAKE) --no-print-directory browser-live-e2e

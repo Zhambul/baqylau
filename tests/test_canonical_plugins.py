@@ -499,11 +499,11 @@ def test_codex_title_source_reports_native_title_changes(monkeypatch, tmp_path):
     initial_title = payloads(translator.translate(initial), SessionTitleChanged)[0]
     assert initial_title.payload == SessionTitleChanged("Generated title", "automatic")
 
-    titles[0] = CodexNativeTitle("Chosen title", TitleOrigin.CUSTOM)
+    titles[0] = CodexNativeTitle("Chosen title", TitleOrigin.AUTOMATIC)
     marker[0] = 2
     changed = source.read(initial.source_position)[0]
     changed_title = payloads(translator.translate(changed), SessionTitleChanged)[0]
-    assert changed_title.payload == SessionTitleChanged("Chosen title", "custom")
+    assert changed_title.payload == SessionTitleChanged("Chosen title", "automatic")
 
     titles[0] = CodexNativeTitle("Generated title", TitleOrigin.AUTOMATIC)
     marker[0] = 3
@@ -566,13 +566,11 @@ def test_codex_title_repository_prefers_and_writes_the_native_name(tmp_path):
     repository = title.CodexThreadTitleRepository()
 
     assert repository.read_title(str(source_path)) == title.CodexNativeTitle(
-        "Native name",
-        TitleOrigin.CUSTOM,
+        "Native name", TitleOrigin.AUTOMATIC,
     )
     assert repository.set_title(str(source_path), "Dashboard name") == "renamed"
     assert repository.read_title(str(source_path)) == title.CodexNativeTitle(
-        "Dashboard name",
-        TitleOrigin.CUSTOM,
+        "Dashboard name", TitleOrigin.AUTOMATIC,
     )
     with sqlite3.connect(database_path) as connection:
         assert connection.execute(
@@ -909,7 +907,14 @@ def test_codex_goal_and_plan_use_shared_goal_and_task_events():
                 "type": "event_msg",
                 "payload": {
                     "type": "thread_goal_updated",
-                    "goal": {"objective": "Ship it", "status": "active"},
+                    "goal": {
+                        "objective": "Ship it",
+                        "status": "active",
+                        "tokensUsed": 20,
+                        "timeUsedSeconds": 3,
+                        "createdAt": 1787805991,
+                        "updatedAt": 1787806113,
+                    },
                 },
             },
             harness=HarnessName.CODEX,
@@ -4728,7 +4733,7 @@ def test_codex_backtrack_selects_a_named_prompt_before_it_confirms():
         sleep=lambda _seconds: None,
     )
 
-    assert driver.keys == ["ctrl+u", "ctrl+k", "escape", "escape", "left", "enter"]
+    assert driver.keys == ["escape", "escape", "left", "enter"]
 
 
 def test_codex_backtrack_can_verify_a_plain_pty_transcript():
@@ -8850,6 +8855,26 @@ def test_codex_collaboration_controls_map_only_semantic_actor_facts(tmp_path):
         assert result.canonical_events == ()
         assert result.decision == "ignored_nonsemantic"
 
+    completed = translate(
+        {
+            "type": "event_msg",
+            "payload": {
+                "type": "item_completed",
+                "turn_id": "lead-turn",
+                "item": {
+                    "type": "SubAgentActivity",
+                    "id": "subagent-completed-child-one",
+                    "kind": "completed",
+                    "agent_thread_id": "child-one",
+                    "agent_path": "/root/weather",
+                },
+            },
+        },
+        "completed-activity",
+    )
+    assert completed.canonical_events == ()
+    assert completed.decision == "ignored_nonsemantic"
+
     for call_id, output in (
         ("spawn", '{"task_name":"/root/weather"}'),
         ("follow", ""),
@@ -11292,6 +11317,7 @@ def test_codex_message_keeps_its_native_turn_identity():
                     "internal_chat_message_metadata_passthrough": {
                         "turn_id": "turn-one",
                         "create_time": 1787403595.261263,
+                        "content_item_kinds": ["unknown"],
                     },
                 },
             },

@@ -414,6 +414,12 @@ expiresAt                           # Codex rate-limit foreign response
 availableCount                      # Codex rate-limit foreign response
 rateLimitsByLimitId                 # Codex rate-limit foreign response
 rateLimitResetCredits               # Codex rate-limit foreign response
+tokensUsed                          # Codex goal foreign response
+timeUsedSeconds                     # Codex goal foreign response
+createdAt                           # Codex goal foreign response
+updatedAt                           # Codex goal foreign response
+content_item_kinds                  # Codex chat metadata foreign response
+supports_native_initial_naming      # HarnessInfo capability field
 thinking_tokens                    # UsageOutputTokensDetails
 web_search_requests                # UsageServerToolUse
 web_fetch_requests                 # UsageServerToolUse

@@ -73,6 +73,20 @@ class ControlEffectRecorder:
             "send",
         )
 
+    def text_delivered(self, send_text: SendText) -> None:
+        """Remove an item after a plugin accepts one idle-boundary submit.
+
+        A plugin with a native queue keeps the item until a native prompt
+        confirms delivery. A plugin without one submits the item after the
+        turn and must remove it at that point. Slash commands do not create a
+        native prompt. If they stay in this queue, each later turn boundary
+        submits the same command again.
+        """
+        self.workspaces.remove_queued_message(
+            send_text.session_id,
+            send_text.request_id,
+        )
+
     def plan_decided(
         self,
         session: Session,

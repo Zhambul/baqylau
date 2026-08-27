@@ -234,7 +234,7 @@ class QueuedPromptCanonicalEventReaction(CanonicalEventReaction):
         payload = canonical_event.payload
         workspace = self.workspaces.find(canonical_event.session_id)
         queue = workspace.queue if workspace is not None else None
-        if queue is None:
+        if queue is None or not queue.items:
             return
         if isinstance(payload, (TurnFinished, TurnAborted)):
             if self.sender is not None:

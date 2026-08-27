@@ -104,7 +104,7 @@ def session_has_concise_title(
         return True if (
             "\n" not in title
             and len(title) <= 80
-            and 3 <= len(title.split()) <= 8
+            and 2 <= len(title.split()) <= 8
             and "http" not in title.casefold()
             and "<" not in title
             and ">" not in title

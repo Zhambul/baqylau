@@ -205,6 +205,10 @@ class GoalBlock(BaseModel):
     status: str | None = None
     reason: str | None = None
     threadId: CodexSessionId | None = None
+    tokensUsed: int | None = None
+    timeUsedSeconds: int | None = None
+    createdAt: int | None = None
+    updatedAt: int | None = None
 
 
 class ThreadGoalUpdatedPayload(BaseModel):
@@ -799,6 +803,7 @@ class ChatMessageMetadata(BaseModel):
     model_config = FOREIGN
     turn_id: CodexTurnId | None = None
     create_time: float | None = None
+    content_item_kinds: list[str] | None = None
 
 
 class WebSearchCallAction(BaseModel):

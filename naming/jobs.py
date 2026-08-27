@@ -37,7 +37,7 @@ class AutomaticNamingReaction:
             and isinstance(payload.content, TextContent)
         ):
             return
-        if self.registry.plugin(event.harness).info.supports_native_automatic_renaming:
+        if self.registry.plugin(event.harness).info.supports_native_initial_naming:
             return
         prompt = bounded_prompt(payload.content.text)
         if not prompt:

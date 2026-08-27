@@ -62,7 +62,7 @@ make test-drift                                        # every scenario
 make test-drift E2E="-k codex"                         # one harness
 make test-drift E2E="--e2e-model claude-opus-5"        # every scenario, one model
 make test-drift E2E="--e2e-data-dir /tmp/drift"        # keep the databases after
-make test-drift E2E_WORKERS=20                          # stress concurrent scenarios
+make test-drift E2E_WORKERS=1                           # isolate one scenario for debug
 make e2e                                                # every live + browser E2E layer
 ```
 
@@ -76,11 +76,11 @@ The only run-scoped shared resource is a locked, atomic snapshot of read-only
 account usage, which prevents every daemon from launching the same native usage
 probes.
 
-The default is one live scenario at a time and four frontend browser tests.
+The default is 20 live scenarios at a time and four frontend browser tests.
 The suite is dominated by subprocess, socket, and remote-model waits rather
-than Python CPU work, but higher live concurrency can saturate the shared
-harness providers and delay a valid first action beyond the live feed deadline.
-xdist uses separate Python processes, so the GIL does not serialize them.
+than Python CPU work. A measured 20-worker run starts every Codex and Claude
+Code session and keeps useful work in flight. xdist uses separate Python
+processes, so the GIL does not serialize them.
 Dynamic one-test scheduling and a one-test scheduling chunk keep every scenario
 independently assignable and prevent fail-fast from leaving a large preassigned
 tail. Codex, Claude Code, usage, and automatic-title scenarios all share this
@@ -91,12 +91,11 @@ explicit opt-in suites control one machine-level resource.
 `make e2e` is the complete end-to-end gate. It runs the live scenarios, the
 live-browser scenarios, and then static Playwright against one compiled
 production application. Every suite uses its measured maximum reliable
-parallelism: one worker for each live suite and four for static Playwright.
-The suite boundaries are intentionally serial. Higher shared and mixed worker
-counts caused native CLI stalls and long drain tails on the reference machine;
-perfect per-test state isolation cannot isolate the external harness account
-and backend. Override `E2E_WORKERS` when benchmarking another machine. Cases do
-not share ports, data directories, harness homes, or workspaces.
+parallelism: 20 workers for each live suite and four for static Playwright.
+The suite boundaries are serial, so a failed token-spending layer stops the
+gate before the next layer starts. Override `E2E_WORKERS` when benchmarking
+another machine. Cases do not share ports, data directories, harness homes, or
+workspaces.
 
 `make test-drift` collects only `tests/e2e/test_scenarios.py`, the active live
 matrix. Browser drift, real-Kitty, and installed-daemon tests remain separate
