@@ -24,6 +24,7 @@ from harness.models import (
 from harness.models.directives import SessionRenameObservation
 from inference.contract import ModelFactory, ModelPromptRequest
 from inference.errors import ModelUnavailableError
+from naming.audit import NamingAudit
 from repository.contract.facts import RawEventRepository
 from repository.contract.naming import NamingJobRepository
 from repository.contract.session_data import SessionDataRepository
@@ -96,18 +97,18 @@ class AutomaticSessionNamer:
                 str(session.session_id),
                 "",
                 "automatic_title",
-                {"job_key": key, "title": title, "status": outcome.status},
+                NamingAudit(job_key=key, title=title, status=outcome.status),
             )
             return outcome
         except ModelUnavailableError as error:
             self.audit.error(
                 str(session.session_id),
                 "automatic naming (requested)",
-                {
-                    "job_key": key,
-                    "error_type": type(error).__name__,
-                    "error": str(error),
-                },
+                NamingAudit(
+                    job_key=key,
+                    error_type=type(error).__name__,
+                    error=str(error),
+                ),
             )
             self.jobs.fail(key, "no small model is currently available")
             self._audit_failure(session, key)
@@ -120,11 +121,11 @@ class AutomaticSessionNamer:
             self.audit.error(
                 str(session.session_id),
                 "automatic naming (requested)",
-                {
-                    "job_key": key,
-                    "error_type": type(error).__name__,
-                    "error": str(error),
-                },
+                NamingAudit(
+                    job_key=key,
+                    error_type=type(error).__name__,
+                    error=str(error),
+                ),
             )
             self.jobs.fail(key, "automatic title generation failed")
             self._audit_failure(session, key)
@@ -185,7 +186,7 @@ class AutomaticSessionNamer:
             str(session.session_id),
             "",
             "automatic_title",
-            {"job_key": key, "status": "failed"},
+            NamingAudit(job_key=key, status="failed"),
         )
 
 

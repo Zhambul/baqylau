@@ -227,13 +227,6 @@ def payload(event_type: str, encoded_payload: str) -> EventPayload:
     return decoded
 
 
-def encode_canonical_event(canonical_event: CanonicalEvent[EventPayload]) -> bytes:
-    """The event, whole, as a JSON document — for a debugging tool to show a
-    human. Not the stored form: the store never serializes more than the
-    payload column; the identity columns stay typed SQL columns."""
-    return _event_adapter(_validated(canonical_event)).dump_json(canonical_event)
-
-
 def canonical_event_values(canonical_event: CanonicalEvent[EventPayload], accepted_at: float) -> SqlValues:
     """The event, split across the columns that hold it.
 

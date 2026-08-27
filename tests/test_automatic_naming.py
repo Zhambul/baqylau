@@ -41,6 +41,7 @@ from harness.services.controls import HarnessControlService
 from inference.contract import ModelFactory, ModelPromptRequest, ModelPromptResponse
 from inference.errors import ModelUnavailableError
 from naming.jobs import AutomaticNamingReaction, NamingJobWorker
+from naming.audit import NamingAudit
 from naming.renamer import SessionRenamer
 from naming.service import AutomaticSessionNamer, normalize_title
 from repository.contract.facts import RawEventRepository
@@ -397,11 +398,11 @@ def test_explicit_failure_keeps_the_current_title_unchanged(tmp_path) -> None:
         (
             str(SESSION_ID),
             "automatic naming (requested)",
-            {
-                "job_key": f"requested:{SESSION_ID}:failed",
-                "error_type": "ModelUnavailableError",
-                "error": "unavailable",
-            },
+            NamingAudit(
+                job_key=f"requested:{SESSION_ID}:failed",
+                error_type="ModelUnavailableError",
+                error="unavailable",
+            ),
         )
     ]
 
@@ -428,7 +429,7 @@ def test_initial_unavailability_marks_the_job_failed_without_an_application_erro
     assert stored.state == NamingJobState.FAILED
     assert audit.errors == []
     state = cast(tuple[object, ...], audit.states[-1])
-    assert state[-1] == {"job_key": job.key, "status": "failed"}
+    assert state[-1] == NamingAudit(job_key=job.key, status="failed")
 
 
 def test_stopping_the_application_cancels_naming_without_an_error(tmp_path) -> None:
@@ -450,7 +451,7 @@ def test_stopping_the_application_cancels_naming_without_an_error(tmp_path) -> N
     assert stored is not None and stored.state == NamingJobState.FAILED
     assert audit.errors == []
     state = cast(tuple[object, ...], audit.states[-1])
-    assert state[-1] == {"job_key": job.key, "status": "cancelled"}
+    assert state[-1] == NamingAudit(job_key=job.key, status="cancelled")
 
 
 def test_job_completion_is_durable(tmp_path) -> None:

@@ -20,13 +20,15 @@ and they are the point of the change:
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import signal
 import sys
 import time
-from typing import Any
+from collections.abc import Mapping
+from types import FrameType
+
+from pydantic import ValidationError
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # my own directory
 
@@ -49,6 +51,7 @@ CLOCK_TICK_SECONDS = 1.0
 # daemon and reconnect the pane on a schedule forever.
 STREAM_STALL_SECONDS = 35.0
 FALLBACK_WIDTH = 80
+EMPTY_TARGETS: Mapping[str, str] = {}
 
 
 class Pane:
@@ -71,7 +74,7 @@ class Pane:
         # Both live on disk between this process and the two programs the
         # terminal launches for a click (client/_handoff.py explains why).
         self._opened = _handoff.opened(session_id, kind)
-        self._published: dict[str, str] = {}
+        self._published: Mapping[str, str] = EMPTY_TARGETS
 
     def paint(self) -> None:
         """One whole screen, in one write.
@@ -124,7 +127,7 @@ class Pane:
             _handoff.publish(self.session_id, self.kind, targets)
             self._published = targets
 
-    def ticked(self, _signal_number: int = 0, _frame: object = None) -> None:
+    def ticked(self, _signal_number: int = 0, _frame: FrameType | None = None) -> None:
         """SIGALRM: a second passed, so the clock has moved.
 
         The same reentrancy rule as a resize — `paint` declines and defers if one
@@ -133,7 +136,7 @@ class Pane:
         """
         self.paint()
 
-    def expanded(self, _signal_number: int = 0, _frame: object = None) -> None:
+    def expanded(self, _signal_number: int = 0, _frame: FrameType | None = None) -> None:
         """SIGUSR1: a click toggled a file open or closed.
 
         The handler wrote the new set and signalled us, so the state is on disk
@@ -143,7 +146,7 @@ class Pane:
         self._opened = _handoff.opened(self.session_id, self.kind)
         self.paint()
 
-    def resized(self, _signal_number: int = 0, _frame: object = None) -> None:
+    def resized(self, _signal_number: int = 0, _frame: FrameType | None = None) -> None:
         """SIGWINCH: the terminal changed shape.
 
         Paints straight from the handler, because the process is normally blocked
@@ -157,7 +160,7 @@ class Pane:
         self._busy = True
         try:
             if event == "sessionData":
-                self.model.apply_frame(json.loads(data))
+                self.model.apply_frame(_model.StreamFrameDocument.model_validate_json(data))
         finally:
             self._busy = False
         self.paint()
@@ -172,15 +175,24 @@ def _width() -> int:
     return shutil.get_terminal_size((FALLBACK_WIDTH, 24)).columns or FALLBACK_WIDTH
 
 
-def _document(path: str, host: str, port: int) -> dict[str, Any] | None:
+def _snapshot(path: str, host: str, port: int) -> _model.SnapshotDocument | None:
     payload = _daemon.get(path, host, port)
     if payload is None:
         return None
     try:
-        document: dict[str, Any] = json.loads(payload)
-    except ValueError:
+        return _model.SnapshotDocument.model_validate_json(payload)
+    except ValidationError:
         return None
-    return document
+
+
+def _page(path: str, host: str, port: int) -> _model.EntryPageDocument | None:
+    payload = _daemon.get(path, host, port)
+    if payload is None:
+        return None
+    try:
+        return _model.EntryPageDocument.model_validate_json(payload)
+    except ValidationError:
+        return None
 
 
 def connect(pane: Pane, host: str, port: int, session_id: str) -> bool:
@@ -190,11 +202,11 @@ def connect(pane: Pane, host: str, port: int, session_id: str) -> bool:
     moment and the stream opened from that cursor picks up exactly where the page
     stops — no gap to fill and no overlap to reconcile.
     """
-    snapshot = _document(_http.SESSION_DATA_PATH % session_id, host, port)
+    snapshot = _snapshot(_http.SESSION_DATA_PATH % session_id, host, port)
     if snapshot is None:
         return False
     pane.model.apply_snapshot(snapshot)
-    page = _document(
+    page = _page(
         _http.SESSION_ENTRIES_PATH % (session_id, pane.model.cursor), host, port
     )
     if page is not None:

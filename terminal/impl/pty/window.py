@@ -25,6 +25,7 @@ import subprocess
 import termios
 import threading
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 import psutil
@@ -169,7 +170,7 @@ def open_window(
     window_id: WindowId,
     command: tuple[str, ...],
     working_directory: str,
-    environment: dict[str, str],
+    environment: Mapping[str, str],
 ) -> PtyWindow | None:
     """Start `command` on a new pty, or None when it cannot be started."""
     screen = pyte.Screen(COLUMNS, LINES)

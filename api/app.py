@@ -8,14 +8,17 @@
 # only about the registry they hand in.
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
+from typing import cast
 
 import anyio.to_thread
 import yaml
 from fastapi import FastAPI, Request, Response
-from pydantic import JsonValue
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
+from fastapi.openapi.models import Components, PathItem
+from pydantic import BaseModel, ConfigDict
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from api import config
@@ -33,10 +36,25 @@ from api.common.models.replies.error_response import ErrorResponse
 from api.responses import EVERY_ROUTE
 from api.sessiondata import routes as session_data_routes
 from api.sessiondata import streams as session_data_streams
+from audit.models import PathAudit
 from api.terminal import panes
 from app import providers
 from app.injection import Instances, registry, resolve
 from domain.errors import ApplicationInputError
+
+
+# FastAPI requires this final container. The schema stays an OpenAPI model
+# until the framework boundary below.
+FrameworkDocument = dict[str, object]
+
+
+class PublishedOpenAPI(BaseModel):
+    """The FastAPI schema with declared path-item values."""
+
+    model_config = ConfigDict(extra="allow")
+
+    paths: Mapping[str, PathItem] | None = None
+    components: Components | None = None
 
 # Starlette's stock message for an unrouted path; the daemon contract has always
 # said {"error": "not found"} in this server's own casing.
@@ -126,7 +144,7 @@ async def _internal_error(request: Request, _error: Exception) -> Response:
     # resolved from the same registry a route would have been handed it from.
     audit = resolve(request.app.state.instances, providers.recorder)
     audit.error("", "dashboard %s" % ("POST" if request.method == "POST" else "request"),
-                {"path": request.url.path[:200]})
+                PathAudit(path=request.url.path[:200]))
     return _error_body("internal", 500)
 
 
@@ -145,18 +163,31 @@ def _publish_openapi_without_the_422(web: FastAPI) -> None:
     """
     generate = web.openapi
 
-    def document() -> dict[str, JsonValue]:
+    def document() -> FrameworkDocument:
         if web.openapi_schema is None:
-            schema = generate()
-            for operations in schema.get("paths", {}).values():
-                for operation in operations.values():
-                    if isinstance(operation, dict):
-                        operation.get("responses", {}).pop("422", None)
-            schemas = schema.get("components", {}).get("schemas", {})
-            schemas.pop("HTTPValidationError", None)
-            schemas.pop("ValidationError", None)
-            web.openapi_schema = schema
-        return web.openapi_schema
+            schema = PublishedOpenAPI.model_validate(generate())
+            if schema.paths is not None:
+                for raw_path in schema.paths.values():
+                    for operation in (
+                        raw_path.get,
+                        raw_path.put,
+                        raw_path.post,
+                        raw_path.delete,
+                        raw_path.options,
+                        raw_path.head,
+                        raw_path.patch,
+                        raw_path.trace,
+                    ):
+                        if operation is not None and operation.responses is not None:
+                            operation.responses.pop("422", None)
+            if schema.components is not None and schema.components.schemas is not None:
+                schema.components.schemas.pop("HTTPValidationError", None)
+                schema.components.schemas.pop("ValidationError", None)
+            web.openapi_schema = cast(
+                FrameworkDocument,
+                jsonable_encoder(schema, by_alias=True, exclude_none=True),
+            )
+        return cast(FrameworkDocument, web.openapi_schema)
 
     web.openapi = document  # type: ignore[method-assign]
 

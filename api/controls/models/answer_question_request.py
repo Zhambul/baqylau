@@ -11,6 +11,7 @@ from pydantic import RootModel
 
 from api.common.models.fields import RequiredText
 from api.application.models.preferences.dialog_draft_request import AnswerSelectionBody
+from api.controls.models.answer_decision import AnswerDecisionBody
 from api.controls.models.control_request import ControlRequestBody
 from harness.models import AnswerDecision, AnswerQuestion
 from domain.ids import AttentionId, RequestId, SessionId
@@ -24,7 +25,7 @@ class AnswerDocument(RootModel[tuple[AnswerSelectionBody, ...]]):
 
 class AnswerQuestionRequest(ControlRequestBody):
     attention_id: RequiredText
-    decision: AnswerDecision
+    decision: AnswerDecisionBody
     answers: tuple[AnswerSelectionBody, ...] | None = None
     discussion: str | None = None
 
@@ -33,7 +34,7 @@ class AnswerQuestionRequest(ControlRequestBody):
             session_id,
             RequestId(self.request_id),
             attention_id=AttentionId(self.attention_id),
-            decision=self.decision,
+            decision=AnswerDecision(self.decision.value),
             answers=(
                 StructuredContent(AnswerDocument(self.answers).model_dump_json())
                 if self.answers is not None

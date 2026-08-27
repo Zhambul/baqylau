@@ -371,6 +371,7 @@ class UserRecord(BaseModel):
     sourceToolUseID: str | None = None
     toolDenialKind: str | None = None
     turnCompanion: bool | None = None
+    queueSkipAttachments: bool | None = None
     userFeedback: ForeignMetadata | str | None = None
     imagePasteIds: list[str | int] | None = None
 

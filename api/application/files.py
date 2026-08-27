@@ -10,15 +10,13 @@ import os
 import re
 import time
 import uuid
-from typing import cast
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException
-from pydantic import JsonValue
-
-from collections.abc import Mapping
 
 from api.config import Settings
 from api.dependencies import Policy
+from audit.models import AuditDocument, ShortErrorAudit
 from audit.recorder import AuditRecorder
 from app.providers import Recorder
 from api.application.models.files.clipboard_files_request import ClipboardFilesRequest
@@ -38,15 +36,57 @@ from core import clipboard
 from dashboard import dictate, paths
 
 
-def reject_input(audit_recorder: AuditRecorder, action: str, why: str, message: str,
-                 detail: Mapping[str, object], code: int = 400,
+class RejectedInputAudit(AuditDocument):
+    ok: Literal[False] = False
+    why: str
+    name: str | None = None
+    bytes: int | None = None
+
+
+class UploadFailureAudit(AuditDocument):
+    session_id: str
+    name: str
+    err: str | None = None
+    bytes: int | None = None
+    ok: Literal[False] | None = None
+
+
+class ClipboardAudit(AuditDocument):
+    session_id: str
+    names: tuple[str, ...]
+    matched: int
+    paths: tuple[str, ...]
+
+
+class DictationAudit(AuditDocument):
+    ok: bool
+    why: str | None = None
+    rate: int | str | None = None
+    working_directory: str | None = None
+    keyterms: int | None = None
+
+
+UPLOAD_RESPONSES = errors(
+    {
+        413: "Decoded bytes over UPLOAD_MAX — the base64 document passed, the file did not.",
+        500: "The bytes could not be written; no row was recorded.",
+    }
+)
+DICTATION_RESPONSES = errors(
+    {
+        501: "No Deepgram key is configured on this host — the page toasts this one.",
+        502: "Deepgram refused to mint the grant.",
+    }
+)
+
+
+def reject_input(audit_recorder: AuditRecorder, action: str, message: str,
+                 rejected_input_audit: RejectedInputAudit, code: int = 400,
                  log: str = "", path: str = "") -> HTTPException:
     """Audit and reject malformed application input: a `state_files` row first,
     then the HTTP error. Input validation, which survived the guard's removal
     because it is about the BODY, not about who sent it."""
-    audit_recorder.state_file(log, path, action,
-                     dict({"ok": False, "why": why},
-                          **{key: repr(value) for key, value in detail.items()}))
+    audit_recorder.state_file(log, path, action, rejected_input_audit)
     return HTTPException(code, message)
 
 
@@ -63,11 +103,7 @@ def _claimed_session_id(policy: Policy, value: str | None) -> str:
     return value if isinstance(value, str) and valid_session_id(policy, value) else ""
 
 
-@router.post("/api/application/uploads",
-             responses={**errors({
-                 413: "Decoded bytes over UPLOAD_MAX — the base64 document passed, the file did not.",
-                 500: "The bytes could not be written; no row was recorded.",
-             })})
+@router.post("/api/application/uploads", responses=UPLOAD_RESPONSES)
 def upload(
     upload_request: UploadRequest, uploads: Uploads, policy: Policy, audit: Recorder
 ) -> UploadResponse:
@@ -89,13 +125,20 @@ def upload(
     try:
         file_bytes = base64.b64decode(upload_request.data, validate=True)
     except (binascii.Error, ValueError):
-        raise reject_input(audit, "web-upload", "bad base64", "invalid base64",
-                           {"name": safe_name}) from None
+        raise reject_input(audit, "web-upload", "invalid base64",
+                           RejectedInputAudit(why="bad base64", name=safe_name)) from None
     if not file_bytes:
-        raise reject_input(audit, "web-upload", "empty file", "empty file", {"name": safe_name})
+        raise reject_input(
+            audit,
+            "web-upload",
+            "empty file",
+            RejectedInputAudit(why="empty file", name=safe_name),
+        )
     if len(file_bytes) > UPLOAD_MAX:
-        raise reject_input(audit, "web-upload", "too large", "file too large",
-                           {"bytes": len(file_bytes)}, code=413)
+        raise reject_input(audit, "web-upload", "file too large",
+                           RejectedInputAudit(
+                               why="too large", bytes=len(file_bytes)
+                           ), code=413)
     destination_directory = paths.session_uploads_directory(SessionId(session_id))
     path = os.path.join(destination_directory, "%s-%s" % (uuid.uuid4().hex[:8], safe_name))
     try:
@@ -104,10 +147,18 @@ def upload(
             destination_file.write(file_bytes)
     except OSError as error:
         audit.error("", "dashboard upload (write failed)",
-                {"session_id": session_id, "name": safe_name, "err": str(error)})
+                UploadFailureAudit(
+                    session_id=session_id,
+                    name=safe_name,
+                    err=str(error),
+                ))
         audit.state_file("", "", "web-upload",
-                     {"session_id": session_id, "name": safe_name,
-                      "bytes": len(file_bytes), "ok": False})
+                     UploadFailureAudit(
+                         session_id=session_id,
+                         name=safe_name,
+                         bytes=len(file_bytes),
+                         ok=False,
+                     ))
         # Raised, not returned: this route is declared to answer with an
         # UploadResponse, and every other rejection in it raises. _http_error
         # renders an HTTPException as the same {"error": ...} body at the same
@@ -150,16 +201,16 @@ def clipboard_files(
     # otherwise unanswerable), and a mismatch records what was asked for so a
     # phone-vs-host clipboard divergence is visible as such.
     audit.state_file("", "", "web-clipboard",
-                 {"session_id": session_id, "names": cast(list[JsonValue], names),
-                  "matched": len(matched), "paths": cast(list[JsonValue], matched)})
+                 ClipboardAudit(
+                     session_id=session_id,
+                     names=tuple(names),
+                     matched=len(matched),
+                     paths=tuple(matched),
+                 ))
     return ClipboardMatchesResponse(paths=tuple(matched))
 
 
-@router.post("/api/application/dictation-token",
-             responses={**errors({
-                 501: "No Deepgram key is configured on this host — the page toasts this one.",
-                 502: "Deepgram refused to mint the grant.",
-             })})
+@router.post("/api/application/dictation-token", responses=DICTATION_RESPONSES)
 def dictation_token(dictation_token_request: DictationTokenRequest, audit: Recorder) -> DictationGrantResponse:
     """Mint a short-lived Deepgram grant for the browser's DIRECT wss
     connection (this server never sees audio; its whole role is this trade:
@@ -170,10 +221,16 @@ def dictation_token(dictation_token_request: DictationTokenRequest, audit: Recor
     appears in a response or an audit row."""
     if not (dictate.SAMPLE_RATE_MIN <= dictation_token_request.sample_rate <= dictate.SAMPLE_RATE_MAX):
         audit.state_file("", "", "web-dictate",
-                     {"ok": False, "why": "bad-rate", "rate": repr(dictation_token_request.sample_rate)[:40]})
+                     DictationAudit(
+                         ok=False,
+                         why="bad-rate",
+                         rate=repr(dictation_token_request.sample_rate)[:40],
+                     ))
         raise HTTPException(400, "bad sample_rate")
     if not dictate.available():
-        audit.state_file("", "", "web-dictate", {"ok": False, "why": "no-key"})
+        audit.state_file(
+            "", "", "web-dictate", DictationAudit(ok=False, why="no-key")
+        )
         raise HTTPException(501, "no deepgram key configured")
     # An omitted directory requests global terms. A supplied directory is
     # exact application input and must still exist.
@@ -184,13 +241,21 @@ def dictation_token(dictation_token_request: DictationTokenRequest, audit: Recor
         grant = dictate.grant()
     except Exception as error:
         audit.error("", "dashboard dictate (grant failed)",
-                {"err": ("%s: %s" % (type(error).__name__, error))[:200]})
-        audit.state_file("", "", "web-dictate", {"ok": False, "why": "grant"})
+                ShortErrorAudit(
+                    err=("%s: %s" % (type(error).__name__, error))[:200]
+                ))
+        audit.state_file(
+            "", "", "web-dictate", DictationAudit(ok=False, why="grant")
+        )
         raise HTTPException(502, "token grant failed") from error
     terms = dictate.keyterms()
     audit.state_file("", "", "web-dictate",
-                 {"ok": True, "rate": dictation_token_request.sample_rate,
-                  "working_directory": dictation_token_request.working_directory, "keyterms": len(terms)})
-    return DictationGrantResponse(token=grant["access_token"],
-                                  expires_in=grant.get("expires_in"),
+                 DictationAudit(
+                     ok=True,
+                     rate=dictation_token_request.sample_rate,
+                     working_directory=dictation_token_request.working_directory,
+                     keyterms=len(terms),
+                 ))
+    return DictationGrantResponse(token=grant.access_token,
+                                  expires_in=grant.expires_in,
                                   ws_url=dictate.ws_url(dictation_token_request.sample_rate, terms))

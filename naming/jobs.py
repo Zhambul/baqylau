@@ -11,6 +11,7 @@ from domain.naming import NamingJob
 from domain.values import TextContent
 from harness.registry import HarnessRegistry
 from inference.errors import ModelUnavailableError
+from naming.audit import NamingAudit
 from naming.service import AutomaticSessionNamer, bounded_prompt
 from repository.contract.naming import NamingJobRepository
 from repository.contract.sessions import SessionRepository
@@ -78,7 +79,7 @@ class NamingJobWorker:
                 str(session.session_id),
                 "",
                 "automatic_title",
-                {"job_key": job.key, "title": title, "status": "completed"},
+                NamingAudit(job_key=job.key, title=title, status="completed"),
             )
         except ModelUnavailableError:
             if is_cancelled():
@@ -87,7 +88,7 @@ class NamingJobWorker:
                     str(session.session_id),
                     "",
                     "automatic_title",
-                    {"job_key": job.key, "status": "cancelled"},
+                    NamingAudit(job_key=job.key, status="cancelled"),
                 )
                 return True
             self.jobs.fail(job.key, "no small model is currently available")
@@ -95,23 +96,23 @@ class NamingJobWorker:
                 str(session.session_id),
                 "",
                 "automatic_title",
-                {"job_key": job.key, "status": "failed"},
+                NamingAudit(job_key=job.key, status="failed"),
             )
         except Exception as error:
             self.audit.error(
                 str(session.session_id),
                 "automatic naming (initial)",
-                {
-                    "job_key": job.key,
-                    "error_type": type(error).__name__,
-                    "error": str(error),
-                },
+                NamingAudit(
+                    job_key=job.key,
+                    error_type=type(error).__name__,
+                    error=str(error),
+                ),
             )
             self.jobs.fail(job.key, "no small model is currently available")
             self.audit.state_file(
                 str(session.session_id),
                 "",
                 "automatic_title",
-                {"job_key": job.key, "status": "failed"},
+                NamingAudit(job_key=job.key, status="failed"),
             )
         return True

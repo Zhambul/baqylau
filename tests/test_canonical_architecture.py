@@ -13,20 +13,18 @@ from domain.events import EVENT_TYPES
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# Every package this repository owns — the universe each rule below draws from.
-OUR_PACKAGES = (
-    "api",
-    "app",
-    "core",
-    "dashboard",
-    "audit",
-    "domain",
-    "engine",
-    "harness",
-    "notify",
-    "repository",
-    "sdk",
-    "terminal",
+# Every package this repository owns. Discovery makes a new production package
+# enter every tree-wide gate without an update to this test.
+OWNED_SCRIPT_DIRECTORIES = {"bin", "client"}
+OUR_PACKAGES = tuple(
+    sorted(
+        {
+            path.parent.name
+            for path in ROOT.glob("*/__init__.py")
+            if path.parent.name != "tests"
+        }
+        | OWNED_SCRIPT_DIRECTORIES
+    )
 )
 
 
@@ -720,8 +718,13 @@ def _calls_json(path: Path) -> bool:
     return False
 
 
-def _harness_adapter_python_files():
-    return sorted((ROOT / "harness" / "impl").rglob("*.py"))
+def _owned_python_files():
+    return sorted(
+        path
+        for package in OUR_PACKAGES
+        for path in (ROOT / package).rglob("*.py")
+        if not any(part in {"__pycache__", "node_modules"} for part in path.parts)
+    )
 
 
 def test_harness_adapters_never_use_the_raw_json_codec():
@@ -733,7 +736,7 @@ def test_harness_adapters_never_use_the_raw_json_codec():
     ``model_dump_json`` serializes a declared model directly.
     """
     violations = []
-    for path in _harness_adapter_python_files():
+    for path in sorted((ROOT / "harness" / "impl").rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -745,8 +748,8 @@ def test_harness_adapters_never_use_the_raw_json_codec():
     assert violations == [], "raw JSON codec use in harness adapters:\n  " + "\n  ".join(violations)
 
 
-def test_harness_adapters_never_use_raw_dictionaries_or_jsonvalue():
-    """Adapter documents and intermediate records must have declared shapes.
+def test_owned_packages_never_use_raw_dictionaries_or_jsonvalue():
+    """Documents and intermediate records must have declared shapes.
 
     Dictionaries are allowed only for the exact typed registry/index symbols
     below, where keyed dynamic lookup is the data structure's actual behavior.
@@ -754,6 +757,83 @@ def test_harness_adapters_never_use_raw_dictionaries_or_jsonvalue():
     records in the same modules still have to be dataclasses or Pydantic models.
     """
     typed_registry_allowlist = {
+        "api/app.py": {"FrameworkDocument"},
+        "api/config.py": {"SECURITY_HEADERS"},
+        "api/controls/routes.py": {
+            "CONTROL_RESPONSES",
+            "CONTROL_STATUS",
+            "LAUNCH_RESPONSES",
+            "LAUNCH_STATUS",
+        },
+        "api/middleware.py": {"headers"},
+        "api/runtime.py": {"base_environment", "environment"},
+        "api/sessiondata/routes.py": {"known"},
+        "api/sse.py": {"NO_STORE"},
+        "api/terminal/panes.py": {"PANE_RESPONSES"},
+        "api/application/files.py": {"DICTATION_RESPONSES", "UPLOAD_RESPONSES"},
+        "api/application/static.py": {"_BUILD_TYPES", "headers", "router"},
+        "api/hooks/routes.py": {"HOOK_RESPONSES"},
+        "api/telemetry/models/browser_events_request.py": {"connection", "details"},
+        "api/application/models/preferences/global_application_response.py": {
+            "hidden_directories"
+        },
+        "api/application/models/preferences/hidden_directories_response.py": {"hidden"},
+        "api/responses.py": {
+            "Documented",
+            "EVERY_ROUTE",
+            "documented",
+            "statuses",
+        },
+        "app/injection.py": {"Instances", "dependencies", "instances"},
+        "app/providers.py": {"display_by_harness", "translators"},
+        "app/services/insights.py": {
+            "daily_counts",
+            "grouped",
+            "hourly_counts",
+            "project_counts",
+        },
+        "audit/failures.py": {"_states"},
+        "audit/record.py": {"_recorders"},
+        "client/_http.py": {"PANE_COMMAND_PATHS"},
+        "client/_handoff.py": {"published_targets"},
+        "client/_daemon.py": {"request_headers"},
+        "client/claude_hook.py": {"reply"},
+        "client/codex_hook.py": {"reply"},
+        "client/claude_otel.py": {"TELEMETRY_HEADERS"},
+        "client/claude_statusline.py": {"STATUSLINE_HEADERS"},
+        "client/_model.py": {"ATTENTION_TWINS", "_entries", "_shells", "actors"},
+        "client/_render.py": {
+            "FILE_VERBS",
+            "PLAN_DECISIONS",
+            "TASK_MARKERS",
+            "targets",
+            "tokens",
+            "tools",
+            "totals",
+        },
+        "client/terminal_pane.py": {"EMPTY_TARGETS", "_published"},
+        "dashboard/cli.py": {"LAUNCH_VARIABLES", "variables"},
+        "dashboard/config.py": {"STATIC"},
+        "dashboard/dictate.py": {"request_headers"},
+        "dashboard/services/preferences.py": {"hidden_directories"},
+        "dashboard/services/workspace.py": {"pending_questions"},
+        "domain/entries.py": {"BODY_TYPES", "ENTRY_TYPES", "open_attentions"},
+        "domain/events.py": {"EVENT_TYPES", "PAYLOAD_TYPES"},
+        "engine/interpret/loop.py": {"identities"},
+        "engine/react/loop.py": {"EMPTY_BODY_SUSPECT", "actors", "known", "states"},
+        "engine/sessiondata/actors.py": {
+            "FILE_TOOLS",
+            "counts",
+            "finished_actors",
+            "idle_actors",
+        },
+        "engine/sessiondata/contract.py": {"actors", "merged"},
+        "engine/sessiondata/session.py": {"known"},
+        "engine/sessiondata/naming.py": {"EMPTY_DISPLAY_BY_HARNESS"},
+        "harness/models/interrupts.py": {"_marked_at"},
+        "harness/models/selections.py": {"_efforts", "_models"},
+        "harness/registry.py": {"_plugins"},
+        "harness/services/control_effects.py": {"assignments", "shells", "turns"},
         "harness/impl/claude_code/catalog.py": {"COMMAND_PROMPT_FLOORS"},
         "harness/impl/claude_code/canonical/messages.py": {
             "BACKGROUND_OUTCOMES",
@@ -777,21 +857,21 @@ def test_harness_adapters_never_use_raw_dictionaries_or_jsonvalue():
         "harness/impl/claude_code/model.py": {"ALIAS_DISPLAY"},
         "harness/impl/codex/canonical/events.py": {"EVENTS"},
         "harness/impl/codex/canonical/items.py": {"RESPONSES"},
-            "harness/impl/codex/canonical/records.py": {
-                "ITEM_COMPLETED_ITEMS",
-                "COLLABORATION_ARGUMENTS",
-            },
-            "harness/impl/codex/canonical/rollout.py": {"_TOP"},
-            "harness/impl/codex/canonical/sources.py": {
-                "_directories",
-                "_rollouts",
-                "_child_parent_by_path",
-                "_sessions",
-                "_child_sources",
-                "existing",
-                "grouped",
-            },
-            "harness/impl/codex/canonical/translator.py": {
+        "harness/impl/codex/canonical/records.py": {
+            "ITEM_COMPLETED_ITEMS",
+            "COLLABORATION_ARGUMENTS",
+        },
+        "harness/impl/codex/canonical/rollout.py": {"_TOP"},
+        "harness/impl/codex/canonical/sources.py": {
+            "_directories",
+            "_rollouts",
+            "_child_parent_by_path",
+            "_sessions",
+            "_child_sources",
+            "existing",
+            "grouped",
+        },
+        "harness/impl/codex/canonical/translator.py": {
             "CODEX_TOOLS",
             "GOAL_STATES",
             "ACTIVITY_CALLS",
@@ -803,13 +883,13 @@ def test_harness_adapters_never_use_raw_dictionaries_or_jsonvalue():
             "_plan_tasks",
             "current",
             "_goals",
-                "_working_directories",
-                "_active_turns",
-                "_compactions",
-                "_mcp_tool_outcomes",
-                "_sources_by_session",
-                "result_calls",
-            },
+            "_working_directories",
+            "_active_turns",
+            "_compactions",
+            "_mcp_tool_outcomes",
+            "_sources_by_session",
+            "result_calls",
+        },
         "harness/impl/codex/controls/controller.py": {"HANDLERS"},
         "harness/impl/codex/continuity.py": {
             "_pending_by_window",
@@ -817,12 +897,65 @@ def test_harness_adapters_never_use_raw_dictionaries_or_jsonvalue():
         },
         "harness/impl/codex/controls/modeldialog.py": {"EFFORT_LABEL"},
         "harness/impl/codex/usage_rows.py": {"WINDOW_LABELS"},
+        "inference/default.py": {"EXECUTABLE_VARIABLES", "retries"},
+        "notify/channels/webpush.py": {"request_headers"},
+        "notify/notifier.py": {
+            "NOTIFICATION_KINDS",
+            "current_states",
+            "delivered",
+            "items_by_session",
+            "pending",
+            "previous_states",
+        },
+        "notify/presence.py": {"subs", "viewing"},
+        "repository/impl/sqlite/audit.py": {"EMPTY_ERROR_COUNTS", "counts"},
+        "repository/impl/sqlite/connection.py": {"EMPTY_MIGRATIONS"},
+        "repository/impl/sqlite/raw_event_audits.py": {"by_raw_event"},
+        "repository/impl/sqlite/raw_events.py": {"EMPTY_POSITIONS", "positions"},
+        "repository/impl/sqlite/schema.py": {"MAIN_MIGRATIONS"},
+        "repository/impl/sqlite/session_data.py": {
+            "actors_by_session",
+            "leads",
+            "newest",
+        },
+        "repository/impl/sqlite/usage.py": {"windows"},
+        "repository/mapper/workspace.py": {"by_prompt"},
+        "sdk/client.py": {"headers", "parameters", "query"},
+        "sdk/state.py": {"folded", "open_by_actor"},
+        "sdk/transport.py": {"JSON_HEADERS"},
+        "terminal/adapter.py": {
+            "activity_tags",
+            "cleared_tags",
+            "on_screen",
+            "outcomes",
+            "scoreboard_tags",
+        },
+        "terminal/impl/__init__.py": {"DETECTORS"},
+        "terminal/impl/kitty/plugin.py": {"EMPTY_TAGS", "SPLIT_LOCATIONS", "colors"},
+        "terminal/impl/kitty/remote.py": {"colors", "user_vars"},
+        "terminal/impl/pty/keys.py": {"NAMED_KEYS"},
+        "terminal/impl/pty/plugin.py": {
+            "child_environment",
+            "environment",
+            "launch_environment",
+            "windows",
+        },
+        "terminal/impl/pty/window.py": {
+            "descendant_identities",
+            "identities",
+            "observed",
+            "tags",
+        },
+        "terminal/tabs.py": {"_painted"},
+        "terminal/theme.py": {"TAB_APPEARANCES"},
     }
 
     def assigned_name(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> str | None:
         current = node
         while current in parents:
             current = parents[current]
+            if isinstance(current, ast.arg):
+                return current.arg
             if isinstance(current, ast.AnnAssign):
                 if isinstance(current.target, ast.Name):
                     return current.target.id
@@ -830,13 +963,17 @@ def test_harness_adapters_never_use_raw_dictionaries_or_jsonvalue():
                     return current.target.attr
             if isinstance(current, ast.Assign) and len(current.targets) == 1:
                 target = current.targets[0]
-                return target.id if isinstance(target, ast.Name) else None
+                if isinstance(target, ast.Name):
+                    return target.id
+                if isinstance(target, ast.Attribute):
+                    return target.attr
+                return None
             if isinstance(current, (ast.FunctionDef, ast.ClassDef, ast.Module)):
                 return None
         return None
 
     violations = []
-    for path in _harness_adapter_python_files():
+    for path in _owned_python_files():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         parents: dict[ast.AST, ast.AST] = {
             child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)
@@ -873,7 +1010,7 @@ def test_harness_adapters_never_use_raw_dictionaries_or_jsonvalue():
                     violations.append(f"{where} imports JsonValue")
                 if "Dict" in imported:
                     violations.append(f"{where} imports the raw dictionary type")
-    assert violations == [], "raw dictionaries in harness adapters:\n  " + "\n  ".join(violations)
+    assert violations == [], "raw dictionaries in owned packages:\n  " + "\n  ".join(violations)
 
 
 def test_no_canonical_payload_carries_a_presentation_field():
@@ -1085,6 +1222,9 @@ FILE_ACCESS_ALLOWLIST = {
     "dashboard/cli.py": "--log sends the daemon's own output to a file",
     "api/application/static.py": "serves the SPA's own files",
     "dashboard/frontend_build.py": "validates Vite's generated manifest and source stamp",
+    "bin/retarget-python.py": "rewrites hook shebangs and the user hook configuration",
+    "client/_handoff.py": "shares pane state with short-lived terminal click handlers",
+    "inference/default.py": "writes the output schema required by the Codex CLI",
 }
 
 

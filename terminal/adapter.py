@@ -222,6 +222,7 @@ class TerminalAdapter:
             self._plugin.metadata.tag_window(WindowTagRequest(anchor_window_id, {SESSION_WINDOW_TAG: session_id}))
         ]
         if self._tagged(ACTIVITY_PANE_TAG, session_pane_request.session_id) is None:
+            activity_tags = {ACTIVITY_PANE_TAG: session_id}
             outcomes.append(
                 self._plugin.panes.open_pane(
                     PaneOpenRequest(
@@ -232,11 +233,12 @@ class TerminalAdapter:
                         size_percent=session_pane_request.activity_width_percent,
                         anchor=PaneAnchor(window_id=anchor_window_id),
                         same_tab_as=anchor_window_id,
-                        tags={ACTIVITY_PANE_TAG: session_id},
+                        tags=activity_tags,
                     )
                 )
             )
         if self._tagged(SCOREBOARD_PANE_TAG, session_pane_request.session_id) is None:
+            scoreboard_tags = {SCOREBOARD_PANE_TAG: session_id}
             outcomes.append(
                 self._plugin.panes.open_pane(
                     PaneOpenRequest(
@@ -249,7 +251,7 @@ class TerminalAdapter:
                         # own window — it shares the mirror's column.
                         anchor=PaneAnchor(tag=(ACTIVITY_PANE_TAG, session_id)),
                         same_tab_as=anchor_window_id,
-                        tags={SCOREBOARD_PANE_TAG: session_id},
+                        tags=scoreboard_tags,
                     )
                 )
             )
@@ -400,9 +402,12 @@ class TerminalAdapter:
         session_window_id = self.window_for_session(session_id)
         if clear_tab and session_window_id is not None:
             native_session_window_id = NativeWindowId(str(session_window_id))
+            cleared_tags = {SESSION_WINDOW_TAG: ""}
             outcomes.append(self._plugin.tabs.clear_tab_color(TabColorClearRequest(native_session_window_id)))
             outcomes.append(
-                self._plugin.metadata.tag_window(WindowTagRequest(native_session_window_id, {SESSION_WINDOW_TAG: ""}))
+                self._plugin.metadata.tag_window(
+                    WindowTagRequest(native_session_window_id, cleared_tags)
+                )
             )
         return self._combined(outcomes, "terminal pane close failed")
 

@@ -14,6 +14,7 @@ from api import dependencies
 from api.app import build_web_application
 from app import providers
 from app.injection import Instances, resolve
+from audit.models import PortAudit
 
 def build_server(web_application: FastAPI, graceful_shutdown_seconds: int = 3) -> uvicorn.Server:
     """One uvicorn server for an already-bound socket (passed to run()).
@@ -68,6 +69,6 @@ def run_server(bound_socket: socket.socket, instances: Instances) -> int:
         audit.stream_end(stream_id, "stopped")
         return 0
     except Exception:
-        audit.error("", "dashboard serve", {"port": port})
+        audit.error("", "dashboard serve", PortAudit(port=port))
         audit.stream_end(stream_id, "crash")
         raise

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import threading
+from collections.abc import Mapping
 from itertools import count
 from uuid import uuid4
 
@@ -102,7 +103,7 @@ class PtyWindows:
     scrubbing the session identity it was itself started with, for one.
     """
 
-    def __init__(self, environment: dict[str, str] | None = None) -> None:
+    def __init__(self, environment: Mapping[str, str] | None = None) -> None:
         self.environment = dict(os.environ if environment is None else environment)
         self.windows: dict[WindowId, PtyWindow] = {}
         self.lock = threading.RLock()
@@ -122,7 +123,10 @@ class PtyWindows:
         with self.lock:
             window_id = WindowId(f"{self._namespace}:{next(self._ids)}")
             child_environment = dict(self.environment)
-            child_environment.update({str(name): str(value) for name, value in environment})
+            launch_environment = {
+                str(name): str(value) for name, value in environment
+            }
+            child_environment.update(launch_environment)
         # Last, so the window's own identity cannot be overridden by a caller's
         # environment: this is the one value the terminal knows and the program
         # cannot be told by anyone else.
@@ -171,7 +175,9 @@ class PtyTabs(TerminalTabs):
         return TabCloseResponse(closed, None if closed else NO_WINDOW)
 
     def rename_tab(self, tab_rename_request: TabRenameRequest) -> TabRenameResponse:
-        return TabRenameResponse(False, NO_CHROME)
+        # The canonical title is already stored. A headless PTY has no tab title
+        # to update, so this operation is a completed no-op.
+        return TabRenameResponse(True)
 
     def set_tab_color(self, tab_color_set_request: TabColorSetRequest) -> TabColorSetResponse:
         return TabColorSetResponse(False, NO_CHROME)
@@ -228,7 +234,7 @@ class PtyMetadata(TerminalMetadata):
                 WindowInfo(
                     window_id=window.window_id,
                     tab_id=TabId(str(window.window_id)),
-                    tags=dict(window.tags),
+                    tags=window.tags,
                     columns=window.screen.columns,
                     lines=window.screen.lines,
                     is_first_in_tab=True,
@@ -251,9 +257,7 @@ class PtyMetadata(TerminalMetadata):
                 return WindowTagResponse(False, NO_WINDOW)
             # Stored IN the window, so a tag has exactly the window's lifetime —
             # the property the contract asks of this operation.
-            window.tags.update(
-                {str(name): str(value) for name, value in window_tag_request.tags.items()}
-            )
+            window.tags.update(window_tag_request.tags)
         return WindowTagResponse(True)
 
     def current_window_id(self) -> WindowId | None:

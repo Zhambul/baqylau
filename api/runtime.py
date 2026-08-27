@@ -8,6 +8,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from audit.models import PortAudit
+
 
 @dataclass(frozen=True)
 class ApplicationConfig:
@@ -42,10 +44,10 @@ class ApplicationConfig:
             terminal=environment.get("BAQYLAU_TERMINAL"),
             notify_telegram=environment.get("BAQYLAU_DASHBOARD_NOTIFY_TELEGRAM", "1") != "0",
             notify_webpush=environment.get("BAQYLAU_DASHBOARD_NOTIFY_WEBPUSH", "1") != "0",
-            base_environment=dict(environment),
+            base_environment=environment,
         )
 
-    def process_environment(self) -> dict[str, str]:
+    def process_environment(self) -> Mapping[str, str]:
         """Build the environment used by the application and its children."""
         environment = dict(self.base_environment)
         for name in self.environment_removals:
@@ -110,7 +112,7 @@ class DashboardApplication:
             audit.error(
                 "",
                 "dashboard run (port busy)",
-                {"port": configured_endpoint.port},
+                PortAudit(port=configured_endpoint.port),
             )
             return ApplicationExitReport(endpoint=configured_endpoint, exit_code=1)
         endpoint = ApplicationEndpoint(

@@ -33,6 +33,7 @@
 import os
 
 from audit import record as A
+from audit.models import ShortErrorAudit
 from urllib.parse import unquote, urlparse
 
 ENV_FILES = "BAQYLAU_DASHBOARD_CLIPBOARD_FILES"
@@ -84,8 +85,11 @@ def files() -> list[str]:
         if paths is None:
             paths = _from_pasteboard()
     except Exception as e:
-        A.error("", "clipboard (read failed)",
-                {"err": ("%s: %s" % (type(e).__name__, e))[:200]})
+        A.error(
+            "",
+            "clipboard (read failed)",
+            ShortErrorAudit(err=("%s: %s" % (type(e).__name__, e))[:200]),
+        )
         return []
     return [p for p in paths if p and os.path.isabs(p)
             and os.path.exists(p)][:FILES_MAX]

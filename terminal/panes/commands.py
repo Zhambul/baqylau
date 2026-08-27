@@ -13,6 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
+from audit.models import AuditDocument
 from audit.recorder import AuditRecorder
 from domain.ids import SessionId, WindowId
 from terminal.services.panes import PaneWidthService
@@ -32,6 +33,14 @@ class PaneCommandOutcome:
     handled: bool
     succeeded: bool
     reason: str | None = None
+
+
+class PaneCommandAudit(AuditDocument):
+    command: PaneCommand
+    window_id: WindowId
+    session_id: SessionId
+    ok: bool
+    why: str
 
 
 class PaneCommandService:
@@ -115,13 +124,13 @@ class PaneCommandService:
             "",
             working_directory,
             "pane-command",
-            {
-                "command": pane_command,
-                "window_id": window_id or "",
-                "session_id": str(session_id or ""),
-                "ok": outcome.succeeded,
-                "why": outcome.reason or "",
-            },
+            PaneCommandAudit(
+                command=pane_command,
+                window_id=window_id or WindowId(""),
+                session_id=session_id or SessionId(""),
+                ok=outcome.succeeded,
+                why=outcome.reason or "",
+            ),
         )
         return outcome
 

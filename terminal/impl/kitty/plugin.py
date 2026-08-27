@@ -5,6 +5,8 @@
 # match.py: the `ls` tree's JSON shape, the launch flags, the layout kitty
 # needs before a biased split works, the raw-socket fast paths.
 
+from collections.abc import Mapping
+
 from terminal.models.values import TabId, WindowId
 from terminal.contract import (
     TerminalInput,
@@ -58,6 +60,7 @@ from terminal.models.viewport import ScreenReadRequest, ScreenReadResponse
 
 # The split line orientation, in kitty's launch vocabulary.
 SPLIT_LOCATIONS = {"vertical": "vsplit", "horizontal": "hsplit"}
+EMPTY_TAGS: Mapping[str, str] = {}
 
 
 def _hex(rgb: RGB) -> str:
@@ -282,7 +285,7 @@ class KittyMetadata(TerminalMetadata):
                         WindowInfo(
                             window_id=WindowId(str(window.id)),
                             tab_id=TabId(str(tab.id)),
-                            tags=dict(window.user_vars or {}),
+                            tags=window.user_vars or EMPTY_TAGS,
                             columns=int(window.columns or 0),
                             lines=int(window.lines or 0),
                             is_first_in_tab=position == 0,

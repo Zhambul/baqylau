@@ -137,7 +137,7 @@ def global_application(application_preferences: ApplicationPreferences) -> Globa
                 )
                 for draft in application_preferences.new_session_drafts
             ),
-            hidden_directories=dict(application_preferences.hidden_directories),
+            hidden_directories=application_preferences.hidden_directories,
             limits=DashboardLimitsResponse(
                 upload_bytes=application_preferences.limits.upload_bytes,
                 rename_characters=application_preferences.limits.rename_characters,

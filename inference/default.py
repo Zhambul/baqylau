@@ -10,9 +10,10 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from decimal import Decimal
-from typing import Protocol
+from typing import Literal, Protocol, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from audit.models import AuditDocument
 from audit.recorder import AuditRecorder
 from domain.ids import HarnessName
 from harness.models import UsageRow
@@ -79,6 +80,44 @@ class _Candidate:
     harness: HarnessName
     executable: str
     command: Callable[[str, str], tuple[str, ...]]
+
+
+class _ErrorAudit(AuditDocument):
+    error_type: str
+    error: str
+
+
+class _ProviderAttemptAudit(_ErrorAudit):
+    provider: HarnessName
+    attempt: int
+
+
+class _ExecutableUnavailable(AuditDocument):
+    provider: HarnessName
+    status: Literal["executable unavailable"]
+    configuration: str
+
+
+class _CapacityUnavailable(AuditDocument):
+    provider: HarnessName
+    status: Literal["capacity unavailable"]
+    remaining_capacity_percent: Decimal
+
+
+class _AvailableProvider(AuditDocument):
+    provider: HarnessName
+    status: Literal["available"]
+    remaining_capacity_percent: Decimal
+
+
+_ProviderState: TypeAlias = (
+    _ExecutableUnavailable | _CapacityUnavailable | _AvailableProvider
+)
+
+
+class _ModelUnavailableAudit(_ErrorAudit):
+    providers: tuple[_ProviderState, ...]
+    attempt_failures: tuple[str, ...]
 
 
 def _codex_command(prompt: str, schema_path: str) -> tuple[str, ...]:
@@ -207,7 +246,7 @@ class _SmallModel:
                 _error_context(error),
             )
             raise
-        failures: list[JsonValue] = []
+        failures: list[str] = []
         # A CLI or remote request can fail transiently even though account
         # capacity remains. Try every provider twice in fresh ephemeral
         # processes. A malformed title gets an immediate retry from the same
@@ -231,68 +270,72 @@ class _SmallModel:
                     else:
                         attempts.append(candidate)
             except Exception as unexpected_error:
+                error_audit = _error_context(unexpected_error)
                 self.audit.error(
                     model_prompt_request.session_id,
                     "small model (provider attempt)",
-                    {
-                        **_error_context(unexpected_error),
-                        "provider": str(candidate.harness),
-                        "attempt": attempt,
-                    },
+                    _ProviderAttemptAudit(
+                        error_type=error_audit.error_type,
+                        error=error_audit.error,
+                        provider=candidate.harness,
+                        attempt=attempt,
+                    ),
                 )
                 raise
         reason = (
-            "; ".join(str(failure) for failure in failures)
+            "; ".join(failures)
             if failures
             else "no provider is available"
         )
         model_unavailable_error = ModelUnavailableError(reason)
+        error_audit = _error_context(model_unavailable_error)
         self.audit.error(
             model_prompt_request.session_id,
             "small model (unavailable)",
-            {
-                **_error_context(model_unavailable_error),
-                "providers": provider_states,
-                "attempt_failures": failures,
-            },
+            _ModelUnavailableAudit(
+                error_type=error_audit.error_type,
+                error=error_audit.error,
+                providers=provider_states,
+                attempt_failures=tuple(failures),
+            ),
         )
         raise model_unavailable_error
 
-    def _candidates(self) -> tuple[tuple[_Candidate, ...], list[JsonValue]]:
+    def _candidates(self) -> tuple[tuple[_Candidate, ...], tuple[_ProviderState, ...]]:
         rows = self.usage.usage_rows()
         ranked: list[tuple[Decimal, int, _Candidate]] = []
-        states: list[JsonValue] = []
+        states: list[_ProviderState] = []
         for order, candidate in enumerate(CANDIDATES):
             executable = self.executable_resolver(candidate.executable)
             if executable is None:
                 states.append(
-                    {
-                        "provider": str(candidate.harness),
-                        "status": "executable unavailable",
-                        "configuration": EXECUTABLE_VARIABLES[candidate.executable],
-                    }
+                    _ExecutableUnavailable(
+                        provider=candidate.harness,
+                        status="executable unavailable",
+                        configuration=EXECUTABLE_VARIABLES[candidate.executable],
+                    )
                 )
                 continue
             capacity = _remaining_capacity(candidate.harness, rows)
             if capacity <= 0:
                 states.append(
-                    {
-                        "provider": str(candidate.harness),
-                        "status": "capacity unavailable",
-                        "remaining_capacity_percent": str(capacity),
-                    }
+                    _CapacityUnavailable(
+                        provider=candidate.harness,
+                        status="capacity unavailable",
+                        remaining_capacity_percent=capacity,
+                    )
                 )
                 continue
             states.append(
-                {
-                    "provider": str(candidate.harness),
-                    "status": "available",
-                    "remaining_capacity_percent": str(capacity),
-                }
+                _AvailableProvider(
+                    provider=candidate.harness,
+                    status="available",
+                    remaining_capacity_percent=capacity,
+                )
             )
             ranked.append((capacity, -order, replace(candidate, executable=executable)))
         ranked.sort(reverse=True, key=lambda item: (item[0], item[1]))
-        return tuple(candidate for _capacity, _order, candidate in ranked), states
+        return tuple(candidate for _capacity, _order, candidate in ranked), tuple(states)
 
     def _send(self, candidate: _Candidate, request: ModelPromptRequest) -> ModelPromptResponse:
         with tempfile.TemporaryDirectory(prefix="baqylau-model-") as directory:
@@ -356,11 +399,8 @@ def _model_environment(executable: str) -> tuple[tuple[str, str], ...]:
     return ((INTERNAL_MODEL_VARIABLE, "1"), ("PATH", path))
 
 
-def _error_context(error: Exception) -> dict[str, JsonValue]:
-    return {
-        "error_type": type(error).__name__,
-        "error": str(error),
-    }
+def _error_context(error: Exception) -> _ErrorAudit:
+    return _ErrorAudit(error_type=type(error).__name__, error=str(error))
 
 
 def _remaining_capacity(harness: HarnessName, rows: tuple[UsageRow, ...]) -> Decimal:

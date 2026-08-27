@@ -709,7 +709,7 @@ PaneCommands = Annotated[PaneCommandService, Depends(pane_commands)]
 
 @singleton
 def core_translators() -> Mapping[str, CoreTranslator]:
-    return {
+    translators = {
         AUTOMATIC_TITLE_SOURCE_TYPE: AutomaticTitleTranslator(),
         CONTROL_SOURCE_TYPE: ControlTranslator(),
         OUTPUT_LOCATION_SOURCE_TYPE: ShellOutputTranslator(),
@@ -718,6 +718,7 @@ def core_translators() -> Mapping[str, CoreTranslator]:
         RESUME_LIVENESS_SOURCE_TYPE: ResumeLivenessTranslator(),
         INTERRUPT_SOURCE_TYPE: InterruptTranslator(),
     }
+    return translators
 
 
 CoreTranslators = Annotated[Mapping[str, CoreTranslator], Depends(core_translators)]
@@ -776,13 +777,12 @@ Reactions = Annotated[tuple[CanonicalEventReaction, ...], Depends(reactions)]
 def model_naming(harness_registry: Registry) -> ModelNaming:
     """One namer per harness, for the writers: the reason a model shows the
     SAME name in the picker, on the actor row and in the feed."""
-    return ModelNaming(
-        {
-            plugin.info.name: plugin.model_display
-            for plugin in harness_registry.plugins()
-            if plugin.model_display is not None
-        }
-    )
+    display_by_harness = {
+        plugin.info.name: plugin.model_display
+        for plugin in harness_registry.plugins()
+        if plugin.model_display is not None
+    }
+    return ModelNaming(display_by_harness)
 
 
 Naming = Annotated[ModelNaming, Depends(model_naming)]

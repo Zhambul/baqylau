@@ -4,6 +4,8 @@
 # No session rows: those are facts the harnesses reported, they live in the read
 # model, and they arrive on /sessionData. This is the other half of the page —
 # the half nothing but the browser ever wrote.
+from collections.abc import Mapping
+
 from pydantic import BaseModel
 
 from domain.ids import SessionId
@@ -46,7 +48,7 @@ class DashboardLimitsResponse(BaseModel):
 class GlobalPreferencesResponse(BaseModel):
     new_session: NewSessionPreferencesResponse
     new_session_drafts: tuple[NewSessionDraftResponse, ...]
-    hidden_directories: dict[str, float]
+    hidden_directories: Mapping[str, float]
     limits: DashboardLimitsResponse
 
 

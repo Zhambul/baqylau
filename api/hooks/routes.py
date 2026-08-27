@@ -10,6 +10,7 @@ from starlette.requests import ClientDisconnect
 from api.common.models.fields import HarnessNamePath
 from api.responses import errors
 from app.providers import HookGateway, Recorder
+from audit.models import HarnessErrorAudit
 from domain.ids import AccountId, HarnessName, WindowId
 from harness.hooks.gateway import UnknownHookHarness
 from harness.models import HarnessHookRequest
@@ -24,16 +25,17 @@ from harness.hooks.headers import (
 from repository.errors import RepositoryError
 
 router = APIRouter()
+HOOK_RESPONSES = errors(
+    {
+        404: "No such harness, or one that accepts no hooks.",
+        409: "That raw event id was reused for DIFFERENT bytes.",
+    }
+)
 
 
 @router.post(
     "/api/harnesses/{harness}/hooks",
-    responses={
-        **errors({
-            404: "No such harness, or one that accepts no hooks.",
-            409: "That raw event id was reused for DIFFERENT bytes.",
-        }),
-    },
+    responses=HOOK_RESPONSES,
 )
 async def record_hook_delivery(
     harness: HarnessNamePath, request: Request, gateway: HookGateway, audit: Recorder
@@ -84,13 +86,21 @@ async def record_hook_delivery(
         # one handler in api/app.py, from the one ErrorResponse model.
         raise HTTPException(404, str(error)) from error
     except (KeyError, TypeError, ValueError) as error:
-        audit.error("", "hook delivery", {
-            "harness": harness,
-            "error": repr(error),
-            "payload_bytes": len(payload),
-        })
+        audit.error(
+            "",
+            "hook delivery",
+            HarnessErrorAudit(
+                harness=harness_name,
+                error=repr(error),
+                payload_bytes=len(payload),
+            ),
+        )
         raise HTTPException(400, str(error)) from error
     except RepositoryError as error:
-        audit.error("", "hook delivery", {"harness": harness, "error": repr(error)})
+        audit.error(
+            "",
+            "hook delivery",
+            HarnessErrorAudit(harness=harness_name, error=repr(error)),
+        )
         raise HTTPException(409, str(error)) from error
     return Response(content=output, media_type="application/json")

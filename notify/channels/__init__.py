@@ -26,6 +26,7 @@
 from typing import TypeAlias
 
 from audit import record as A
+from notify.audit import NotificationSessionAudit
 from notify.channels import telegram, webpush
 from notify.channels.alert import FAILED, GONE, NOTHING, OK, PENDING, alert_text, push_tag
 from notify.channels.telegram import TelegramHandle
@@ -78,5 +79,9 @@ def retract(
             push_subscription_repository=push_subscription_repository,
         )
     except Exception:
-        A.error("", "notify retract", {"session_id": handle.session_id})
+        A.error(
+            "",
+            "notify retract",
+            NotificationSessionAudit(session_id=handle.session_id),
+        )
         return FAILED

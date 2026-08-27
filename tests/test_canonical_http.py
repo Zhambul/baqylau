@@ -652,25 +652,25 @@ def test_an_unconfirmed_control_is_audited_with_its_reason(monkeypatch):
     # which is what made this gesture read as "no audit at all"
     assert log == str(SESSION_ID)
     assert action == "control"
-    assert content["control"] == "select_model"
-    assert content["status"] == "indeterminate"
-    assert content["reason"] == "row: no 'all models'"
-    assert isinstance(content["ms"], int)
+    assert content.control == "select_model"
+    assert content.status == "indeterminate"
+    assert content.reason == "row: no 'all models'"
+    assert isinstance(content.ms, int)
 
 
 def test_an_acknowledged_control_is_audited_too(monkeypatch):
     from harness.models import ControlResult
 
     rows, _ = _audited_control(monkeypatch, ControlResult("request-one", "acknowledged"))
-    assert rows[0][2]["status"] == "acknowledged"
-    assert rows[0][2]["reason"] == ""
+    assert rows[0][2].status == "acknowledged"
+    assert rows[0][2].reason == ""
 
 
 def test_a_raised_control_is_audited_before_it_propagates(monkeypatch):
     rows, raised = _audited_control(monkeypatch, RuntimeError("driver exploded"))
 
     assert isinstance(raised, RuntimeError)
-    assert rows[0][2]["status"] == "raised"
+    assert rows[0][2].status == "raised"
 
 
 def test_a_broken_audit_never_takes_down_the_gesture(monkeypatch):
@@ -797,8 +797,8 @@ def test_every_control_method_writes_exactly_one_audit_row_through_one_core(monk
         assert len(rows) == before + 1
         action, content = rows[-1]
         assert action == "control"
-        assert content["control"] == request.control_name
-        assert content["status"] == "acknowledged"
+        assert content.control == request.control_name
+        assert content.status == "acknowledged"
 
 
 # --- terminal pane clients ------------------------------------------------------

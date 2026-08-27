@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import dataclasses
 import os
 import threading
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from audit.recorder import AuditRecorder
@@ -13,7 +13,14 @@ from core.repository import RepositoryQueries
 from dashboard import config
 from dashboard.services.notices import DashboardNotificationState
 from notify import channels
+from notify.audit import (
+    NotificationRetractionAudit,
+    NotificationRouteAudit,
+    NotificationRouteCandidateAudit,
+    NotificationSuppressedAudit,
+)
 from notify.channels import NotificationHandle
+from notify.channels.alert import Alert
 from notify.presence import Presence
 from domain.ids import SessionId
 from domain.sessiondata import ActorStatus
@@ -52,14 +59,14 @@ class PendingNotification:
     due_at: float
     pushed: bool = False
 
-    def payload(self) -> dict[str, str]:
-        return {
-            "session_id": str(self.session_id),
-            "state": self.state,
-            "kind": self.kind,
-            "project": self.project,
-            "title": self.title,
-        }
+    def payload(self) -> Alert:
+        return Alert(
+            session_id=self.session_id,
+            state=self.state,
+            kind=self.kind,
+            project=self.project,
+            title=self.title,
+        )
 
 
 @dataclass(frozen=True)
@@ -221,11 +228,11 @@ class Notifier:
                     "",
                     "",
                     "notification-suppressed",
-                    {
-                        "session_id": str(session_id),
-                        "kind": notification.kind,
-                        "reason": "browser-present",
-                    },
+                    NotificationSuppressedAudit(
+                        session_id=session_id,
+                        kind=notification.kind,
+                        reason="browser-present",
+                    ),
                 )
                 continue
             payload = notification.payload()
@@ -234,9 +241,19 @@ class Notifier:
                 "",
                 "",
                 "notification-route",
-                dict(
-                    dataclasses.asdict(decision),
-                    session_id=str(session_id),
+                NotificationRouteAudit(
+                    target=decision.target,
+                    target_label=decision.target_label,
+                    subscription_count=decision.subscription_count,
+                    candidates=tuple(
+                        NotificationRouteCandidateAudit(
+                            device=candidate.device,
+                            label=candidate.label,
+                            age_s=candidate.age_s,
+                        )
+                        for candidate in decision.candidates
+                    ),
+                    session_id=session_id,
                     kind=notification.kind,
                 ),
             )
@@ -340,14 +357,14 @@ class Notifier:
             "",
             "",
             "notify-retract",
-            {
-                "session_id": str(delivered_notification.session_id),
-                "channel": delivered_notification.handle.ch,
-                "kind": delivered_notification.handle.kind,
-                "reason": reason,
-                "outcome": outcome,
-                "age_seconds": round(max(0.0, age), 3),
-            },
+            NotificationRetractionAudit(
+                session_id=delivered_notification.session_id,
+                channel=delivered_notification.handle.ch,
+                kind=delivered_notification.handle.kind,
+                reason=reason,
+                outcome=outcome,
+                age_seconds=round(max(0.0, age), 3),
+            ),
         )
 
     def _enforce_sent_cap(self) -> None:
@@ -377,7 +394,7 @@ class Notifier:
                 self.delivered.pop(session_id, None)
 
     @staticmethod
-    def _attention_count(states: dict[SessionId, ActorStatus | None]) -> int:
+    def _attention_count(states: Mapping[SessionId, ActorStatus | None]) -> int:
         return sum(state in NOTIFICATION_KINDS for state in states.values())
 
     def run(self, stop: threading.Event) -> None:
@@ -387,5 +404,5 @@ class Notifier:
             try:
                 self.scan()
             except Exception:
-                self.audit.error("", "dashboard notifier", {})
+                self.audit.error("", "dashboard notifier")
             stop.wait(config.GLOBAL_REFRESH_SECONDS)

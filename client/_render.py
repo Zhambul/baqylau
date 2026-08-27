@@ -14,9 +14,18 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Callable, Iterable, NamedTuple
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Callable, Iterable, NamedTuple
 
-from _model import SessionModel, ShellFold
+from _model import (
+    ContentRecord,
+    EntryBodyRecord,
+    EntryRecord,
+    SessionModel,
+    ShellFold,
+    TokenRecord,
+)
 
 RESET = "\033[0m"
 CLEAR = "\033[H\033[2J\033[3J"
@@ -294,39 +303,55 @@ _STATISTIC_FIELDS = (
 )
 
 
-def session_statistics(model: SessionModel) -> dict[str, Any]:
-    totals: dict[str, Any] = {name: 0 for name in _STATISTIC_FIELDS}
-    totals["active_seconds"] = 0.0
+@dataclass(frozen=True)
+class SessionStatistics:
+    prompt_count: int
+    shell_command_count: int
+    failed_shell_command_count: int
+    file_count: int
+    lines_added: int
+    lines_removed: int
+    actor_message_count: int
+    active_seconds: float
+    tool_counts: Mapping[str, int]
+
+
+def session_statistics(model: SessionModel) -> SessionStatistics:
+    totals = {name: 0 for name in _STATISTIC_FIELDS}
     tools: dict[str, int] = {}
     for actor in model.actors.values():
-        statistics = actor.get("statistics") or {}
+        statistics = actor.statistics
         for name in _STATISTIC_FIELDS:
-            totals[name] += statistics.get(name) or 0
-        for row in statistics.get("tool_counts") or ():
-            tools[row["tool"]] = tools.get(row["tool"], 0) + row["count"]
+            totals[name] += int(getattr(statistics, name))
+        for row in statistics.tool_counts:
+            tools[row.tool] = tools.get(row.tool, 0) + row.count
     # The clock is the LEAD's, not a sum: two actors working at once are one
     # stretch of a person's time, and adding them would report more time than
     # the session has existed. It CARRIES FORWARD while the interval is open —
     # the daemon measured `active_seconds` when it built the frame, and frames
     # arrive on change, so a working session would otherwise show a clock that
     # sits still for minutes on a surface somebody is watching.
-    lead_statistics = model.lead().get("statistics") or {}
-    totals["active_seconds"] = (lead_statistics.get("active_seconds") or 0.0) + (
-        model.elapsed_since_frame() if lead_statistics.get("active") else 0.0
+    lead = model.lead()
+    lead_statistics = lead.statistics if lead is not None else None
+    active_seconds = (lead_statistics.active_seconds if lead_statistics else 0.0) + (
+        model.elapsed_since_frame() if lead_statistics and lead_statistics.active else 0.0
     )
-    totals["tool_counts"] = tools
-    return totals
+    return SessionStatistics(
+        **totals,
+        active_seconds=active_seconds,
+        tool_counts=tools,
+    )
 
 
-def session_usage(model: SessionModel) -> tuple[dict[str, int], float | None]:
-    tokens: dict[str, int] = {}
+def session_usage(model: SessionModel) -> tuple[TokenRecord, float | None]:
+    tokens = TokenRecord()
     cost: float | None = None
     for actor in model.actors.values():
-        usage = actor.get("usage") or {}
-        for name, value in (usage.get("tokens") or {}).items():
-            tokens[name] = tokens.get(name, 0) + (value or 0)
-        if usage.get("cost_in_usd") is not None:
-            cost = (cost or 0.0) + float(usage["cost_in_usd"])
+        usage = actor.usage
+        for name in TokenRecord.model_fields:
+            setattr(tokens, name, getattr(tokens, name) + getattr(usage.tokens, name))
+        if usage.cost_in_usd is not None:
+            cost = (cost or 0.0) + float(usage.cost_in_usd)
     return tokens, cost
 
 
@@ -360,29 +385,27 @@ def scoreboard(model: SessionModel, width: int) -> str:
     """The five status rows: who, how much said, what was done, what it cost."""
     statistics = session_statistics(model)
     tokens, cost = session_usage(model)
-    cache_write = (tokens.get("cache_write_tokens") or 0) + (
-        tokens.get("one_hour_cache_write_tokens") or 0
-    )
+    cache_write = tokens.cache_write_tokens + tokens.one_hour_cache_write_tokens
     total = (
-        (tokens.get("input_tokens") or 0)
-        + (tokens.get("output_tokens") or 0)
-        + (tokens.get("cache_read_tokens") or 0)
+        tokens.input_tokens
+        + tokens.output_tokens
+        + tokens.cache_read_tokens
         + cache_write
     )
-    identity = [(model.session.get("session_id") or "", VALUE)]
-    account = model.session.get("account")
+    identity = [(model.session.session_id, VALUE)]
+    account = model.session.account
     if account:
-        identity.append(("◈ " + (account.get("display_name") or ""), MUTED))
-    messages = [("%d msgs" % statistics["actor_message_count"], MUTED)]
-    activity = [("%d cmds" % statistics["shell_command_count"], MUTED)]
-    if statistics["failed_shell_command_count"]:
-        activity.append(("%d✗" % statistics["failed_shell_command_count"], FAILURE))
-    activity.append(("⏱ " + duration(statistics["active_seconds"]), MUTED))
+        identity.append(("◈ " + account.display_name, MUTED))
+    messages = [("%d msgs" % statistics.actor_message_count, MUTED)]
+    activity = [("%d cmds" % statistics.shell_command_count, MUTED)]
+    if statistics.failed_shell_command_count:
+        activity.append(("%d✗" % statistics.failed_shell_command_count, FAILURE))
+    activity.append(("⏱ " + duration(statistics.active_seconds), MUTED))
     usage_parts = [("%s total" % count(total), VALUE)]
     for value, label in (
-        (tokens.get("input_tokens") or 0, "in"),
-        (tokens.get("output_tokens") or 0, "out"),
-        (tokens.get("cache_read_tokens") or 0, "cache"),
+        (tokens.input_tokens, "in"),
+        (tokens.output_tokens, "out"),
+        (tokens.cache_read_tokens, "cache"),
         (cache_write, "write"),
     ):
         if value:
@@ -390,17 +413,17 @@ def scoreboard(model: SessionModel, width: int) -> str:
     if cost is not None:
         usage_parts.append(("≈ $%.2f" % cost, WORKING))
     detail: list[tuple[str, Color]] = []
-    if statistics["file_count"]:
-        noun = "file" if statistics["file_count"] == 1 else "files"
-        detail.append(("%d %s" % (statistics["file_count"], noun), MUTED))
-    if statistics["lines_added"]:
-        detail.append(("+%d" % statistics["lines_added"], SUCCESS))
-    if statistics["lines_removed"]:
-        detail.append(("-%d" % statistics["lines_removed"], FAILURE))
+    if statistics.file_count:
+        noun = "file" if statistics.file_count == 1 else "files"
+        detail.append(("%d %s" % (statistics.file_count, noun), MUTED))
+    if statistics.lines_added:
+        detail.append(("+%d" % statistics.lines_added, SUCCESS))
+    if statistics.lines_removed:
+        detail.append(("-%d" % statistics.lines_removed, FAILURE))
     detail.extend(
         ("%s %d" % (tool, tool_count), MUTED)
         for tool, tool_count in sorted(
-            statistics["tool_counts"].items(), key=lambda item: (-item[1], item[0].lower())
+            statistics.tool_counts.items(), key=lambda item: (-item[1], item[0].lower())
         )
     )
     painted = [
@@ -438,22 +461,19 @@ def task_rows(model: SessionModel, width: int) -> list[str]:
     a finished item is not work, and the count is the only thing about it a reader
     still needs.
     """
-    tasks = [
-        task for task in (model.session.get("tasks") or ())
-        if task.get("state") != "deleted"
-    ]
+    tasks = [task for task in model.session.tasks if task.state != "deleted"]
     if not tasks:
         return []
-    done = sum(1 for task in tasks if task.get("state") == "completed")
-    live = [task for task in tasks if task.get("state") != "completed"]
+    done = sum(1 for task in tasks if task.state == "completed")
+    live = [task for task in tasks if task.state != "completed"]
     heading = "tasks %d/%d" % (done, len(tasks))
     painted = rows(
         [Span(" %s " % heading, DARK, MUTED, bold=True)], width, layout="truncate"
     )
     for task in live[:TASK_ROWS]:
-        marker, color = TASK_MARKERS.get(task.get("state") or "", ("·", MUTED))
+        marker, color = TASK_MARKERS.get(task.state, ("·", MUTED))
         painted.extend(rows(
-            [Span(task.get("subject") or "")],
+            [Span(task.subject)],
             width,
             prefix=(Span(" %s " % marker, color),),
             continuation=(Span("   "),),
@@ -594,36 +614,36 @@ def copy_target(shell_id: str, half: str) -> str:
     return "sh:%s:%s" % (shell_id, half)
 
 
-def _file_rows(entry: dict[str, Any], view: Links, width: int, open_now: bool) -> list[str]:
+def _file_rows(entry: EntryRecord, view: Links, width: int, open_now: bool) -> list[str]:
     """One line per file, and its content beneath when the reader expanded it.
 
     The whole line is the link, not a marker beside it: the target is the file,
     and a two-character affordance on a line this narrow is a worse click than
     the words themselves.
     """
-    body = entry["body"]
-    verb, color = FILE_VERBS.get(body["action"], ("Touch", VALUE))
-    if body.get("state") == "failed":
+    body = entry.body
+    verb, color = FILE_VERBS.get(body.action or "", ("Touch", VALUE))
+    if body.state == "failed":
         color = FAILURE
-    target = view(entry["entry_id"]) if body.get("content") else None
+    target = view(entry.entry_id) if body.content else None
     marker = "▾" if open_now else ("▸" if target else " ")
     spans = [
         Span(marker + " ", DIM, link=target),
         Span(verb, color, link=target),
         Span("(", dim=True, link=target),
-        Span(body.get("path") or "", link=target),
+        Span(body.path or "", link=target),
         Span(")", dim=True, link=target),
     ]
     counts = []
-    if body.get("lines_added"):
-        counts.append(Span("+%d" % body["lines_added"], SUCCESS))
-    if body.get("lines_removed"):
-        counts.append(Span("-%d" % body["lines_removed"], FAILURE))
+    if body.lines_added:
+        counts.append(Span("+%d" % body.lines_added, SUCCESS))
+    if body.lines_removed:
+        counts.append(Span("-%d" % body.lines_removed, FAILURE))
     for index, span in enumerate(counts):
         spans.extend((Span("  " if index == 0 else " "), span))
     painted = rows(spans, width, layout="truncate")
     if open_now:
-        painted.extend(_content_rows(_entry_text(body.get("content")), body["action"], width))
+        painted.extend(_content_rows(_entry_text(body.content), body.action or "", width))
     return painted
 
 
@@ -761,125 +781,128 @@ def _diff_content_rows(unified_diff: str, width: int) -> list[str]:
     return painted
 
 
-def _tool_rows(entry: dict[str, Any], width: int) -> list[str]:
+def _tool_rows(entry: EntryRecord, width: int) -> list[str]:
     """A search, a fetch, a worktree move or a skill — the block shape with the
     tool's own name on the chip. These arrived as one operation kind each in the
     old vocabulary and drew as commands; they still do."""
-    body = entry["body"]
-    kind = entry["type"]
+    body = entry.body
+    kind = entry.type
     if kind == "search":
-        chip, summary = body.get("tool") or "search", _entry_text(body.get("query"))
+        chip, summary = body.tool or "search", _entry_text(body.query)
     elif kind == "web":
-        chip, summary = "WebFetch", body.get("url") or ""
+        chip, summary = "WebFetch", body.url or ""
     elif kind == "browser":
-        chip, summary = "Browser", body.get("action") or ""
+        chip, summary = "Browser", body.action or ""
     elif kind == "worktree":
-        chip = "EnterWorktree" if body.get("action") == "entered" else "ExitWorktree"
-        summary = _entry_text(body.get("arguments"))
+        chip = "EnterWorktree" if body.action == "entered" else "ExitWorktree"
+        summary = _entry_text(body.arguments)
     elif kind == "skill_started":
-        chip, summary = "Skill", body.get("name") or ""
+        chip, summary = "Skill", body.name or ""
     else:
         chip, summary = "Skill finished", ""
-    state = body.get("state")
+    state = body.state
     finish = None if state in (None, "succeeded") else _label("■ " + state, FAILURE)
     return _block(
         chip,
         TEXT,
         summary,
-        _entry_text(body.get("result")),
+        _entry_text(body.result),
         "",
         finish,
         width,
     )
 
 
-def _entry_text(content: dict[str, Any] | None) -> str:
-    return (content or {}).get("text") or ""
+def _entry_text(content: ContentRecord | None) -> str:
+    return content.text if content is not None else ""
 
 
-def _message_rows(entry: dict[str, Any], model: SessionModel, width: int) -> list[str]:
-    body = entry["body"]
-    name = model.actor_name(entry["actor_id"])
-    if body.get("phase") == "recap":
+def _message_rows(entry: EntryRecord, model: SessionModel, width: int) -> list[str]:
+    body = entry.body
+    name = model.actor_name(entry.actor_id)
+    if body.phase == "recap":
         label, color = "RECAP", TEXT
-    elif body.get("role") == "user":
+    elif body.role == "user":
         label, color = "YOU", USER
-    elif body.get("role") == "parent":
+    elif body.role == "parent":
         label, color = "PARENT", TEXT
-    elif body.get("recipient_actor_id"):
-        label = "%s → %s" % (name.upper(), model.actor_name(body["recipient_actor_id"]).upper())
+    elif body.recipient_actor_id:
+        label = "%s → %s" % (
+            name.upper(),
+            model.actor_name(body.recipient_actor_id).upper(),
+        )
         color = USER
     else:
         label, color = name.upper(), TEXT
-    return _said(label, _entry_text(body.get("content")), width, color)
+    return _said(label, _entry_text(body.content), width, color)
 
 
-def _attention_rows(entry: dict[str, Any], width: int) -> list[str]:
-    kind = entry["type"]
+def _attention_rows(entry: EntryRecord, width: int) -> list[str]:
+    kind = entry.type
     if kind == "question_asked":
         blocks = []
-        for question in entry["body"].get("questions") or ():
-            lines = [question["question"]] if question.get("question") else []
+        for question in entry.body.questions:
+            lines = [question.question] if question.question else []
             lines.extend(
-                "- " + choice["label"]
-                for choice in question.get("choices") or ()
-                if choice.get("label")
+                "- " + choice.label
+                for choice in question.choices
+                if choice.label
             )
             if lines:
                 blocks.append("\n".join(lines))
         return _said("QUESTION", "\n\n".join(blocks), width, WORKING)
     if kind == "plan_proposed":
-        return _said("PLAN", _entry_text(entry["body"].get("plan")), width, WORKING)
+        return _said("PLAN", _entry_text(entry.body.plan), width, WORKING)
     if kind == "question_answered":
         answered = "\n".join(
             label
-            for answer in entry["body"].get("answers") or ()
-            for label in answer.get("labels") or ()
+            for answer in entry.body.answers
+            for label in answer.labels
         )
-        return _said("ANSWERED", entry["body"].get("feedback") or answered, width, WORKING)
-    decision = PLAN_DECISIONS.get(entry["body"].get("state") or "", "DECIDED")
-    return _said(decision, entry["body"].get("feedback") or "", width, WORKING)
+        return _said("ANSWERED", entry.body.feedback or answered, width, WORKING)
+    decision = PLAN_DECISIONS.get(entry.body.state or "", "DECIDED")
+    return _said(decision, entry.body.feedback or "", width, WORKING)
 
 
-def _note_rows(entry: dict[str, Any], width: int) -> list[str]:
+def _note_rows(entry: EntryRecord, width: int) -> list[str]:
     """The one-line ⟳ and ⇢ forms: something happened that is worth a line and
     no more."""
-    body = entry["body"]
-    kind = entry["type"]
+    body = entry.body
+    kind = entry.type
     if kind == "compaction_started":
         text = "compacting the context…"
     elif kind == "compaction_finished":
-        before, after = body.get("before_tokens"), body.get("after_tokens")
+        before, after = body.before_tokens, body.after_tokens
         text = "compacted"
         if before and after:
             text += " · %s → %s tokens" % (count(before), count(after))
     elif kind == "model_change":
         text = "model " + _transition(body)
-        if body.get("automatic"):
+        if body.automatic:
             text += " (chosen for you)"
     else:
         text = "effort " + _transition(body)
     return rows([Span("⟳ ", MODIFIED), Span(text)], width)
 
 
-def _transition(body: dict[str, Any]) -> str:
-    previous, current = body.get("previous"), body.get("current") or ""
+def _transition(body: EntryBodyRecord) -> str:
+    previous, current = body.previous, body.current or ""
     return "%s → %s" % (previous, current) if previous else current
 
 
-def _assignment_rows(entry: dict[str, Any], width: int) -> list[str]:
-    body = entry["body"]
-    if entry["type"] == "assignment_started":
+def _assignment_rows(entry: EntryRecord, width: int) -> list[str]:
+    body = entry.body
+    if entry.type == "assignment_started":
         marker = "⇢"
-        text = entry.get("summary") or _entry_text(body.get("prompt"))
-        name = body.get("assigned_actor_name")
+        text = entry.summary or _entry_text(body.prompt)
+        name = body.assigned_actor_name
         if name:
             text = "%s: %s" % (name, text) if text else name
     else:
         marker = "⇠"
-        text = _entry_text(body.get("result"))
-        if body.get("state") != "succeeded":
-            text = "%s · %s" % (body.get("state"), text) if text else body.get("state") or ""
+        text = _entry_text(body.result)
+        if body.state != "succeeded":
+            text = "%s · %s" % (body.state, text) if text else body.state or ""
     return rows(
         [Span(marker + " ", WORKING, bold=True), Span(text or "agent")],
         width,
@@ -894,28 +917,28 @@ def _assignment_rows(entry: dict[str, Any], width: int) -> list[str]:
 QUIET_FOR_THE_LEAD = frozenset({"message", "reasoning"})
 
 
-def visible(entry: dict[str, Any], lead_actor_id: str) -> bool:
-    if entry["type"] not in QUIET_FOR_THE_LEAD:
+def visible(entry: EntryRecord, lead_actor_id: str) -> bool:
+    if entry.type not in QUIET_FOR_THE_LEAD:
         return True
-    if (entry["body"] or {}).get("role") == "system":
+    if entry.body.role == "system":
         return False
-    return bool(entry["actor_id"] != lead_actor_id)
+    return entry.actor_id != lead_actor_id
 
 
 def entry_rows(
-    entry: dict[str, Any],
+    entry: EntryRecord,
     model: SessionModel,
     width: int,
     view: Links,
     opened: frozenset[str],
 ) -> list[str]:
-    kind = entry["type"]
+    kind = entry.type
     if kind == "message":
         return _message_rows(entry, model, width)
     if kind == "reasoning":
-        return _said("THINK", _entry_text(entry["body"].get("content")), width, MUTED)
+        return _said("THINK", _entry_text(entry.body.content), width, MUTED)
     if kind == "file":
-        return _file_rows(entry, view, width, entry["entry_id"] in opened)
+        return _file_rows(entry, view, width, entry.entry_id in opened)
     if kind in (
         "search",
         "web",
@@ -979,7 +1002,7 @@ def mirror(
     return screen(painted, rows([Span(HEADER_TEXT, HEADER_COLOR)], width, layout="truncate"))
 
 
-def copy_targets(model: SessionModel) -> dict[str, str]:
+def copy_targets(model: SessionModel) -> Mapping[str, str]:
     """Every copy link's text, for the pane to publish.
 
     Built from the MODEL rather than collected while painting, so that what a

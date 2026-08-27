@@ -1,5 +1,6 @@
-from audit.failures import CoalescingFailureRecorder
+from audit.failures import CoalescingFailureRecorder, FailureContext
 from audit.recorder import AuditRecorder
+from domain.ids import SessionId
 
 
 class RecordingAudit(AuditRecorder):
@@ -24,7 +25,9 @@ def test_repeated_loop_failure_is_counted_instead_of_written_each_cycle():
         try:
             raise ValueError("foreign record changed")
         except ValueError:
-            failures.record("source read", {"session_id": "session-one"})
+            failures.record(
+                "source read", FailureContext(session_id=SessionId("session-one"))
+            )
 
     fail()
     fail()
@@ -35,10 +38,10 @@ def test_repeated_loop_failure_is_counted_instead_of_written_each_cycle():
     fail()
 
     assert len(audit.errors) == 2
-    assert audit.errors[-1][2] == {
-        "session_id": "session-one",
-        "suppressed_repeats": 2,
-    }
+    assert audit.errors[-1][2] == FailureContext(
+        session_id=SessionId("session-one"),
+        suppressed_repeats=2,
+    )
 
 
 def test_changed_failure_shape_is_recorded_without_a_delay():
@@ -49,6 +52,8 @@ def test_changed_failure_shape_is_recorded_without_a_delay():
         try:
             raise ValueError(message)
         except ValueError:
-            failures.record("source read", {"session_id": "session-one"})
+            failures.record(
+                "source read", FailureContext(session_id=SessionId("session-one"))
+            )
 
     assert len(audit.errors) == 2

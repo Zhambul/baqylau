@@ -10,7 +10,7 @@ the read path it used to sit beside.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -89,7 +89,7 @@ class ApplicationPreferences:
 
     new_session: NewSessionPreferences
     new_session_drafts: tuple[NewSessionDraft, ...]
-    hidden_directories: dict[str, float]
+    hidden_directories: Mapping[str, float]
     limits: DashboardLimits
     notifications: GlobalNotificationState
     usage_rows: tuple[UsageRow, ...]
@@ -146,6 +146,10 @@ class ApplicationPreferenceService:
         """What the page owns, read back. No session rows: those are the read
         model's, and they arrive on /sessionData."""
         new_session = self.new_session_repository.preferences()
+        hidden_directories = {
+            entry.working_directory: entry.hidden_at
+            for entry in self.hidden_directory_repository.hidden()
+        }
         return ApplicationPreferences(
             new_session=NewSessionPreferences(
                 working_directory=new_session.working_directory if new_session else None,
@@ -161,9 +165,7 @@ class ApplicationPreferenceService:
                 )
                 for draft in self.new_session_repository.drafts()
             ),
-            hidden_directories={
-                entry.working_directory: entry.hidden_at for entry in self.hidden_directory_repository.hidden()
-            },
+            hidden_directories=hidden_directories,
             limits=DashboardLimits(
                 upload_bytes=daemon_contract.UPLOAD_MAX,
                 rename_characters=config.RENAME_CHARACTER_LIMIT,
@@ -218,7 +220,7 @@ class ApplicationPreferenceService:
             self.application_update_state.publish()
         return not written.stale
 
-    def hide_directory(self, working_directory: str) -> dict[str, float]:
+    def hide_directory(self, working_directory: str) -> Mapping[str, float]:
         # A directory with a session somebody is attending is a directory they
         # are working in; hiding it would take the row out from under them.
         live = [
@@ -234,7 +236,11 @@ class ApplicationPreferenceService:
             raise ValueError("cannot hide a directory with an active session")
         self.hidden_directory_repository.hide(working_directory, self.clock())
         self.application_update_state.publish()
-        return {entry.working_directory: entry.hidden_at for entry in self.hidden_directory_repository.hidden()}
+        hidden_directories = {
+            entry.working_directory: entry.hidden_at
+            for entry in self.hidden_directory_repository.hidden()
+        }
+        return hidden_directories
 
     def _project_directory(
         self,

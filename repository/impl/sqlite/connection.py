@@ -24,6 +24,9 @@ from threading import Event, Lock, local
 from repository.errors import SchemaVersionMismatch
 
 
+EMPTY_MIGRATIONS: Mapping[int, tuple[str, ...]] = {}
+
+
 @dataclass(frozen=True)
 class SqlitePragmas:
     """The default is the event store's policy — the one deliberate one."""
@@ -70,7 +73,7 @@ class SqliteDatabase:
         self.schema = schema
         self.schema_version = schema_version
         self.sqlite_pragmas = sqlite_pragmas
-        self.migrations = migrations or {}
+        self.migrations = migrations or EMPTY_MIGRATIONS
         # An Event, not a bool: the fast path is a read the type checker
         # cannot narrow, which is exactly right — another thread may set it
         # between the two checks below, and that is the point of them.

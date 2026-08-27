@@ -11,8 +11,58 @@ read side a separately-shaped dataclass; one column list, spelled twice.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TypeAlias
 
-from domain.ids import ActorId, SessionId, TaskId
+from pydantic import BaseModel, ConfigDict, RootModel
+
+from domain.ids import ActorId, HarnessName, SessionId, TaskId
+
+
+class AuditDocument(BaseModel):
+    """A closed document that an audit row stores as JSON text."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class EmptyAudit(AuditDocument):
+    pass
+
+
+class ShortErrorAudit(AuditDocument):
+    err: str
+
+
+class PathAudit(AuditDocument):
+    path: str
+
+
+class PortAudit(AuditDocument):
+    port: int
+
+
+class SessionAudit(AuditDocument):
+    session_id: SessionId | None
+
+
+class HarnessErrorAudit(AuditDocument):
+    harness: HarnessName
+    error: str
+    kind: str | None = None
+    payload_bytes: int | None = None
+
+
+class HarnessInputAudit(AuditDocument):
+    value: str
+    error: str
+    kind: str | None = None
+    payload_bytes: int | None = None
+
+
+class SpawnArguments(RootModel[tuple[str, ...]]):
+    pass
+
+
+AuditContent: TypeAlias = BaseModel | str | None
 
 
 @dataclass(frozen=True)
@@ -81,4 +131,3 @@ class StreamHandle:
     """
 
     stream_id: int
-

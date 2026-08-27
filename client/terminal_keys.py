@@ -19,25 +19,54 @@ from __future__ import annotations
 import os
 import sys
 
+from pydantic import BaseModel, ConfigDict
+
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # my own directory
 
 import _daemon                                                   # noqa: E402
 import _http                                                     # noqa: E402
 
 
-def request_body(arguments: list[str]) -> dict[str, object]:
+class PaneRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    window_id: str
+    working_directory: str
+
+    def json_bytes(self) -> bytes:
+        return self.model_dump_json().encode("utf-8")
+
+
+class PaneColumnsRequest(PaneRequest):
+    columns: int
+
+
+class PanePercentRequest(PaneRequest):
+    percent: int
+
+
+def request_body(arguments: list[str]) -> PaneRequest:
     command = arguments[0]
-    body: dict[str, object] = {
-        "window_id": _http.window_id(os.environ),
-        "working_directory": os.getcwd(),
-    }
+    window_id = _http.window_id(os.environ)
+    working_directory = os.getcwd()
     if command in ("grow", "shrink") and len(arguments) > 1:
-        body["columns"] = int(arguments[1])
+        return PaneColumnsRequest(
+            window_id=window_id,
+            working_directory=working_directory,
+            columns=int(arguments[1]),
+        )
     if command == "setpct":
         if len(arguments) != 2:
             raise ValueError("setpct requires one percentage")
-        body["percent"] = int(arguments[1])
-    return body
+        return PanePercentRequest(
+            window_id=window_id,
+            working_directory=working_directory,
+            percent=int(arguments[1]),
+        )
+    return PaneRequest(
+        window_id=window_id,
+        working_directory=working_directory,
+    )
 
 
 def main(arguments: list[str]) -> int:

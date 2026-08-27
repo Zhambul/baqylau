@@ -6,11 +6,10 @@ sit inside the free functions that also opened the database.
 
 from __future__ import annotations
 
-import json
-
-from pydantic import JsonValue
+from pydantic import BaseModel
 
 from audit.models import (
+    AuditContent,
     ApplicationError,
     ApplicationErrorRecord,
     SpawnRecord,
@@ -20,21 +19,19 @@ from audit.models import (
 from repository.model.audit import ErrorRow
 from repository.model.sql import SqlValues
 
-# A audit context is arbitrary caller data. It is recorded, never queried,
-# so it is bounded rather than shaped. `JsonValue` (not `object`) is the real
-# shape: every caller passes something that is ABOUT to become the JSON this
-# writes, and `json.dumps` below rejects anything that is not.
+# An audit context is recorded but is not queried. Callers still declare its
+# exact shape before this boundary serializes it.
 CONTENT_LIMIT = 2000
 
 
-def text(value: JsonValue) -> str:
+def text(value: AuditContent) -> str:
     """Any caller value as one string. Never raises: this runs inside `except`."""
-    if isinstance(value, str):
-        return value
-    return json.dumps(value, ensure_ascii=False, default=str)
+    if isinstance(value, BaseModel):
+        return value.model_dump_json()
+    return value or ""
 
 
-def truncated(value: JsonValue) -> str:
+def truncated(value: AuditContent) -> str:
     return text(value)[:CONTENT_LIMIT]
 
 

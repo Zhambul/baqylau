@@ -35,7 +35,7 @@ class AggregateState:
     actors: Mapping[ActorId, ActorFacts] = field(default_factory=dict)
 
     def actor(self, actor_id: ActorId) -> ActorFacts | None:
-        return dict(self.actors).get(actor_id)
+        return self.actors.get(actor_id)
 
     def with_actor(self, actor_facts: ActorFacts) -> AggregateState:
         actors = dict(self.actors)

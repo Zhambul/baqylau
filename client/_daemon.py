@@ -11,9 +11,9 @@
 # exception is `lines()`, whose caller reconnects for a living.
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 import http.client
-import json
+from typing import Protocol
 
 import _http
 
@@ -24,6 +24,10 @@ TIMEOUT_SECONDS = 5.0
 CONTENT_TYPE_JSON = "application/json"
 
 
+class JsonDocument(Protocol):
+    def json_bytes(self) -> bytes: ...
+
+
 def _connection(host: str, port: int, timeout: float) -> http.client.HTTPConnection:
     return http.client.HTTPConnection(host or _http.HOST, port or _http.PORT, timeout=timeout)
 
@@ -31,7 +35,7 @@ def _connection(host: str, port: int, timeout: float) -> http.client.HTTPConnect
 def post(
     path: str,
     body: bytes,
-    headers: dict[str, str] | None = None,
+    headers: Mapping[str, str] | None = None,
     host: str = "",
     port: int = 0,
     timeout: float = TIMEOUT_SECONDS,
@@ -40,10 +44,11 @@ def post(
     treats as "nothing happened"."""
     connection = _connection(host, port, timeout)
     try:
-        connection.request("POST", path, body, {
+        request_headers = {
             "Content-Type": CONTENT_TYPE_JSON,
             **(headers or {}),
-        })
+        }
+        connection.request("POST", path, body, request_headers)
         response = connection.getresponse()
         payload = response.read()
         return payload if response.status == 200 else None
@@ -55,14 +60,14 @@ def post(
 
 def post_json(
     path: str,
-    document: dict[str, object],
+    document: JsonDocument,
     host: str = "",
     port: int = 0,
     timeout: float = TIMEOUT_SECONDS,
 ) -> bytes | None:
     return post(
         path,
-        json.dumps(document).encode("utf-8"),
+        document.json_bytes(),
         host=host,
         port=port,
         timeout=timeout,

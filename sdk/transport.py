@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from typing import TypeVar
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 T = TypeVar("T")
+JSON_HEADERS = {"Content-Type": "application/json"}
 
 
 class ApiFailure(RuntimeError):
@@ -31,16 +32,23 @@ class HttpTransport:
     def post(
         self,
         path: str,
-        document: object,
+        document: BaseModel,
         adapter: TypeAdapter[T],
         accepted_statuses: set[int],
         *,
         timeout: float | None = None,
     ) -> tuple[int, T]:
         response = (
-            self.client.post(path, json=document)
+            self.client.post(
+                path, content=document.model_dump_json(), headers=JSON_HEADERS
+            )
             if timeout is None
-            else self.client.post(path, json=document, timeout=timeout)
+            else self.client.post(
+                path,
+                content=document.model_dump_json(),
+                headers=JSON_HEADERS,
+                timeout=timeout,
+            )
         )
         return response.status_code, self._decode(
             "POST", path, response, adapter, accepted_statuses
@@ -51,7 +59,7 @@ class HttpTransport:
         self,
         path: str,
         *,
-        headers: dict[str, str] | None = None,
+        headers: Mapping[str, str] | None = None,
     ) -> Iterator[Iterator[str]]:
         with self.client.stream("GET", path, headers=headers) as response:
             if response.status_code != 200:

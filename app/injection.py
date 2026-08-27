@@ -59,7 +59,8 @@ class TypeHint:
 
 def registry() -> Instances:
     """A fresh singleton scope. One per application, one per test."""
-    return {}
+    instances: Instances = {}
+    return instances
 
 
 def singleton(build: Callable[P, T]) -> Callable[Concatenate[Request, P], T]:

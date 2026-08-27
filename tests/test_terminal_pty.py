@@ -20,7 +20,7 @@ from terminal.impl.pty import plugin as pty_module
 from terminal.impl.pty.plugin import PtyInput, PtyWindows, pty_plugin
 from terminal.models import ScreenReadRequest, TabOpenRequest, TextSubmitRequest
 from terminal.models.input import KeySendRequest
-from terminal.models.tabs import TabCloseRequest
+from terminal.models.tabs import TabCloseRequest, TabRenameRequest
 
 TIMEOUT_SECONDS = 10.0
 
@@ -83,6 +83,16 @@ def test_terminal_lifecycle_closes_every_owned_window():
     plugin.close()
 
     assert plugin.metadata.windows() == ()
+
+
+def test_a_headless_tab_rename_is_a_completed_noop(terminal):
+    plugin, _ = terminal
+    window_id = _open(terminal, ("/bin/cat",))
+
+    response = plugin.tabs.rename_tab(TabRenameRequest(window_id, "New title"))
+
+    assert response.succeeded
+    assert response.reason is None
 
 
 def test_window_close_kills_a_tool_that_escaped_into_its_own_session(

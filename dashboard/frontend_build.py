@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import hashlib
 import html
-import json
 from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath
+
+from pydantic import BaseModel, ConfigDict, RootModel, ValidationError
 
 from dashboard.config import STATIC_DIR
 
@@ -14,10 +15,6 @@ BUILD_DIRECTORY = Path(STATIC_DIR) / "build"
 MANIFEST_PATH = BUILD_DIRECTORY / ".vite" / "manifest.json"
 STAMP_PATH = BUILD_DIRECTORY / ".source-sha256"
 ENTRY_MODULE = "src/main.ts"
-
-type JsonValue = (
-    str | int | float | bool | None | list[JsonValue] | dict[str, JsonValue]
-)
 
 _CONFIGURATION_FILES = (
     "package-lock.json",
@@ -31,6 +28,20 @@ _CONFIGURATION_FILES = (
 
 class FrontendBuildError(RuntimeError):
     """The generated frontend is missing, invalid, or stale."""
+
+
+class ManifestEntry(BaseModel):
+    """The Vite manifest fields used by the server."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    file: str | None = None
+    css: tuple[str, ...] = ()
+    imports: tuple[str, ...] = ()
+
+
+class ViteManifest(RootModel[Mapping[str, ManifestEntry]]):
+    pass
 
 
 def _source_files() -> tuple[Path, ...]:
@@ -84,25 +95,8 @@ def validate_frontend_build() -> None:
     read_manifest()
 
 
-def _mapping(value: JsonValue, context: str) -> Mapping[str, JsonValue]:
-    if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
-        raise FrontendBuildError("%s must be an object with string keys" % context)
-    return value
-
-
-def _strings(value: JsonValue, context: str) -> tuple[str, ...]:
-    if not isinstance(value, list):
-        raise FrontendBuildError("%s must be a string list" % context)
-    strings: list[str] = []
-    for item in value:
-        if not isinstance(item, str):
-            raise FrontendBuildError("%s must be a string list" % context)
-        strings.append(item)
-    return tuple(strings)
-
-
-def _asset_name(value: JsonValue, context: str) -> str:
-    if not isinstance(value, str):
+def _asset_name(value: str | None, context: str) -> str:
+    if value is None:
         raise FrontendBuildError("%s must be a string" % context)
     path = PurePosixPath(value)
     if path.is_absolute() or ".." in path.parts or not path.parts or path.parts[0] != "assets":
@@ -110,23 +104,19 @@ def _asset_name(value: JsonValue, context: str) -> str:
     return value
 
 
-def read_manifest() -> Mapping[str, Mapping[str, JsonValue]]:
+def read_manifest() -> Mapping[str, ManifestEntry]:
     """Read the Vite manifest through a small, checked boundary."""
     try:
-        raw: JsonValue = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        manifest = ViteManifest.model_validate_json(MANIFEST_PATH.read_bytes()).root
+    except (OSError, UnicodeError, ValidationError) as error:
         raise FrontendBuildError("frontend manifest is unreadable") from error
-    manifest = _mapping(raw, "frontend manifest")
-    checked: dict[str, Mapping[str, JsonValue]] = {}
-    for key, value in manifest.items():
-        checked[key] = _mapping(value, "frontend manifest entry %s" % key)
-    if ENTRY_MODULE not in checked:
+    if ENTRY_MODULE not in manifest:
         raise FrontendBuildError("frontend manifest has no %s entry" % ENTRY_MODULE)
-    return checked
+    return manifest
 
 
 def _entry_assets(
-    manifest: Mapping[str, Mapping[str, JsonValue]],
+    manifest: Mapping[str, ManifestEntry],
     key: str,
     visited: set[str],
 ) -> tuple[list[str], list[str]]:
@@ -140,15 +130,13 @@ def _entry_assets(
 
     styles: list[str] = []
     modules: list[str] = []
-    css = entry.get("css", [])
-    for index, name in enumerate(_strings(css, "%s.css" % key)):
+    for index, name in enumerate(entry.css):
         styles.append(_asset_name(name, "%s.css[%d]" % (key, index)))
-    imports = entry.get("imports", [])
-    for imported in _strings(imports, "%s.imports" % key):
+    for imported in entry.imports:
         imported_styles, imported_modules = _entry_assets(manifest, imported, visited)
         styles.extend(imported_styles)
         modules.extend(imported_modules)
-        modules.append(_asset_name(manifest[imported].get("file"), "%s.file" % imported))
+        modules.append(_asset_name(manifest[imported].file, "%s.file" % imported))
     return styles, modules
 
 
@@ -157,20 +145,30 @@ def manifest_tags() -> bytes:
     manifest = read_manifest()
     entry = manifest[ENTRY_MODULE]
     styles, modules = _entry_assets(manifest, ENTRY_MODULE, set())
-    entry_file = _asset_name(entry.get("file"), "%s.file" % ENTRY_MODULE)
+    entry_file = _asset_name(entry.file, "%s.file" % ENTRY_MODULE)
     lines = [
         *(
             f'<link rel="stylesheet" href="/static/build/{html.escape(name, quote=True)}">'
-            for name in dict.fromkeys(styles)
+            for name in _unique(styles)
         ),
         *(
             '<link rel="modulepreload" crossorigin '
             f'href="/static/build/{html.escape(name, quote=True)}">'
-            for name in dict.fromkeys(modules)
+            for name in _unique(modules)
         ),
         f'<script type="module" crossorigin src="/static/build/{html.escape(entry_file, quote=True)}"></script>',
     ]
     return ("\n".join(lines) + "\n").encode()
+
+
+def _unique(values: Sequence[str]) -> tuple[str, ...]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for value in values:
+        if value not in seen:
+            seen.add(value)
+            unique.append(value)
+    return tuple(unique)
 
 
 def build_asset_path(asset_name: str) -> Path:

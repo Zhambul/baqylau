@@ -29,15 +29,15 @@ def record_browser_events(
 ) -> RecordedResponse:
     telemetry.record_events(
         BrowserEventBatch(
-            ClientId(browser_events_request.client_id),
-            DeviceId(browser_events_request.device_id),
-            browser_events_request.connection,
-            tuple(
+            client_id=ClientId(browser_events_request.client_id),
+            device_id=DeviceId(browser_events_request.device_id),
+            connection=browser_events_request.connection,
+            events=tuple(
                 BrowserEvent(
-                    SessionId(event.session_id) if event.session_id else None,
-                    event.name,
-                    event.timestamp,
-                    event.details,
+                    session_id=SessionId(event.session_id) if event.session_id else None,
+                    name=event.name,
+                    timestamp=event.timestamp,
+                    details=event.details,
                 )
                 for event in browser_events_request.events
             ),
@@ -52,12 +52,12 @@ def record_optimistic_action(
 ) -> RecordedResponse:
     telemetry.record_optimistic_action(
         OptimisticActionReport(
-            SessionId(session_id),
-            optimistic_action_request.action,
-            optimistic_action_request.phase,
-            optimistic_action_request.character_count,
-            optimistic_action_request.elapsed_milliseconds,
-            optimistic_action_request.reason or None,
+            session_id=SessionId(session_id),
+            action=optimistic_action_request.action,
+            phase=optimistic_action_request.phase,
+            character_count=optimistic_action_request.character_count,
+            elapsed_milliseconds=optimistic_action_request.elapsed_milliseconds,
+            reason=optimistic_action_request.reason or None,
         )
     )
     return RecordedResponse()
@@ -69,12 +69,12 @@ def record_client_failure(
 ) -> RecordedResponse:
     telemetry.record_client_failure(
         ClientFailureReport(
-            SessionId(session_id),
-            client_failure_request.gesture,
-            client_failure_request.failure_kind,
-            client_failure_request.error,
-            client_failure_request.status_code,
-            client_failure_request.character_count,
+            session_id=SessionId(session_id),
+            gesture=client_failure_request.gesture,
+            failure_kind=client_failure_request.failure_kind,
+            error=client_failure_request.error,
+            status_code=client_failure_request.status_code,
+            character_count=client_failure_request.character_count,
         )
     )
     return RecordedResponse()

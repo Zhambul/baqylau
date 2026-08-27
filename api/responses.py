@@ -24,8 +24,11 @@ Documented = dict[int | str, dict[str, ResponseModel | str]]
 
 def errors(statuses: dict[int, str]) -> Documented:
     """Statuses answered with this server's one error body."""
-    return {status: {"model": ErrorResponse, "description": description}
-            for status, description in statuses.items()}
+    documented: Documented = {
+        status: {"model": ErrorResponse, "description": description}
+        for status, description in statuses.items()
+    }
+    return documented
 
 
 def with_body(model: ResponseModel, statuses: dict[int, str]) -> Documented:
@@ -36,8 +39,11 @@ def with_body(model: ResponseModel, statuses: dict[int, str]) -> Documented:
     the schema described those as untyped, or as the error shape they deliberately
     are not.
     """
-    return {status: {"model": model, "description": description}
-            for status, description in statuses.items()}
+    documented: Documented = {
+        status: {"model": model, "description": description}
+        for status, description in statuses.items()
+    }
+    return documented
 
 
 # Registered on the application itself, so every route carries them: the two

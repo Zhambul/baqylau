@@ -34,15 +34,18 @@ Import-pure: no argv/I/O/DB/frontend work at import — everything runs inside a
 function (docs/architecture.md import-time purity rule).
 """
 import http.client
-import json
 import os
 import signal
 import subprocess
 import sys
 import time
+from collections.abc import Mapping
 from types import ModuleType
 
+from pydantic import BaseModel, ConfigDict
+
 from audit import record
+from audit.models import PathAudit
 from core.process import process_is_alive
 
 HEALTH_PATH = "/api/health"
@@ -66,7 +69,13 @@ class UsageError(Exception):
     """Bad argv — the one failure this CLI reports rather than absorbs."""
 
 
-def _options(arguments: list[str]) -> tuple[dict[str, str], str | None]:
+class HealthProcess(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    process_id: int
+
+
+def _options(arguments: list[str]) -> tuple[Mapping[str, str], str | None]:
     """The launch flags, as (variables to set, log path).
 
     Accepts `--flag value` and `--flag=value`, because a person types the first
@@ -169,7 +178,7 @@ def _answered_pid(daemon_contract: ModuleType) -> int:
         response = connection.getresponse()
         if response.status != 200:
             return 0
-        return int(json.loads(response.read())["process_id"])
+        return HealthProcess.model_validate_json(response.read()).process_id
     except (OSError, ValueError, KeyError, TypeError):
         return 0
     finally:
@@ -220,7 +229,7 @@ def start(flags: list[str] | None = None) -> int:
             start_new_session=True,
         )
     except OSError:
-        record.error("", "spawn web dashboard", {"path": entry})
+        record.error("", "spawn web dashboard", PathAudit(path=entry))
         print("dashboard failed to spawn (see audit errors)", file=sys.stderr)
         return 1
     record.spawn("", process.pid, command[1:], purpose="web dashboard")

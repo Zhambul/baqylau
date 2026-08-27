@@ -8,6 +8,7 @@
 # The outcome vocabulary lives here rather than in the package __init__ so a
 # channel can name it without importing the dispatcher that imports the
 # channel.
+from dataclasses import dataclass
 from urllib.parse import quote
 
 from dashboard import config
@@ -25,7 +26,16 @@ FAILED = "failed"       # the service said no; the alert is still out there
 NOTHING = "nothing"     # the send never landed anything — nothing to take back
 
 
-def alert_text(entry: dict[str, str]) -> tuple[str, str, str]:
+@dataclass(frozen=True)
+class Alert:
+    session_id: SessionId
+    state: str
+    kind: str
+    project: str
+    title: str
+
+
+def alert_text(alert: Alert) -> tuple[str, str, str]:
     """The alert pieces both channels build the same way from one `entry`: the
     🔴/🟢 headline (project + needs-you/is-done), the detail line (the session
     title, or a kind-specific fallback), and the ?s=<session_id> deep link. Returns the
@@ -37,12 +47,12 @@ def alert_text(entry: dict[str, str]) -> tuple[str, str, str]:
     the URL fragment, so a #-link opens the dashboard ROOT on the phone, not the
     session. The session_id rides a query param (linkified whole); the page translates
     ?s=<session_id> back into the hash route on load."""
-    asking = entry.get("kind") == "asking"
-    proj = entry.get("project") or entry.get("session_id") or "session"
+    asking = alert.kind == "asking"
+    proj = alert.project or alert.session_id or "session"
     head = ("🔴 %s needs you" if asking else "🟢 %s is done") % proj
-    detail = entry.get("title") or (
+    detail = alert.title or (
         "a question is waiting" if asking else "finished — your turn")
-    url = "%s/?s=%s" % (config.PUBLIC_URL, quote(entry.get("session_id") or ""))
+    url = "%s/?s=%s" % (config.PUBLIC_URL, quote(alert.session_id))
     return head, detail, url
 
 

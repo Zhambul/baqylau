@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import base64
 import dataclasses
-import json
 import os
 import struct
 import time
@@ -34,11 +33,15 @@ from urllib.parse import urlparse
 
 import threading
 
+from pydantic import BaseModel, ConfigDict
+
 from audit import record as A
+from audit.models import EmptyAudit
 from dashboard import config
 from domain.ids import SessionId
 from domain.preferences import PushSigningKeypair
-from notify.channels.alert import NOTHING, OK, alert_text, push_tag
+from notify.channels.alert import Alert, NOTHING, OK, alert_text, push_tag
+from notify.audit import NotificationSessionAudit, WebPushAudit
 from notify.presence import RoutedSubscription
 from repository.contract.preferences import (
     PushSigningKeyRepository,
@@ -46,11 +49,12 @@ from repository.contract.preferences import (
 )
 
 
-@dataclass(frozen=True)
-class WebPushAlertPayload:
+class WebPushAlertPayload(BaseModel):
     """The push body for a fresh alert — `static/sw.js` shows it verbatim
     (title/body/badge), and reads `session_id`/`kind` back into its own
     click-through and the resolve push's tag."""
+
+    model_config = ConfigDict(frozen=True)
 
     title: str
     body: str
@@ -60,10 +64,11 @@ class WebPushAlertPayload:
     badge: int
 
 
-@dataclass(frozen=True)
-class WebPushResolvePayload:
+class WebPushResolvePayload(BaseModel):
     """The push body that closes a delivered alert — `type` is what
     `static/sw.js` branches on to resolve rather than show a notification."""
+
+    model_config = ConfigDict(frozen=True)
 
     session_id: SessionId
     kind: str | None
@@ -73,6 +78,23 @@ class WebPushResolvePayload:
 
 
 WebPushPayload = WebPushAlertPayload | WebPushResolvePayload
+
+
+class VapidHeader(BaseModel):
+    typ: Literal["JWT"] = "JWT"
+    alg: Literal["ES256"] = "ES256"
+
+
+class VapidClaims(BaseModel):
+    aud: str
+    exp: int
+    sub: str
+
+
+class PushErrorResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    reason: str | None = None
 
 
 @dataclass
@@ -153,7 +175,11 @@ def _load_keypair(
             # subscription, so every already-subscribed browser goes quiet at
             # once with nothing to point at. This row is the only thing that
             # explains it afterwards.
-            A.error("", "webpush keypair (corrupt record — regenerating)", {})
+            A.error(
+                "",
+                "webpush keypair (corrupt record — regenerating)",
+                EmptyAudit(),
+            )
     try:
         priv = ec.generate_private_key(ec.SECP256R1())
         pub_point = priv.public_key().public_bytes(
@@ -186,11 +212,14 @@ def _vapid_header(endpoint: str, push_signing_key_repository: PushSigningKeyRepo
         return None
     u = urlparse(endpoint)
     aud = "%s://%s" % (u.scheme, u.netloc)
-    header = _b64u(json.dumps({"typ": "JWT", "alg": "ES256"},
-                              separators=(",", ":")).encode())
-    claims = _b64u(json.dumps(
-        {"aud": aud, "exp": int(time.time()) + TOKEN_LIFETIME_SECONDS, "sub": VAPID_SUB},
-        separators=(",", ":")).encode())
+    header = _b64u(VapidHeader().model_dump_json().encode())
+    claims = _b64u(
+        VapidClaims(
+            aud=aud,
+            exp=int(time.time()) + TOKEN_LIFETIME_SECONDS,
+            sub=VAPID_SUB,
+        ).model_dump_json().encode()
+    )
     signing_input = ("%s.%s" % (header, claims)).encode("ascii")
     der = priv.sign(signing_input, ec.ECDSA(hashes.SHA256()))
     r, s = decode_dss_signature(der)
@@ -255,18 +284,21 @@ def deliver(
     try:
         endpoint = routed_subscription["endpoint"]
         subscription_keys = routed_subscription["keys"]
-        body = _encrypt(json.dumps(dataclasses.asdict(payload), ensure_ascii=False).encode("utf-8"),
+        body = _encrypt(payload.model_dump_json().encode("utf-8"),
                         subscription_keys["p256dh"], subscription_keys["auth"])
         auth = _vapid_header(endpoint, push_signing_key_repository)
         if not auth:
             return Result(error="no vapid")
-        req = urllib.request.Request(endpoint, data=body, method="POST", headers={
+        request_headers = {
             "Content-Encoding": "aes128gcm",
             "Content-Type": "application/octet-stream",
             "TTL": str(ttl),
             "Urgency": "high",
             "Authorization": auth,
-        })
+        }
+        req = urllib.request.Request(
+            endpoint, data=body, method="POST", headers=request_headers
+        )
         with urllib.request.urlopen(req, timeout=10) as resp:
             return Result(ok=True, status=resp.status)
     except urllib.error.HTTPError as e:
@@ -278,7 +310,7 @@ def deliver(
         # (without subscription/key material) so the audit says more than 400.
         try:
             response_body = e.read().decode("utf-8", "replace")
-            response_reason = str(json.loads(response_body).get("reason") or "")
+            response_reason = PushErrorResponse.model_validate_json(response_body).reason or ""
         except Exception:
             response_reason = ""
         gone = e.code in (404, 410) or (
@@ -296,7 +328,7 @@ def deliver(
 # ------------------------------------------------ the alert this channel carries
 
 def send_alert(
-    entry: dict[str, str],
+    alert: Alert,
     subs: list[RoutedSubscription],
     badge: int = 0,
     *,
@@ -321,17 +353,17 @@ def send_alert(
     to", the signal that holds Telegram back to the escalation nudge."""
     if not (enabled() and subs):
         return None
-    session_id = SessionId(entry.get("session_id") or "")
-    title, body, url = alert_text(entry)
+    session_id = alert.session_id
+    title, body, url = alert_text(alert)
     payload = WebPushAlertPayload(title=title, body=body, session_id=session_id,
-                                  kind=entry.get("kind"), url=url, badge=badge)
+                                  kind=alert.kind, url=url, badge=badge)
     threading.Thread(target=_webpush_fanout,
                      args=(subs, payload, "send", push_signing_key_repository, push_subscription_repository),
                      daemon=True).start()
     # The subscriptions are the handle: a resolve push has to reach the devices
     # the alert actually went to, NOT whichever device is most-recently-used by
     # then — the banner is on the former.
-    return WebPushHandle(session_id=session_id, kind=entry.get("kind"),
+    return WebPushHandle(session_id=session_id, kind=alert.kind,
                          subs=subs, tag=push_tag(session_id))
 
 
@@ -350,20 +382,33 @@ def _webpush_fanout(
         try:
             res = deliver(sub, payload, push_signing_key_repository)
         except Exception:
-            A.error("", "dashboard webpush %s" % action,
-                    {"session_id": payload.session_id})
+            A.error(
+                "",
+                "dashboard webpush %s" % action,
+                NotificationSessionAudit(session_id=payload.session_id),
+            )
             continue
-        ep = sub.get("endpoint", "") if isinstance(sub, dict) else ""
-        dev = sub.get("device") if isinstance(sub, dict) else None
+        ep = sub["endpoint"]
+        dev = sub["device"]
         if res.gone and push_subscription_repository is not None:
             push_subscription_repository.remove(ep)
-        A.state_file("", "", "web-push",
-                     {"session_id": payload.session_id, "kind": payload.kind,
-                      "action": action, "status": res.status,
-                      "ok": res.ok, "gone": res.gone,
-                      "error": res.error,
-                      "badge": payload.badge,
-                      "device": dev, "endpoint": ep[:80]})
+        A.state_file(
+            "",
+            "",
+            "web-push",
+            WebPushAudit(
+                session_id=payload.session_id,
+                kind=payload.kind,
+                action=action,
+                status=res.status,
+                ok=res.ok,
+                gone=res.gone,
+                error=res.error,
+                badge=payload.badge,
+                device=dev,
+                endpoint=ep[:80],
+            ),
+        )
 
 
 def retract_alert(

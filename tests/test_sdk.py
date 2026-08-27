@@ -246,7 +246,7 @@ class ControlTransport:
         self.posts.append((path, document, accepted_statuses))
         self.timeouts.append(timeout)
         return 200, ControlResultResponse(
-            request_id=document["request_id"],
+            request_id=document.request_id,
             status="acknowledged",
             reason=None,
         )
@@ -312,7 +312,7 @@ def test_session_launch_sends_an_explicit_account_selection():
 
     path, document, statuses = transport.posts[0]
     assert path == "/api/sessions"
-    assert document["account_id"] == "account-one"
+    assert document.account_id == "account-one"
     assert statuses == {202, 409}
 
 
@@ -842,8 +842,8 @@ def test_session_controls_use_one_typed_dispatch_path():
 
     path, document, statuses = transport.posts[0]
     assert path == "/api/sessions/session-one/controls/select-effort"
-    assert document["effort"] == "medium"
-    assert str(document["request_id"]).startswith("e2e-select-effort-")
+    assert document.effort == "medium"
+    assert str(document.request_id).startswith("e2e-select-effort-")
     assert statuses == {200, 202, 409}
     assert receipt.cursor_before == 1001
     assert receipt.outcome.status == "acknowledged"
@@ -870,7 +870,7 @@ def test_upload_resource_encodes_bytes_and_returns_a_typed_attachment():
 
     path, document, statuses = transport.posts[0]
     assert path == "/api/application/uploads"
-    assert document == {
+    assert document.model_dump() == {
         "name": "context.txt",
         "mime": "text/plain",
         "data": "c2FtcGxl",
@@ -905,7 +905,11 @@ def test_terminal_resource_uses_named_pane_gestures():
     )
 
     assert all(outcome.handled and outcome.succeeded for outcome in outcomes)
-    assert transport.posts == [
+    posts = [
+        (path, document.model_dump(), statuses)
+        for path, document, statuses in transport.posts
+    ]
+    assert posts == [
         (
             "/api/terminal/panes/toggle",
             {"window_id": "window-one", "working_directory": "/work"},

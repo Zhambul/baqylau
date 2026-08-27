@@ -7,9 +7,7 @@
 # Everything here is best-effort and silent — a failed call returns rc 1 / [] /
 # None and never raises, because every caller above is a hook or a render loop
 # that must not fail on a terminal that went away.
-import dataclasses
 import glob
-import json
 import os
 import stat
 import subprocess
@@ -67,25 +65,37 @@ class KittyRcResponse(BaseModel):
     data: str | None = None
 
 
-@dataclasses.dataclass(frozen=True)
-class SetTabColorRcPayload:
+class SetTabColorRcPayload(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     match: str
     colors: dict[str, int | None]
 
 
-@dataclasses.dataclass(frozen=True)
-class GetTextRcPayload:
+class GetTextRcPayload(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     match: str
     extent: str
     ansi: bool = False
 
 
-@dataclasses.dataclass(frozen=True)
-class LsRcPayload:
+class LsRcPayload(BaseModel):
     """The kitty `ls` command has no required payload fields."""
+
+    model_config = ConfigDict(frozen=True)
 
 
 KittyRcPayload = SetTabColorRcPayload | GetTextRcPayload | LsRcPayload
+
+
+class KittyRcCommand(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    cmd: str
+    version: tuple[int, int, int]
+    no_response: bool
+    payload: KittyRcPayload
 
 # The variable kitty exports into every process it starts in a window. Named
 # rather than inlined because a stdlib-only client observes its own window from
@@ -113,7 +123,7 @@ REMOTE_CONTROL_SOCKET_TIMEOUT_SECONDS = 0.5
 SEND_ENTER_DELAY_SECONDS = 0.15
 # The remote-control protocol version stamped into every @kitty-cmd command
 # (what a current kitten client sends; kitty accepts any version <= its own).
-KITTY_RC_VERSION = [0, 26, 0]
+KITTY_RC_VERSION = (0, 26, 0)
 # The @kitty-cmd socket framing: ESC P (DCS) + key + {json} + ESC \ (ST). The
 # reply, when requested, is framed the same way — locate its payload by the
 # key, not the DCS introducer (the reply may arrive mid-buffer).
@@ -334,18 +344,20 @@ class KittyRemote:
         # module — a top-level socket import would be paid by all of them.
         import socket  # noqa: PLC0415
 
-        obj = {
-            "cmd": cmd,
-            "version": KITTY_RC_VERSION,
-            "no_response": not want_response,
-            "payload": dataclasses.asdict(payload),
-        }
+        command = KittyRcCommand(
+            cmd=cmd,
+            version=KITTY_RC_VERSION,
+            no_response=not want_response,
+            payload=payload,
+        )
         try:
             s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             try:
                 s.settimeout(timeout)
                 s.connect(path)
-                s.sendall(RC_CMD_DCS + json.dumps(obj).encode("utf-8") + RC_ST)
+                s.sendall(
+                    RC_CMD_DCS + command.model_dump_json().encode("utf-8") + RC_ST
+                )
                 if not want_response:
                     return True
                 buf = b""

@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
+from typing import Protocol
 
+from audit.models import AuditDocument
 from audit.recorder import AuditRecorder
 from domain.entries import PlanProposedBody, QuestionAskedBody, SessionEntry
 from domain.events import PlanProposed, QuestionAsked
-from domain.ids import SessionId
-from harness.contract import HarnessReactorContext
+from domain.ids import RequestId, SessionId
+from harness.contract import HarnessController, HarnessReactorContext
 from harness.models import (
     AnswerQuestion,
     ApplyRewind,
@@ -32,14 +35,39 @@ from harness.models import (
     SelectEffort,
     SelectModel,
     SendText,
+    Session,
 )
 from harness.services.control_effects import ControlEffectRecorder
-from naming.renamer import SessionRenamer
-from naming.service import AutomaticSessionNamer
 from repository.contract.session_data import SessionDataRepository
 from repository.contract.sessions import SessionRepository
 from terminal.adapter import TerminalAdapter
 from terminal.contract import TerminalPlugin
+
+
+class ControlAudit(AuditDocument):
+    control: str
+    request_id: RequestId
+    status: str
+    reason: str
+    ms: int
+
+
+class AutomaticSessionNaming(Protocol):
+    def requested_name(
+        self,
+        session: Session,
+        request_id: RequestId,
+        _apply_title: Callable[[str], ControlOutcome],
+    ) -> ControlOutcome: ...
+
+
+class SessionRenaming(Protocol):
+    def rename(
+        self,
+        _harness_controller: HarnessController,
+        rename_session: RenameSession,
+        control_context: ControlContext,
+    ) -> ControlOutcome: ...
 
 
 # Every control gesture's OUTCOME, recorded at the one dispatch point every
@@ -75,13 +103,13 @@ def _audit_control(
             str(request.session_id),
             "",
             "control",
-            {
-                "control": getattr(request, "control_name", ""),
-                "request_id": request.request_id,
-                "status": outcome.status if outcome is not None else "raised",
-                "reason": (outcome.reason if outcome is not None else "") or "",
-                "ms": round(elapsed * 1000),
-            },
+            ControlAudit(
+                control=getattr(request, "control_name", ""),
+                request_id=request.request_id,
+                status=outcome.status if outcome is not None else "raised",
+                reason=(outcome.reason if outcome is not None else "") or "",
+                ms=round(elapsed * 1000),
+            ),
         )
     except Exception:
         # The one sanctioned silent swallow: this IS the recording path, so
@@ -100,8 +128,8 @@ class HarnessControlService(HarnessReactorContext):
         audit_recorder: AuditRecorder,
         interrupt_registry: InterruptRegistry,
         control_effect_recorder: ControlEffectRecorder,
-        automatic_session_namer: AutomaticSessionNamer,
-        session_renamer: SessionRenamer,
+        automatic_session_naming: AutomaticSessionNaming,
+        session_renaming: SessionRenaming,
     ) -> None:
         self.sessions = session_repository
         self.terminal = terminal_adapter
@@ -110,8 +138,8 @@ class HarnessControlService(HarnessReactorContext):
         self.audit = audit_recorder
         self.interrupts = interrupt_registry
         self.control_effects = control_effect_recorder
-        self.automatic_namer = automatic_session_namer
-        self.session_renamer = session_renamer
+        self.automatic_namer = automatic_session_naming
+        self.session_renamer = session_renaming
 
     # One typed public method per gesture — the request type IS the parameter,
     # so a caller never builds a bare `ControlRequest` and this class never

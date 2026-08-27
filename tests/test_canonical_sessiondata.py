@@ -1307,10 +1307,10 @@ def test_a_body_carrying_entry_folded_empty_writes_one_audit_row(tmp_path):
     assert [entry.entry_type for entry in entries] == ["message"]
     assert [where for where, _context in audit.failures] == ["entry fold (empty body)"]
     _where, context = audit.failures[0]
-    assert context["entry_id"] == str(entries[0].entry_id)
-    assert context["entry_type"] == "message"
-    assert context["event_type"] == "message.created"
-    assert context["session_id"] == str(SESSION)
+    assert context.entry_id == entries[0].entry_id
+    assert context.entry_type == "message"
+    assert context.event_type == "message.created"
+    assert context.session_id == SESSION
 
 
 def test_a_legitimately_empty_marker_writes_no_audit_row(tmp_path):

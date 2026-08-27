@@ -12,7 +12,12 @@ from audit.recorder import AuditRecorder
 from domain.ids import HarnessName
 from harness.models import UsageRow, UsageWindow, UsageWindowScope
 from inference import DefaultModelFactory, ModelPromptRequest, ModelUnavailableError
-from inference.default import CODEX_EXECUTABLE_VARIABLE, INTERNAL_MODEL_VARIABLE
+from inference.default import (
+    CODEX_EXECUTABLE_VARIABLE,
+    INTERNAL_MODEL_VARIABLE,
+    _ExecutableUnavailable,
+    _ModelUnavailableAudit,
+)
 from terminal.models import ScreenReadRequest, ScreenReadResponse, TabCloseRequest, TabCloseResponse
 from terminal.models import TabOpenRequest, TabOpenResponse
 from terminal.models.values import WindowId
@@ -318,10 +323,9 @@ def test_missing_executables_report_the_configuration_names() -> None:
         model_factory.small().send(ModelPromptRequest("name this", "session-one"))
 
     assert terminal.opened_tabs == []
-    context = cast(dict[str, object], audit.errors[0][2])
-    providers = cast(list[dict[str, str]], context["providers"])
-    assert providers[0] == {
-        "provider": "codex",
-        "status": "executable unavailable",
-        "configuration": CODEX_EXECUTABLE_VARIABLE,
-    }
+    context = cast(_ModelUnavailableAudit, audit.errors[0][2])
+    assert context.providers[0] == _ExecutableUnavailable(
+        provider=HarnessName.CODEX,
+        status="executable unavailable",
+        configuration=CODEX_EXECUTABLE_VARIABLE,
+    )

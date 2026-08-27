@@ -7,11 +7,9 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Mapping
 
-from pydantic import JsonValue
-
 from domain.events import CanonicalEvent, EventPayload, SessionFinished, SessionStarted
 from domain.records import RecordedTranslationDecision
-from audit.failures import CoalescingFailureRecorder
+from audit.failures import CoalescingFailureRecorder, FailureContext
 from audit.recorder import AuditRecorder
 from harness.contract import (
     CanonicalEventReaction,
@@ -174,21 +172,21 @@ class Interpreter:
     def _audit_failure(
         self,
         where: str,
-        context: dict[str, JsonValue],
+        failure_context: FailureContext,
     ) -> None:
         """Record a swallowed interpreter failure, then carry on.
 
         Guarded, so a broken auditor can never take down the interpreter it
         exists to explain.
         """
-        self.failures.record(where, context)
+        self.failures.record(where, failure_context)
 
     def run(self, stop_event: threading.Event) -> None:
         while not stop_event.is_set():
             try:
                 self.tick()
             except Exception:
-                self._audit_failure("tick", {})
+                self._audit_failure("tick", FailureContext())
             stop_event.wait(TICK_INTERVAL_SECONDS)
 
     def tick(self) -> None:
@@ -227,7 +225,7 @@ class Interpreter:
         try:
             output_source.expire(self.shell_output_repository, now)
         except Exception:
-            self._audit_failure("output expiry", {})
+            self._audit_failure("output expiry", FailureContext())
         else:
             self._last_expiration_at = now
 
@@ -253,7 +251,10 @@ class Interpreter:
                     PendingInterruptSource(session, self.interrupt_registry),
                 )
             except Exception:
-                self._audit_failure("source construction", {"session_id": str(session.session_id)})
+                self._audit_failure(
+                    "source construction",
+                    FailureContext(session_id=session.session_id),
+                )
                 continue
             batches.append(SessionSourceBatch(session, sources))
         identities = tuple(dict.fromkeys(
@@ -268,7 +269,7 @@ class Interpreter:
             for batch in batches:
                 self._audit_failure(
                     "resume positions",
-                    {"session_id": str(batch.session.session_id)},
+                    FailureContext(session_id=batch.session.session_id),
                 )
             return
         for batch in batches:
@@ -314,11 +315,13 @@ class Interpreter:
         except Exception:
             self._audit_failure(
                 "source read",
-                {
-                    "session_id": str(session.session_id),
-                    "source_identity": getattr(harness_raw_event_source, "source_identity", ""),
-                    "source": type(harness_raw_event_source).__name__,
-                },
+                FailureContext(
+                    session_id=session.session_id,
+                    source_identity=getattr(
+                        harness_raw_event_source, "source_identity", ""
+                    ),
+                    source=type(harness_raw_event_source).__name__,
+                ),
             )
 
     # --- translate: meaning decided, stored once, reacted to -------------------
@@ -360,10 +363,10 @@ class Interpreter:
                 except Exception:
                     self._audit_failure(
                         type(reaction).__name__,
-                        {
-                            "session_id": str(canonical_event.session_id),
-                            "event_id": str(canonical_event.event_id),
-                        },
+                        FailureContext(
+                            session_id=canonical_event.session_id,
+                            event_id=canonical_event.event_id,
+                        ),
                     )
         if any(
             isinstance(canonical_event.payload, SessionFinished)
@@ -378,5 +381,5 @@ class Interpreter:
                 except Exception:
                     self._audit_failure(
                         f"{name} memory release",
-                        {"session_id": str(raw_event.session_id)},
+                        FailureContext(session_id=raw_event.session_id),
                     )

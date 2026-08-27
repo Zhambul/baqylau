@@ -33,6 +33,7 @@ DELIVERY_TIMEOUT_SECONDS = 5.0
 # Answer Claude Code the same way whatever happens downstream: its exporter is
 # not our error channel.
 ACKNOWLEDGEMENT = b"{}"
+TELEMETRY_HEADERS = {_http.TELEMETRY_KIND_HEADER: "otlp"}
 
 # The daemon's address and the idle clock, module state rather than attributes
 # hung on the server: this process serves one thing and lives for one purpose.
@@ -48,7 +49,7 @@ def deliver(body: bytes) -> bool:
     return _daemon.post(
         _http.TELEMETRY_PATH % HARNESS,
         body,
-        {_http.TELEMETRY_KIND_HEADER: "otlp"},
+        TELEMETRY_HEADERS,
         host=DAEMON_HOST,
         port=DAEMON_PORT,
         timeout=DELIVERY_TIMEOUT_SECONDS,
@@ -56,7 +57,7 @@ def deliver(body: bytes) -> bool:
 
 
 class Receiver(BaseHTTPRequestHandler):
-    def log_message(self, format: str, *arguments: object) -> None:
+    def log_message(self, format: str, *arguments: str | int | float) -> None:
         del format, arguments                   # never write to a stream nobody reads
 
     def do_POST(self) -> None:                  # noqa: N802 — http.server's name

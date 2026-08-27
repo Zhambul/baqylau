@@ -45,6 +45,7 @@ from app.providers import (
     SessionDataStore,
 )
 from audit.recorder import AuditRecorder
+from audit.models import PathAudit, SessionAudit
 from domain.ids import SessionId
 from repository.contract.session_data import SessionDataRepository
 
@@ -143,7 +144,11 @@ async def _session_frames(
         # An SSE stream drives the whole view; it must not die silently. The
         # audit row is the trace, the error frame is the client's signal, and the
         # connection ends so the client reconnects.
-        audit_recorder.error(str(session_id), "session data stream", {"session_id": str(session_id)})
+        audit_recorder.error(
+            str(session_id),
+            "session data stream",
+            SessionAudit(session_id=session_id),
+        )
         yield sse_frame("error", ErrorFrame(error="stream failed"))
 
 
@@ -194,5 +199,7 @@ async def _global_frames(
     except (asyncio.CancelledError, GeneratorExit):
         raise
     except Exception:
-        audit_recorder.error("", "global stream", {"path": "/sessionData/stream"})
+        audit_recorder.error(
+            "", "global stream", PathAudit(path="/sessionData/stream")
+        )
         yield sse_frame("error", ErrorFrame(error="stream failed"))

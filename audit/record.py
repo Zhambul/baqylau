@@ -26,9 +26,7 @@ from __future__ import annotations
 
 from threading import Lock
 
-from pydantic import JsonValue
-
-from audit.models import StreamHandle
+from audit.models import AuditContent, StreamHandle
 from audit.recorder import AuditRecorder
 from domain.ids import ActorId, TaskId
 from repository.impl.sqlite.databases import audit_database
@@ -66,7 +64,7 @@ def enabled() -> bool:
 def error(
     session_or_log: str = "",
     func: str = "",
-    context: JsonValue = None,
+    context: AuditContent = None,
 ) -> None:
     recorder().error(session_or_log, func, context)
 
@@ -75,7 +73,7 @@ def state_file(
     log: str,
     path: str,
     action: str,
-    content: JsonValue = "",
+    content: AuditContent = "",
 ) -> None:
     recorder().state_file(log, path, action, content)
 

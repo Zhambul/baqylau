@@ -95,16 +95,15 @@ class ActorWriter(SessionDataWriter):
         event = canonical_event
         payload = event.payload
         if isinstance(payload, SessionFinished):
-            return aggregate_state.with_actors(
-                {
-                    actor_id: replace(
-                        actor,
-                        state=LifecycleState.FINISHED,
-                        finished_at=canonical_event.happened_at,
-                    )
-                    for actor_id, actor in dict(aggregate_state.actors).items()
-                }
-            )
+            finished_actors = {
+                actor_id: replace(
+                    actor,
+                    state=LifecycleState.FINISHED,
+                    finished_at=canonical_event.happened_at,
+                )
+                for actor_id, actor in aggregate_state.actors.items()
+            }
+            return aggregate_state.with_actors(finished_actors)
         if isinstance(payload, ActorStarted):
             existing = aggregate_state.actor(event.actor_id)
             born = ActorFacts(
@@ -173,9 +172,11 @@ class StatusWriter(SessionDataWriter):
         if isinstance(payload, SessionFinished):
             # The session is over: nobody is doing anything, and every actor
             # should say so rather than keep the last thing it was doing.
-            return aggregate_state.with_actors(
-                {actor_id: replace(actor, status=None) for actor_id, actor in dict(aggregate_state.actors).items()}
-            )
+            idle_actors = {
+                actor_id: replace(actor, status=None)
+                for actor_id, actor in aggregate_state.actors.items()
+            }
+            return aggregate_state.with_actors(idle_actors)
         actor = aggregate_state.actor(event.actor_id)
         if actor is None:
             return aggregate_state

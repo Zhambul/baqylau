@@ -34,6 +34,9 @@ from repository.mapper import audit as mapper
 from repository.model.sql import SqlValues
 
 
+EMPTY_ERROR_COUNTS: Mapping[SessionId, int] = {}
+
+
 def audit_enabled() -> bool:
     return os.environ.get("BAQYLAU_AUDIT", "1") != "0"
 
@@ -120,10 +123,11 @@ class SqliteAuditReadRepository(AuditReadRepository):
 
     def error_counts(self) -> Mapping[SessionId, int]:
         if not self.sqlite_database.exists():
-            return {}
+            return EMPTY_ERROR_COUNTS
         with self.sqlite_database.read() as connection:
             found = connection.execute(
                 "SELECT session_id, COUNT(*) AS error_count FROM errors "
                 "WHERE session_id != '' GROUP BY session_id"
             ).fetchall()
-        return {SessionId(row["session_id"]): int(row["error_count"]) for row in found}
+        counts = {SessionId(row["session_id"]): int(row["error_count"]) for row in found}
+        return counts

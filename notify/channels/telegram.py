@@ -40,7 +40,12 @@ from pydantic import BaseModel, ConfigDict
 
 from audit import record as A
 from domain.ids import SessionId
-from notify.channels.alert import FAILED, GONE, NOTHING, OK, PENDING, alert_text
+from notify.audit import (
+    NotificationSessionAudit,
+    TelegramRetractionAudit,
+    TelegramSendAudit,
+)
+from notify.channels.alert import Alert, FAILED, GONE, NOTHING, OK, PENDING, alert_text
 from repository.contract.preferences import (
     PushSigningKeyRepository,
     PushSubscriptionRepository,
@@ -270,7 +275,7 @@ def delete_message(chat: int | str | None, message_id: int | None) -> Result:
 # ------------------------------------------------ the alert this channel carries
 
 def send_alert(
-    entry: dict[str, str],
+    alert: Alert,
     reason: str | None = None,
 ) -> TelegramHandle | None:
     """Send the deferred alert to Telegram. `reason` (in the audit row) says WHY
@@ -281,7 +286,7 @@ def send_alert(
 
     The Bot API call runs on a daemon thread and its `message_id` lands in the
     returned retractable handle. An unconfigured channel returns None."""
-    head, title, url = alert_text(entry)
+    head, title, url = alert_text(alert)
     msg = "%s — %s\n%s" % (head, title, url)
     if not enabled():
         return None
@@ -289,10 +294,10 @@ def send_alert(
     # watcher must not block on a round-trip and a retraction can beat the send
     # home. `msg_id` None + `done` False is exactly the PENDING state retract()
     # reads.
-    raw_session_id = entry.get("session_id")
     telegram_handle = TelegramHandle(
-        session_id=SessionId(raw_session_id) if raw_session_id is not None else None,
-        kind=entry.get("kind"))
+        session_id=alert.session_id,
+        kind=alert.kind,
+    )
     threading.Thread(target=_telegram_send_body, args=(telegram_handle, msg, reason),
                      daemon=True).start()
     return telegram_handle
@@ -310,19 +315,30 @@ def _telegram_send_body(
     try:
         res = send_message(msg)
     except Exception:
-        A.error("", "dashboard telegram notify", {"session_id": telegram_handle.session_id})
+        A.error(
+            "",
+            "dashboard telegram notify",
+            NotificationSessionAudit(session_id=telegram_handle.session_id),
+        )
         telegram_handle.done = True
         return
     if res.ok:
         telegram_handle.chat, telegram_handle.msg_id = res.chat, res.message_id
-    A.state_file("", "", "telegram-notify",
-                 {"session_id": telegram_handle.session_id, "kind": telegram_handle.kind, "reason": reason,
-                  "ok": res.ok, "status": res.status, "error": res.error,
-                  # the retraction contract, recorded at the send: an alert with
-                  # retractable=False can never be taken back, and this row is
-                  # the only place that says so.
-                  "retractable": bool(res.ok and res.message_id),
-                  "message_id": res.message_id})
+    A.state_file(
+        "",
+        "",
+        "telegram-notify",
+        TelegramSendAudit(
+            session_id=telegram_handle.session_id,
+            kind=telegram_handle.kind,
+            reason=reason,
+            ok=res.ok,
+            status=res.status,
+            error=res.error,
+            retractable=bool(res.ok and res.message_id),
+            message_id=res.message_id,
+        ),
+    )
     telegram_handle.done = True
 
 
@@ -368,21 +384,25 @@ def _telegram_delete_body(telegram_handle: TelegramHandle) -> None:
     try:
         res = delete_message(telegram_handle.chat, telegram_handle.msg_id)
     except Exception:
-        A.error("", "dashboard telegram retract", {"session_id": telegram_handle.session_id})
+        A.error(
+            "",
+            "dashboard telegram retract",
+            NotificationSessionAudit(session_id=telegram_handle.session_id),
+        )
         telegram_handle.retry_at = time.monotonic() + RETRACTION_RETRY_SECONDS
         telegram_handle.outcome = FAILED
         A.state_file(
             "",
             "",
             "telegram-retract",
-            {
-                "session_id": telegram_handle.session_id,
-                "kind": telegram_handle.kind,
-                "message_id": telegram_handle.msg_id,
-                "outcome": FAILED,
-                "status": 0,
-                "error": "exception",
-            },
+            TelegramRetractionAudit(
+                session_id=telegram_handle.session_id,
+                kind=telegram_handle.kind,
+                message_id=telegram_handle.msg_id,
+                outcome=FAILED,
+                status=0,
+                error="exception",
+            ),
         )
         return
     outcome = OK if res.ok else (GONE if res.gone else FAILED)
@@ -393,12 +413,12 @@ def _telegram_delete_body(telegram_handle: TelegramHandle) -> None:
         "",
         "",
         "telegram-retract",
-        {
-            "session_id": telegram_handle.session_id,
-            "kind": telegram_handle.kind,
-            "message_id": telegram_handle.msg_id,
-            "outcome": outcome,
-            "status": res.status,
-            "error": res.error,
-        },
+        TelegramRetractionAudit(
+            session_id=telegram_handle.session_id,
+            kind=telegram_handle.kind,
+            message_id=telegram_handle.msg_id,
+            outcome=outcome,
+            status=res.status,
+            error=res.error,
+        ),
     )

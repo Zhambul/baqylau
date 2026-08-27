@@ -19,15 +19,22 @@ from domain.ids import HarnessName
 from domain.values import ModelReference
 
 
+EMPTY_DISPLAY_BY_HARNESS: Mapping[
+    HarnessName, Callable[[ModelReference], str]
+] = {}
+
+
 class ModelNaming:
     """The per-harness namers, with the honest fallback for harnesses that
     declare none: the display the source gave, or the native id."""
 
     def __init__(
         self,
-        display_by_harness: Mapping[str, Callable[[ModelReference], str]] | None = None,
+        display_by_harness: Mapping[
+            HarnessName, Callable[[ModelReference], str]
+        ] | None = None,
     ) -> None:
-        self.display_by_harness = dict(display_by_harness or {})
+        self.display_by_harness = display_by_harness or EMPTY_DISPLAY_BY_HARNESS
 
     def display(self, harness: HarnessName, model_reference: ModelReference) -> str:
         namer = self.display_by_harness.get(harness)

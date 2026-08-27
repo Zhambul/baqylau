@@ -27,9 +27,7 @@ import time
 from collections.abc import Mapping
 from typing import Callable, Final
 
-from pydantic import JsonValue
-
-from audit.failures import CoalescingFailureRecorder
+from audit.failures import CoalescingFailureRecorder, FailureContext
 from audit.recorder import AuditRecorder
 from domain.entries import (
     BrowserBody,
@@ -136,7 +134,7 @@ class ReactionLoop:
             try:
                 self.tick()
             except Exception:
-                self._audit_failure("tick", {})
+                self._audit_failure("tick", FailureContext())
             stop_event.wait(TICK_INTERVAL_SECONDS)
 
     def tick(self) -> int:
@@ -255,11 +253,11 @@ class ReactionLoop:
     def _audit_failure(
         self,
         where: str,
-        context: dict[str, JsonValue],
+        failure_context: FailureContext,
     ) -> None:
         """Record a swallowed failure, then carry on. Guarded, so a broken
         auditor can never take down the loop it exists to explain."""
-        self.failures.record(where, context)
+        self.failures.record(where, failure_context)
 
     def _audit_empty_body(
         self, canonical_event: CanonicalEvent[EventPayload], session_entry: SessionEntry
@@ -280,12 +278,14 @@ class ReactionLoop:
         content = _content_field(session_entry.body)
         if content is None or content_text(content).strip() != "":
             return
-        context = {
-            **_context(canonical_event),
-            "entry_id": str(session_entry.entry_id),
-            "entry_type": session_entry.entry_type,
-            "event_type": EVENT_TYPES[type(canonical_event.payload)],
-        }
+        context = FailureContext(
+            session_id=canonical_event.session_id,
+            event_id=canonical_event.event_id,
+            cursor=canonical_event.cursor,
+            entry_id=session_entry.entry_id,
+            entry_type=session_entry.entry_type,
+            event_type=EVENT_TYPES[type(canonical_event.payload)],
+        )
         try:
             self.audit.error(
                 str(canonical_event.session_id), "entry fold (empty body)", context
@@ -296,12 +296,12 @@ class ReactionLoop:
 
 def _context(
     canonical_event: CanonicalEvent[EventPayload],
-) -> dict[str, JsonValue]:
-    return {
-        "session_id": str(canonical_event.session_id),
-        "event_id": str(canonical_event.event_id),
-        "cursor": canonical_event.cursor,
-    }
+) -> FailureContext:
+    return FailureContext(
+        session_id=canonical_event.session_id,
+        event_id=canonical_event.event_id,
+        cursor=canonical_event.cursor,
+    )
 
 
 def _state(
@@ -310,10 +310,8 @@ def _state(
     stored = session_data_repository.read(session_id)
     if stored is None:
         return AggregateState()
-    return AggregateState(
-        session=stored.session,
-        actors={actor.actor_id: actor for actor in stored.actors},
-    )
+    actors = {actor.actor_id: actor for actor in stored.actors}
+    return AggregateState(session=stored.session, actors=actors)
 
 
 def _changed_actors(
@@ -322,6 +320,6 @@ def _changed_actors(
     known = dict(before_aggregate_state.actors)
     return tuple(
         actor
-        for actor_id, actor in dict(after_aggregate_state.actors).items()
+        for actor_id, actor in after_aggregate_state.actors.items()
         if known.get(actor_id) != actor
     )

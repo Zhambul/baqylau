@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
 from typing import Mapping
 
-from pydantic import JsonValue
-
-from audit.models import StateFileRecord
+from audit.models import AuditDocument, StateFileRecord
 from domain.ids import ClientId, DeviceId, SessionId
 from repository.contract.audit import AuditWriteRepository
 from repository.mapper import audit as mapper
@@ -17,8 +14,7 @@ from repository.mapper import audit as mapper
 Scalar = str | int | float | bool | None
 
 
-@dataclass(frozen=True)
-class OptimisticActionReport:
+class OptimisticActionReport(AuditDocument):
     session_id: SessionId
     action: str
     phase: str
@@ -27,8 +23,7 @@ class OptimisticActionReport:
     reason: str | None
 
 
-@dataclass(frozen=True)
-class ClientFailureReport:
+class ClientFailureReport(AuditDocument):
     session_id: SessionId
     gesture: str
     failure_kind: str
@@ -37,20 +32,28 @@ class ClientFailureReport:
     character_count: int | None
 
 
-@dataclass(frozen=True)
-class BrowserEvent:
+class BrowserEvent(AuditDocument):
     session_id: SessionId | None
     name: str
     timestamp: int | None
     details: Mapping[str, Scalar]
 
 
-@dataclass(frozen=True)
-class BrowserEventBatch:
+class BrowserEventBatch(AuditDocument):
     client_id: ClientId
     device_id: DeviceId
     connection: Mapping[str, Scalar]
     events: tuple[BrowserEvent, ...]
+
+
+class BrowserEventAudit(AuditDocument):
+    client_id: ClientId
+    device_id: DeviceId
+    session_id: SessionId | None
+    name: str
+    details: Mapping[str, Scalar]
+    connection: Mapping[str, Scalar]
+    timestamp: int | None
 
 
 class BrowserTelemetryService:
@@ -60,13 +63,13 @@ class BrowserTelemetryService:
         self.audit_write_repository = audit_write_repository
         self.process_id = process_id
 
-    def _record(self, action: str, content: Mapping[str, JsonValue]) -> None:
+    def _record(self, action: str, audit_document: AuditDocument) -> None:
         self.audit_write_repository.record_state_file(
             StateFileRecord(
                 session_id=SessionId(""),
                 path="",
                 action=action,
-                content=mapper.truncated(dict(content)),
+                content=mapper.truncated(audit_document),
                 script="dashboard",
                 process_id=self.process_id,
                 timestamp=time.time(),
@@ -74,43 +77,22 @@ class BrowserTelemetryService:
         )
 
     def record_optimistic_action(self, optimistic_action_report: OptimisticActionReport) -> None:
-        content: dict[str, JsonValue] = {
-            "session_id": str(optimistic_action_report.session_id),
-            "action": optimistic_action_report.action,
-            "phase": optimistic_action_report.phase,
-        }
-        if optimistic_action_report.character_count is not None:
-            content["character_count"] = optimistic_action_report.character_count
-        if optimistic_action_report.elapsed_milliseconds is not None:
-            content["elapsed_milliseconds"] = optimistic_action_report.elapsed_milliseconds
-        if optimistic_action_report.reason:
-            content["reason"] = optimistic_action_report.reason
-        self._record("browser-optimistic-action", content)
+        self._record("browser-optimistic-action", optimistic_action_report)
 
     def record_client_failure(self, client_failure_report: ClientFailureReport) -> None:
-        content: dict[str, JsonValue] = {
-            "session_id": str(client_failure_report.session_id),
-            "gesture": client_failure_report.gesture,
-            "failure_kind": client_failure_report.failure_kind,
-        }
-        if client_failure_report.error:
-            content["error"] = client_failure_report.error
-        if client_failure_report.status_code is not None:
-            content["status_code"] = client_failure_report.status_code
-        if client_failure_report.character_count is not None:
-            content["character_count"] = client_failure_report.character_count
-        self._record("browser-client-failure", content)
+        self._record("browser-client-failure", client_failure_report)
 
     def record_events(self, browser_event_batch: BrowserEventBatch) -> None:
         for event in browser_event_batch.events:
-            content: dict[str, JsonValue] = {
-                "client_id": browser_event_batch.client_id,
-                "device_id": browser_event_batch.device_id,
-                "session_id": str(event.session_id) if event.session_id else "",
-                "name": event.name,
-                "details": dict(event.details),
-                "connection": dict(browser_event_batch.connection),
-            }
-            if event.timestamp is not None:
-                content["timestamp"] = event.timestamp
-            self._record("browser-event", content)
+            self._record(
+                "browser-event",
+                BrowserEventAudit(
+                    client_id=browser_event_batch.client_id,
+                    device_id=browser_event_batch.device_id,
+                    session_id=event.session_id,
+                    name=event.name,
+                    details=event.details,
+                    connection=browser_event_batch.connection,
+                    timestamp=event.timestamp,
+                ),
+            )

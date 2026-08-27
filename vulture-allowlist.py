@@ -76,6 +76,23 @@ clientInfo  # codex usage JSON-RPC request field, read by pydantic serialization
 jsonrpc     # codex usage JSON-RPC envelope field, read by pydantic serialization
 account_name  # Claude status-line field read by pydantic serialization
 
+# Closed boundary and audit models. These fields are read by Pydantic when it
+# writes JSON or by the remote API that reads that JSON.
+why             # rejected input and pane-command audit detail
+rate            # dictation audit rate
+payload_base64  # raw-event audit output
+payload_bytes   # harness audit input size
+ttl_seconds     # Deepgram grant response
+control         # control audit gesture name
+ms              # control audit duration
+channel         # notification retraction audit
+age_seconds     # notification retraction audit
+retractable     # Telegram send audit
+typ             # VAPID JWT header
+alg             # VAPID JWT header
+exp             # VAPID JWT claim
+no_response     # kitty remote-control request
+
 # FileMarker is compared as one dataclass value. Dataclass equality reads these
 # generated fields, which static name analysis cannot see.
 inode        # harness/file_tail.py FileMarker
@@ -228,6 +245,7 @@ toolDenialKind                      # UserRecord
 turnCompanion                       # UserRecord
 userFeedback                        # UserRecord
 imagePasteIds                       # UserRecord
+queueSkipAttachments                # UserRecord task-notification delivery flag
 isAbortedMidStream                  # AssistantRecord
 isApiErrorMessage                   # AssistantRecord
 apiErrorStatus                      # AssistantRecord

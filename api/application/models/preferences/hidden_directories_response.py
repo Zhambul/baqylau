@@ -1,6 +1,8 @@
 # The updated hidden-directory map.
+from collections.abc import Mapping
+
 from pydantic import BaseModel
 
 
 class HiddenDirectoriesResponse(BaseModel):
-    hidden: dict[str, float]
+    hidden: Mapping[str, float]

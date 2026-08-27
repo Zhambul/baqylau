@@ -178,6 +178,10 @@ from harness.registry import HarnessRegistry
 from domain.events import ShellOutputLocated
 
 
+def _encoded_event(event):
+    return mapper.canonical_event_values(event, 0.0)
+
+
 class _QuietLiveness:
     """Liveness has its own contract tests; here it must not finish fixture sessions."""
 
@@ -2854,7 +2858,7 @@ def test_every_pane_command_method_writes_exactly_one_audit_row_through_one_core
         assert len(rows) == before + 1
         action, content = rows[-1]
         assert action == "pane-command"
-        assert content["ok"] is True
+        assert content.ok is True
 
 
 def test_claude_hook_and_child_transcript_deduplicate_actor_start():
@@ -2890,7 +2894,7 @@ def test_claude_hook_and_child_transcript_deduplicate_actor_start():
     hook_start = ClaudeCanonicalTranslator().translate(hook).canonical_events[0]
     transcript_start = ClaudeCanonicalTranslator().translate(transcript_record).canonical_events[0]
 
-    assert mapper.encode_canonical_event(hook_start) == mapper.encode_canonical_event(transcript_start)
+    assert _encoded_event(hook_start) == _encoded_event(transcript_start)
 
 
 def test_claude_subagent_stop_hook_finishes_the_actor():
@@ -2977,7 +2981,7 @@ def test_claude_later_teammate_message_reuses_the_canonical_actor_start():
     first_start = translator.translate(first_record).canonical_events[0]
     later_start = translator.translate(later_message).canonical_events[0]
 
-    assert mapper.encode_canonical_event(first_start) == mapper.encode_canonical_event(later_start)
+    assert _encoded_event(first_start) == _encoded_event(later_start)
 
 
 def test_claude_lead_start_uses_the_first_root_record_with_a_working_directory():
@@ -3016,8 +3020,8 @@ def test_claude_lead_start_uses_the_first_root_record_with_a_working_directory()
     )
 
     assert plumbing.decision == "ignored_nonsemantic"
-    assert [mapper.encode_canonical_event(event) for event in root_record.canonical_events[:2]] == [
-        mapper.encode_canonical_event(event) for event in hook.canonical_events
+    assert [_encoded_event(event) for event in root_record.canonical_events[:2]] == [
+        _encoded_event(event) for event in hook.canonical_events
     ]
 
 
@@ -10619,7 +10623,7 @@ def test_claude_hook_and_transcript_produce_identical_tool_start_facts():
             observed_at=200.0,
         )
     )
-    assert mapper.encode_canonical_event(payloads(hook, ShellStarted)[0]) == mapper.encode_canonical_event(
+    assert _encoded_event(payloads(hook, ShellStarted)[0]) == _encoded_event(
         payloads(transcript, ShellStarted)[0]
     )
 
@@ -10768,7 +10772,7 @@ def test_claude_file_facts_converge_from_either_evidence_stream():
         )
     )
 
-    assert mapper.encode_canonical_event(payloads(hook, FileAccessed)[0]) == mapper.encode_canonical_event(
+    assert _encoded_event(payloads(hook, FileAccessed)[0]) == _encoded_event(
         payloads(transcript, FileAccessed)[0]
     )
     assert payloads(hook, FileAccessed)[0].payload.content.text == "print(1)\n"
@@ -10876,7 +10880,7 @@ def test_claude_hook_and_transcript_tool_finish_deduplicate_transactionally(tmp_
     assert translator._toolcalls.calls == {}
     hook_finished = payloads(hook, ShellFinished)[0]
     transcript_finished = payloads(transcript, ShellFinished)[0]
-    assert mapper.encode_canonical_event(hook_finished) == mapper.encode_canonical_event(transcript_finished)
+    assert _encoded_event(hook_finished) == _encoded_event(transcript_finished)
 
     store = CanonicalRuntime(str(tmp_path / "main.db"))
     store.register(
@@ -10962,7 +10966,7 @@ def test_claude_failed_shell_exit_code_converges_from_hook_and_transcript():
     hook_finished = payloads(hook, ShellFinished)[0]
     transcript_finished = payloads(transcript, ShellFinished)[0]
     assert hook_finished.payload.exit_code == 7
-    assert mapper.encode_canonical_event(hook_finished) == mapper.encode_canonical_event(transcript_finished)
+    assert _encoded_event(hook_finished) == _encoded_event(transcript_finished)
 
 
 def test_claude_question_preserves_multiple_prompts_and_multiselect():

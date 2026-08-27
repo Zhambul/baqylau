@@ -6,7 +6,7 @@ import time
 
 from pytest_bdd import parsers, then, when
 
-from sdk.client import BaqylauClient, QuestionDraftAnswer, wait_for
+from sdk.client import BaqylauClient, QuestionAnswer, wait_for
 from tests.e2e.testkit.references import Questions, Sessions
 
 
@@ -71,7 +71,7 @@ def save_question_draft(
     client.preferences.save_question_draft(
         reference.session,
         attention_id=reference.attention_id,
-        answers=(QuestionDraftAnswer((option,), text),),
+        answers=(QuestionAnswer((option,), text),),
         origin="e2e",
     )
 

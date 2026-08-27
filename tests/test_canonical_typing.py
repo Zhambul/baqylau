@@ -174,18 +174,15 @@ def test_a_type_ignore_names_the_error_it_silences():
 # something else on it changes. Both together mean a reader sees WHY the
 # instant they look at the line, and the list stays the single place that
 # says how many such spots remain.
-LOOSE_ANNOTATION_PACKAGES = (
-    "api",
-    "app",
-    "audit",
-    "core",
-    "dashboard",
-    "domain",
-    "engine",
-    "harness",
-    "notify",
-    "repository",
-    "terminal",
+LOOSE_ANNOTATION_PACKAGES = tuple(
+    sorted(
+        {
+            path.parent.name
+            for path in ROOT.glob("*/__init__.py")
+            if path.parent.name != "tests"
+        }
+        | {"bin", "client"}
+    )
 )
 
 LOOSE_ANNOTATION_ALLOWED: frozenset[str] = frozenset()

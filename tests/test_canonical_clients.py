@@ -92,6 +92,13 @@ OUR_PACKAGES = (
     "engine", "harness", "notify", "repository", "terminal",
 )
 
+CLIENT_DEPENDENCIES = {
+    "_handoff.py": {"pydantic"},
+    "_model.py": {"pydantic"},
+    "terminal_keys.py": {"pydantic"},
+    "terminal_pane.py": {"pydantic"},
+}
+
 
 def imported_names(path: Path):
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -139,7 +146,11 @@ def test_clients_import_only_the_standard_library_and_their_siblings():
     for path in sorted(CLIENT.glob("*.py")):
         for imported in imported_names(path):
             root = imported.split(".")[0]
-            if root in sys.stdlib_module_names or root in siblings:
+            if (
+                root in sys.stdlib_module_names
+                or root in siblings
+                or root in CLIENT_DEPENDENCIES.get(path.name, set())
+            ):
                 continue
             violations.append(f"{path.name} imports {imported}")
     assert violations == []
@@ -880,8 +891,9 @@ def test_the_pane_folds_a_command_and_paints_it_at_its_own_width():
     # about whether the entry is held.
     def prompt_ids():
         return [
-            item["entry_id"] for item in model.feed()
-            if not isinstance(item, model_module.ShellFold) and item["type"] == "message"
+            item.entry_id
+            for item in model.feed()
+            if not isinstance(item, model_module.ShellFold) and item.type == "message"
         ]
 
     model.apply_page({"items": [prompt("8", "parent-1"), prompt("9", "parent-1")]})

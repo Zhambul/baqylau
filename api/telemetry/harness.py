@@ -10,6 +10,7 @@ from starlette.requests import ClientDisconnect
 from api.common.models.fields import HarnessNamePath
 from api.common.models.replies.recorded_response import RecordedResponse
 from app.providers import TelemetryGateway, Recorder
+from audit.models import HarnessErrorAudit, HarnessInputAudit
 from domain.ids import HarnessName
 from harness.models import TELEMETRY_KIND_HEADER, HarnessTelemetryRequest
 from harness.services.telemetry import UnknownTelemetryHarness
@@ -43,20 +44,42 @@ async def record_telemetry_delivery(
         payload=payload,
     )
     try:
+        harness_name = HarnessName(harness)
+    except ValueError as error:
+        audit.error(
+            "",
+            "telemetry delivery",
+            HarnessInputAudit(
+                value=harness,
+                kind=delivery.kind,
+                error=repr(error),
+                payload_bytes=len(payload),
+            ),
+        )
+        return RecordedResponse(recorded=False)
+    try:
         # On a worker thread, like the hook endpoint beside it: `record` writes
         # to the store, and this handler is `async` (it awaits the raw body), so
         # a direct call would do that write on the event loop and stall every
         # open stream with it.
-        await run_in_threadpool(gateway.record, HarnessName(harness), delivery)
+        await run_in_threadpool(gateway.record, harness_name, delivery)
     except UnknownTelemetryHarness as error:
-        audit.error("", "telemetry delivery", {"harness": harness, "error": str(error)})
+        audit.error(
+            "",
+            "telemetry delivery",
+            HarnessErrorAudit(harness=harness_name, error=str(error)),
+        )
         return RecordedResponse(recorded=False)
     except (KeyError, TypeError, ValueError, RepositoryError) as error:
-        audit.error("", "telemetry delivery", {
-            "harness": harness,
-            "kind": delivery.kind,
-            "error": repr(error),
-            "payload_bytes": len(payload),
-        })
+        audit.error(
+            "",
+            "telemetry delivery",
+            HarnessErrorAudit(
+                harness=harness_name,
+                kind=delivery.kind,
+                error=repr(error),
+                payload_bytes=len(payload),
+            ),
+        )
         return RecordedResponse(recorded=False)
     return RecordedResponse()

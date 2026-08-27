@@ -28,15 +28,17 @@
 # exclusive flock for its whole life, and the handler signals only when it CANNOT
 # take that lock. A lock nobody holds is a pane that is gone.
 #
-# Import-pure and stdlib-only, like everything in this directory.
+# Import-pure. The pane process uses Pydantic for this file boundary.
 from __future__ import annotations
 
 import fcntl
-import json
 import os
 import signal
 import tempfile
-from typing import Any, IO
+from collections.abc import Mapping
+from typing import IO, TypeVar
+
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 # The uid is in the NAME, not in a directory mode: on a shared /tmp two people
 # running this must not collide, and a name is checked by the filesystem for
@@ -53,6 +55,21 @@ REPAINT_SIGNAL = signal.SIGUSR1
 # cannot turn every repaint into a multi-megabyte write; a clipboard nobody can
 # read past the first screenful loses nothing real.
 TARGET_LIMIT = 256 * 1024
+
+T = TypeVar("T", bound=BaseModel)
+
+
+class PaneDocument(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    pid: int
+    targets: Mapping[str, str]
+
+
+class ViewDocument(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    opened: tuple[str, ...]
 
 
 def _path(template: str, session_id: str, kind: str) -> str:
@@ -108,25 +125,24 @@ def hold(session_id: str, kind: str) -> bool:
     return True
 
 
-def _read(path: str) -> dict[str, Any]:
+def _read(path: str, model: type[T]) -> T | None:
     """Whatever is there, or nothing. A missing file means the pane is not
     running; a malformed one means it was mid-write. Both are "nothing yet",
     and neither is worth failing a click over."""
     try:
-        with open(path, encoding="utf-8") as source:
-            document: dict[str, Any] = json.load(source)
-            return document
-    except (OSError, ValueError):
-        return {}
+        with open(path, "rb") as source:
+            return model.model_validate_json(source.read())
+    except (OSError, ValidationError):
+        return None
 
 
-def _write(path: str, document: dict[str, Any]) -> None:
+def _write(path: str, document: BaseModel) -> None:
     """Write, then rename. The rename is atomic, so a reader either sees the
     previous whole file or the next one — never half of either."""
     temporary = "%s.%d.tmp" % (path, os.getpid())
     try:
         with open(temporary, "w", encoding="utf-8") as sink:
-            json.dump(document, sink)
+            sink.write(document.model_dump_json())
         os.replace(temporary, path)
     except OSError:
         # The handoff is a convenience; a pane that cannot write it still paints.
@@ -136,32 +152,30 @@ def _write(path: str, document: dict[str, Any]) -> None:
             pass
 
 
-def publish(session_id: str, kind: str, targets: dict[str, str]) -> None:
+def publish(session_id: str, kind: str, targets: Mapping[str, str]) -> None:
     """The pane says what is on screen and where to find it."""
     os.umask(0o077)
-    _write(pane_path(session_id, kind), {
-        "pid": os.getpid(),
-        "targets": {
-            name: text[:TARGET_LIMIT] for name, text in targets.items()
-        },
-    })
+    published_targets = {
+        name: text[:TARGET_LIMIT] for name, text in targets.items()
+    }
+    _write(
+        pane_path(session_id, kind),
+        PaneDocument(pid=os.getpid(), targets=published_targets),
+    )
 
 
 def target(session_id: str, kind: str, name: str) -> str | None:
     """The text behind one copy link, as the pane last published it."""
-    found = _read(pane_path(session_id, kind)).get("targets")
-    if not isinstance(found, dict):
+    found = _read(pane_path(session_id, kind), PaneDocument)
+    if found is None:
         return None
-    text = found.get(name)
-    return text if isinstance(text, str) else None
+    return found.targets.get(name)
 
 
 def opened(session_id: str, kind: str) -> frozenset[str]:
     """Which entries the reader has expanded."""
-    found = _read(view_path(session_id, kind)).get("opened")
-    if not isinstance(found, list):
-        return frozenset()
-    return frozenset(value for value in found if isinstance(value, str))
+    found = _read(view_path(session_id, kind), ViewDocument)
+    return frozenset() if found is None else frozenset(found.opened)
 
 
 def toggle(session_id: str, kind: str, entry_id: str) -> bool:
@@ -173,7 +187,7 @@ def toggle(session_id: str, kind: str, entry_id: str) -> bool:
     else:
         current.discard(entry_id)
     os.umask(0o077)
-    _write(view_path(session_id, kind), {"opened": sorted(current)})
+    _write(view_path(session_id, kind), ViewDocument(opened=tuple(sorted(current))))
     return became
 
 
@@ -186,11 +200,11 @@ def wake(session_id: str, kind: str) -> bool:
     """
     if not _pane_is_running(session_id, kind):
         return False
-    pid = _read(pane_path(session_id, kind)).get("pid")
-    if not isinstance(pid, int):
+    found = _read(pane_path(session_id, kind), PaneDocument)
+    if found is None:
         return False
     try:
-        os.kill(pid, REPAINT_SIGNAL)
+        os.kill(found.pid, REPAINT_SIGNAL)
     except OSError:
         return False              # it exited between the two checks
     return True

@@ -99,8 +99,8 @@ def _serve(policy: Policy, name: str, version: str) -> Response:
     # Unversioned files, index.html, and sw.js stay no-store.
     expected_version = _content_version(data).decode("ascii")
     cache = policy.cache_static if version and version == expected_version else "no-store"
-    return Response(content=data, media_type=content_type,
-                    headers={"Cache-Control": cache})
+    headers = {"Cache-Control": cache}
+    return Response(content=data, media_type=content_type, headers=headers)
 
 
 def _serve_build(policy: Policy, asset_name: str) -> Response:
@@ -114,10 +114,11 @@ def _serve_build(policy: Policy, asset_name: str) -> Response:
         raise HTTPException(404, "not found") from error
     except OSError as error:
         raise HTTPException(500, "unreadable") from error
+    headers = {"Cache-Control": policy.cache_static}
     return Response(
         content=data,
         media_type=content_type,
-        headers={"Cache-Control": policy.cache_static},
+        headers=headers,
     )
 
 

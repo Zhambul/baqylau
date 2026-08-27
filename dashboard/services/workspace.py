@@ -14,7 +14,7 @@ being pending.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -199,17 +199,20 @@ class SessionApplicationService:
         data = self.session_data_repository.read(session_id)
         return () if data is None else data.session.tasks
 
-    def _pending_questions(self, session_id: SessionId) -> dict[AttentionId, tuple[AttentionPrompt, ...]]:
+    def _pending_questions(
+        self, session_id: SessionId
+    ) -> Mapping[AttentionId, tuple[AttentionPrompt, ...]]:
         """The questions still waiting on a person, by attention.
 
         A plan is pending attention too, but it carries no questions to answer —
         a dialog draft against one would have nothing to hold.
         """
-        return {
+        pending_questions = {
             entry.body.attention_id: entry.body.questions
             for entry in self.session_data_repository.pending_attention(session_id)
             if isinstance(entry.body, QuestionAskedBody)
         }
+        return pending_questions
 
 def _prompt_matches(queued_text: str, delivered_text: str) -> bool:
     normalized = queued_text.strip()

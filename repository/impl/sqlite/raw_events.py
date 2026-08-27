@@ -18,6 +18,7 @@ _INSERT_COLUMNS = (
     "observed_at, encoding, payload, payload_codec, terminal_window_id, "
     "harness_process_id, account_id, account_display_name"
 )
+EMPTY_POSITIONS: Mapping[str, str] = {}
 
 
 class SqliteRawEventRepository(RawEventRepository):
@@ -72,7 +73,7 @@ class SqliteRawEventRepository(RawEventRepository):
 
     def latest_positions(self, source_identities: Sequence[str]) -> Mapping[str, str]:
         if not source_identities:
-            return {}
+            return EMPTY_POSITIONS
         placeholders = ",".join("?" for _identity in source_identities)
         with self.sqlite_database.read() as connection:
             # MAX(id) picks the last recorded event per source, and the join
@@ -86,4 +87,5 @@ class SqliteRawEventRepository(RawEventRepository):
                 "JOIN raw_events ON raw_events.id = latest.id",
                 tuple(source_identities),
             ).fetchall()
-        return {row["source_identity"]: row["source_position"] for row in found}
+        positions = {row["source_identity"]: row["source_position"] for row in found}
+        return positions

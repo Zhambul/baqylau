@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TypeAlias
@@ -224,7 +225,7 @@ class StructuredContent:
         a `str | None`, not a parsed document to pick through.
         """
         document = json.loads(self.json_text)
-        if isinstance(document, dict) and isinstance(document.get(name), str):
+        if isinstance(document, Mapping) and isinstance(document.get(name), str):
             value: str = document[name]
             return value
         return None

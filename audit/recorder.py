@@ -17,11 +17,11 @@ import sys
 import time
 import traceback
 
-from pydantic import JsonValue
-
 from audit.models import (
+    AuditContent,
     ApplicationErrorRecord,
     SpawnRecord,
+    SpawnArguments,
     StateFileRecord,
     StreamHandle,
     StreamOpened,
@@ -45,7 +45,7 @@ class AuditRecorder:
         self,
         session_or_log: str = "",
         func: str = "",
-        context: JsonValue = None,
+        context: AuditContent = None,
     ) -> None:
         self.audit_write_repository.record_error(
             ApplicationErrorRecord(
@@ -64,7 +64,7 @@ class AuditRecorder:
         log: str,
         path: str,
         action: str,
-        content: JsonValue = "",
+        content: AuditContent = "",
     ) -> None:
         self.audit_write_repository.record_state_file(
             StateFileRecord(
@@ -84,7 +84,7 @@ class AuditRecorder:
                 session_id=SessionId(log),
                 parent_script=script_name(),
                 child_process_id=child_pid,
-                argv=mapper.text([str(argument) for argument in argv]),
+                argv=mapper.text(SpawnArguments(tuple(str(argument) for argument in argv))),
                 purpose=purpose,
                 timestamp=time.time(),
             )

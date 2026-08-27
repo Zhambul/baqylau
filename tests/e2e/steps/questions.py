@@ -8,7 +8,7 @@ from api.sessiondata.models.entry import (
     MessageBodyResponse,
     QuestionResponse,
 )
-from sdk.client import BaqylauClient
+from sdk.client import BaqylauClient, QuestionAnswer
 from sdk.state import QuestionState, SessionSnapshot
 from tests.e2e.testkit import selectors, turns as turn_checks
 from tests.e2e.testkit.policy import WaitPolicy
@@ -170,7 +170,7 @@ def answer_question(
         client.sessions.answer_question(
             reference.session,
             attention_id=reference.attention_id,
-            answers=({"selected": [option], "other": ""},),
+            answers=(QuestionAnswer((option,), ""),),
         ),
     )
     turns.replace(
@@ -198,7 +198,7 @@ def answer_question_with_free_text(
         client.sessions.answer_question(
             reference.session,
             attention_id=reference.attention_id,
-            answers=({"selected": [], "other": answer},),
+            answers=(QuestionAnswer((), answer),),
         ),
     )
     turns.replace(
@@ -253,10 +253,7 @@ def answer_two_questions(
             first.session,
             attention_id=first.attention_id,
             answers=tuple(
-                {
-                    "selected": [answers_by_id[prompt.question_id]],
-                    "other": "",
-                }
+                QuestionAnswer((answers_by_id[prompt.question_id],), "")
                 for prompt in state.questions
             ),
         ),
@@ -287,7 +284,7 @@ def answer_question_with_two_options(
         client.sessions.answer_question(
             reference.session,
             attention_id=reference.attention_id,
-            answers=({"selected": [first, second], "other": ""},),
+            answers=(QuestionAnswer((first, second), ""),),
         ),
     )
     turns.replace(

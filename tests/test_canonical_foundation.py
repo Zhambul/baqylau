@@ -738,7 +738,7 @@ def test_codec_rejects_an_invalid_payload_before_storage():
     invalid_payload = replace(event.payload, role="tool")
 
     with pytest.raises(StoredDocumentError, match="role"):
-        mapper.encode_canonical_event(replace(event, payload=invalid_payload))
+        mapper.canonical_event_values(replace(event, payload=invalid_payload), 0.0)
 
 
 def test_stable_event_id_names_the_same_fact_and_distinguishes_its_phase():
@@ -1146,7 +1146,7 @@ def test_one_failing_source_neither_stops_its_siblings_nor_the_interpreter(tmp_p
     assert len(store.page_from(0, 10)) == 1
     # A fast retry does not write the same full traceback again.
     assert audited.failures() == ["source read"]
-    assert audited.errors[0][1]["source_identity"] == "broken"
+    assert audited.errors[0][1].source_identity == "broken"
 
 
 def test_one_pull_cycle_reads_resume_positions_for_all_sessions_at_once(tmp_path, monkeypatch):

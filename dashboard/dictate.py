@@ -15,11 +15,11 @@
 # them per-test): BAQYLAU_DICTATION_KEY_FILE / BAQYLAU_DICTATION_KEYTERMS_FILE
 # override the file locations; BAQYLAU_DICTATION_GRANT_URL points the grant call
 # at a fake server in tests (and is why grant() is testable hermetically).
-import json
 import os
 import urllib.request
-from typing import TypedDict, cast
 from urllib.parse import quote
+
+from pydantic import BaseModel, ConfigDict
 
 DEFAULT_KEY_FILE = "~/.config/deepgram/api-key"
 DEFAULT_KEYTERMS_FILE = "~/.config/deepgram/keyterms"
@@ -44,10 +44,17 @@ SAMPLE_RATE_MIN, SAMPLE_RATE_MAX = 8000, 384000
 KEYTERMS_MAX = 100       # keep the URL sane; Deepgram tolerates ~100s of terms
 
 
-class GrantResponse(TypedDict):
+class GrantRequest(BaseModel):
+    ttl_seconds: int | None = None
+
+
+class GrantResponse(BaseModel):
     """Deepgram's POST /v1/auth/grant body: the browser token and its lifetime."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
     access_token: str
-    expires_in: int
+    expires_in: int | None = None
 
 
 def key_file() -> str:
@@ -99,20 +106,18 @@ def grant(lifetime_seconds: int | None = None) -> GrantResponse:
     into a JSON error + audit rows; nothing here writes state."""
     key = _read(key_file())
     url = os.environ.get("BAQYLAU_DICTATION_GRANT_URL") or DEEPGRAM_GRANT_URL
-    body = (
-        json.dumps({"ttl_seconds": lifetime_seconds}).encode()
-        if lifetime_seconds
-        else b"{}"
-    )
+    body = GrantRequest(ttl_seconds=lifetime_seconds).model_dump_json(
+        exclude_none=True
+    ).encode()
+    request_headers = {
+        "Authorization": "Token " + key,
+        "Content-Type": "application/json",
+    }
     request = urllib.request.Request(
         url, data=body, method="POST",
-        headers={"Authorization": "Token " + key,
-                 "Content-Type": "application/json"})
+        headers=request_headers)
     with urllib.request.urlopen(request, timeout=GRANT_TIMEOUT_SECONDS) as response:
-        document = json.loads(response.read().decode("utf-8"))
-    if not isinstance(document, dict) or not document.get("access_token"):
-        raise ValueError("grant response missing access_token")
-    return cast(GrantResponse, document)
+        return GrantResponse.model_validate_json(response.read())
 
 
 def ws_url(sample_rate: int, terms: tuple[str, ...] | list[str] = ()) -> str:

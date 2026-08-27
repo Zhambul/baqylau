@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import TypeVar
 from urllib.parse import quote, urlencode
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from api.common.models.streams.error_frame import ErrorFrame
 from api.application.models.harnesses.harness_catalog_response import (
@@ -23,18 +23,50 @@ from api.application.models.insights.application_insights_response import (
     ApplicationInsightsResponse,
 )
 from api.application.models.files.upload_response import UploadResponse
+from api.application.models.files.upload_request import UploadRequest
+from api.application.models.preferences.composer_draft_request import ComposerDraftRequest
+from api.application.models.preferences.dialog_draft_request import (
+    AnswerSelectionBody,
+    DialogDraftRequest,
+)
 from api.application.models.preferences.global_application_response import (
     GlobalApplicationResponse,
+)
+from api.application.models.preferences.new_session_draft_request import NewSessionDraftRequest
+from api.application.models.preferences.new_session_preferences_request import (
+    NewSessionPreferencesRequest,
+)
+from api.application.models.preferences.notifications_muted_request import (
+    NotificationsMutedRequest,
 )
 from api.application.models.preferences.session_application_response import (
     SessionApplicationResponse,
 )
+from api.application.models.preferences.tasks_hidden_request import TasksHiddenRequest
+from api.application.models.preferences.view_mode_request import ViewModeRequest
 from api.application.models.resume.resumable_session_response import (
     ResumableSessionResponse,
 )
 from api.common.models.replies.health_response import HealthResponse
 from api.common.models.replies.saved_response import SavedResponse
 from api.controls.models.attachment_reference import AttachmentReferenceBody
+from api.controls.models.answer_decision import AnswerDecisionBody
+from api.controls.models.answer_question_request import AnswerQuestionRequest
+from api.controls.models.apply_rewind_request import ApplyRewindRequest
+from api.controls.models.auto_name_session_request import AutoNameSessionRequest
+from api.controls.models.background_request import BackgroundRequest
+from api.controls.models.close_session_request import CloseSessionRequest
+from api.controls.models.compact_request import CompactRequest
+from api.controls.models.control_request import ControlRequestBody
+from api.controls.models.decide_plan_request import DecidePlanRequest
+from api.controls.models.interrupt_request import InterruptRequest
+from api.controls.models.launch_session_request import LaunchSessionRequest
+from api.controls.models.open_rewind_request import OpenRewindRequest
+from api.controls.models.read_plan_choices_request import ReadPlanChoicesRequest
+from api.controls.models.rename_session_request import RenameSessionRequest
+from api.controls.models.select_effort_request import SelectEffortRequest
+from api.controls.models.select_model_request import SelectModelRequest
+from api.controls.models.send_text_request import SendTextRequest
 from api.controls.models.control_outcome_response import ControlOutcomeResponse
 from api.controls.models.launch_response import LaunchResponse
 from api.diagnostics.models import DiagnosticsCheckpointResponse, DiagnosticsReportResponse
@@ -45,6 +77,12 @@ from api.sessiondata.models.session_data import (
 )
 from api.sessiondata.models.stream_frame import GlobalStreamFrame, SessionStreamFrame
 from api.terminal.models.panes.pane_command_response import PaneCommandResponse
+from api.terminal.models.panes.grow_request import GrowPaneRequest
+from api.terminal.models.panes.pane_gesture_request import PaneGestureRequest
+from api.terminal.models.panes.reset_request import ResetPaneRequest
+from api.terminal.models.panes.set_percent_request import SetPanePercentRequest
+from api.terminal.models.panes.shrink_request import ShrinkPaneRequest
+from api.terminal.models.panes.toggle_request import TogglePanesRequest
 from sdk import sse
 from sdk.state import SessionSnapshot
 from sdk.transport import ApiFailure, HttpTransport
@@ -115,7 +153,7 @@ class GlobalStreamUpdate:
 
 
 @dataclass(frozen=True)
-class QuestionDraftAnswer:
+class QuestionAnswer:
     selected: tuple[str, ...] = ()
     other: str = ""
 
@@ -220,16 +258,16 @@ class SessionsResource:
         known = frozenset(item.session.session_id for item in self.list().sessions)
         status, answer = self.transport.post(
             "/api/sessions",
-            {
-                "harness": harness,
-                "working_directory": workspace,
-                "initial_text": prompt,
-                "model_id": model,
-                "effort": effort,
-                "account_id": account_id,
-                "resume_session_id": resume_session_id,
-                "attachments": [item.model_dump() for item in attachments],
-            },
+            LaunchSessionRequest(
+                harness=harness,
+                working_directory=workspace,
+                initial_text=prompt,
+                model_id=model,
+                effort=effort,
+                account_id=account_id,
+                resume_session_id=resume_session_id,
+                attachments=attachments,
+            ),
             LAUNCH,
             {202, 409},
         )
@@ -388,7 +426,7 @@ class SessionsResource:
         self,
         session: SessionRef,
         control_name: str,
-        document: dict[str, object] | None = None,
+        build_request: Callable[[str], ControlRequestBody],
         *,
         timeout: float | None = None,
     ) -> ActionReceipt:
@@ -397,8 +435,7 @@ class SessionsResource:
         path = (
             f"/api/sessions/{quote(session.session_id, safe='')}/controls/{control_name}"
         )
-        body: dict[str, object] = {"request_id": request_id}
-        body.update(document or {})
+        body = build_request(request_id)
         if timeout is None:
             status, outcome = self.transport.post(
                 path,
@@ -425,33 +462,55 @@ class SessionsResource:
         attachments: tuple[AttachmentReferenceBody, ...] = (),
         replace_terminal_draft: bool = False,
     ) -> ActionReceipt:
-        return self._control(session, "send-text", {
-            "text": text,
-            "attachments": [item.model_dump() for item in attachments],
-            "replace_terminal_draft": replace_terminal_draft,
-        })
+        return self._control(
+            session,
+            "send-text",
+            lambda request_id: SendTextRequest(
+                request_id=request_id,
+                text=text,
+                attachments=attachments,
+                replace_terminal_draft=replace_terminal_draft,
+            ),
+        )
 
     def interrupt(self, session: SessionRef) -> ActionReceipt:
-        return self._control(session, "interrupt")
+        return self._control(
+            session, "interrupt", lambda request_id: InterruptRequest(request_id=request_id)
+        )
 
     def background(self, session: SessionRef) -> ActionReceipt:
-        return self._control(session, "background")
+        return self._control(
+            session, "background", lambda request_id: BackgroundRequest(request_id=request_id)
+        )
 
     def close(self, session: SessionRef) -> ActionReceipt:
-        return self._control(session, "close-session")
+        return self._control(
+            session,
+            "close-session",
+            lambda request_id: CloseSessionRequest(request_id=request_id),
+        )
 
     def rename(self, session: SessionRef, name: str) -> ActionReceipt:
-        return self._control(session, "rename-session", {"name": name})
+        return self._control(
+            session,
+            "rename-session",
+            lambda request_id: RenameSessionRequest(request_id=request_id, name=name),
+        )
 
     def auto_name(self, session: SessionRef) -> ActionReceipt:
         return self._control(
             session,
             "auto-name-session",
+            lambda request_id: AutoNameSessionRequest(request_id=request_id),
             timeout=AUTOMATIC_NAME_TIMEOUT_SECONDS,
         )
 
     def open_rewind(self, session: SessionRef) -> ActionReceipt:
-        return self._control(session, "open-rewind")
+        return self._control(
+            session,
+            "open-rewind",
+            lambda request_id: OpenRewindRequest(request_id=request_id),
+        )
 
     def apply_rewind(
         self,
@@ -462,34 +521,57 @@ class SessionsResource:
         newer_prompt_count: int,
         mode: str,
     ) -> ActionReceipt:
-        return self._control(session, "apply-rewind", {
-            "target_message_id": target_message_id,
-            "target_text": target_text,
-            "newer_prompt_count": newer_prompt_count,
-            "mode": mode,
-        })
+        return self._control(
+            session,
+            "apply-rewind",
+            lambda request_id: ApplyRewindRequest(
+                request_id=request_id,
+                target_message_id=target_message_id,
+                target_text=target_text,
+                newer_prompt_count=newer_prompt_count,
+                mode=mode,
+            ),
+        )
 
     def compact(self, session: SessionRef) -> ActionReceipt:
-        return self._control(session, "compact")
+        return self._control(
+            session, "compact", lambda request_id: CompactRequest(request_id=request_id)
+        )
 
     def select_model(self, session: SessionRef, model: str) -> ActionReceipt:
-        return self._control(session, "select-model", {"model_id": model})
+        return self._control(
+            session,
+            "select-model",
+            lambda request_id: SelectModelRequest(request_id=request_id, model_id=model),
+        )
 
     def select_effort(self, session: SessionRef, effort: str) -> ActionReceipt:
-        return self._control(session, "select-effort", {"effort": effort})
+        return self._control(
+            session,
+            "select-effort",
+            lambda request_id: SelectEffortRequest(request_id=request_id, effort=effort),
+        )
 
     def answer_question(
         self,
         session: SessionRef,
         *,
         attention_id: str,
-        answers: tuple[dict[str, object], ...],
+        answers: tuple[QuestionAnswer, ...],
     ) -> ActionReceipt:
-        return self._control(session, "answer-question", {
-            "attention_id": attention_id,
-            "decision": "answer",
-            "answers": answers,
-        })
+        return self._control(
+            session,
+            "answer-question",
+            lambda request_id: AnswerQuestionRequest(
+                request_id=request_id,
+                attention_id=attention_id,
+                decision=AnswerDecisionBody.ANSWER,
+                answers=tuple(
+                    AnswerSelectionBody(selected=answer.selected, other=answer.other)
+                    for answer in answers
+                ),
+            ),
+        )
 
     def discuss_question(
         self,
@@ -498,17 +580,24 @@ class SessionsResource:
         attention_id: str,
         discussion: str,
     ) -> ActionReceipt:
-        return self._control(session, "answer-question", {
-            "attention_id": attention_id,
-            "decision": "discuss",
-            "discussion": discussion,
-        })
+        return self._control(
+            session,
+            "answer-question",
+            lambda request_id: AnswerQuestionRequest(
+                request_id=request_id,
+                attention_id=attention_id,
+                decision=AnswerDecisionBody.DISCUSS,
+                discussion=discussion,
+            ),
+        )
 
     def read_plan_choices(self, session: SessionRef, attention_id: str) -> ActionReceipt:
         return self._control(
             session,
             "read-plan-choices",
-            {"attention_id": attention_id},
+            lambda request_id: ReadPlanChoicesRequest(
+                request_id=request_id, attention_id=attention_id
+            ),
         )
 
     def decide_plan(
@@ -519,11 +608,16 @@ class SessionsResource:
         decision: str,
         feedback: str | None = None,
     ) -> ActionReceipt:
-        return self._control(session, "decide-plan", {
-            "attention_id": attention_id,
-            "decision": decision,
-            "feedback": feedback,
-        })
+        return self._control(
+            session,
+            "decide-plan",
+            lambda request_id: DecidePlanRequest(
+                request_id=request_id,
+                attention_id=attention_id,
+                decision=decision,
+                feedback=feedback,
+            ),
+        )
 
 
 class HarnessesResource:
@@ -590,12 +684,12 @@ class UploadsResource:
     ) -> UploadResponse:
         _status, response = self.transport.post(
             "/api/application/uploads",
-            {
-                "name": name,
-                "mime": media_type,
-                "data": base64.b64encode(data).decode("ascii"),
-                "session_id": session.session_id if session is not None else None,
-            },
+            UploadRequest(
+                name=name,
+                mime=media_type,
+                data=base64.b64encode(data).decode("ascii"),
+                session_id=session.session_id if session is not None else None,
+            ),
             UPLOAD,
             {200},
         )
@@ -617,7 +711,7 @@ class PreferencesResource:
             SESSION_APPLICATION,
         )
 
-    def _save(self, path: str, document: dict[str, object]) -> SavedResponse:
+    def _save(self, path: str, document: BaseModel) -> SavedResponse:
         _status, response = self.transport.post(path, document, SAVED, {200})
         return response
 
@@ -629,12 +723,15 @@ class PreferencesResource:
         model: str,
         effort: str,
     ) -> SavedResponse:
-        return self._save("/api/application/new-session-preferences", {
-            "working_directory": workspace,
-            "harness": harness,
-            "model": model,
-            "effort": effort,
-        })
+        return self._save(
+            "/api/application/new-session-preferences",
+            NewSessionPreferencesRequest(
+                working_directory=workspace,
+                harness=harness,
+                model=model,
+                effort=effort,
+            ),
+        )
 
     def save_new_session_draft(
         self,
@@ -643,11 +740,12 @@ class PreferencesResource:
         text: str,
         sequence: float,
     ) -> SavedResponse:
-        return self._save("/api/application/new-session-drafts", {
-            "working_directory": workspace,
-            "text": text,
-            "sequence": sequence,
-        })
+        return self._save(
+            "/api/application/new-session-drafts",
+            NewSessionDraftRequest(
+                working_directory=workspace, text=text, sequence=sequence
+            ),
+        )
 
     def save_composer_draft(
         self,
@@ -658,49 +756,52 @@ class PreferencesResource:
         sequence: float,
     ) -> SavedResponse:
         session_id = quote(session.session_id, safe="")
-        return self._save(f"/api/sessions/{session_id}/application/composer-draft", {
-            "text": text,
-            "origin": origin,
-            "sequence": sequence,
-        })
+        return self._save(
+            f"/api/sessions/{session_id}/application/composer-draft",
+            ComposerDraftRequest(text=text, origin=origin, sequence=sequence),
+        )
 
     def save_question_draft(
         self,
         session: SessionRef,
         *,
         attention_id: str,
-        answers: tuple[QuestionDraftAnswer, ...],
+        answers: tuple[QuestionAnswer, ...],
         origin: str,
     ) -> SavedResponse:
         session_id = quote(session.session_id, safe="")
-        return self._save(f"/api/sessions/{session_id}/application/dialog-draft", {
-            "attention_id": attention_id,
-            "answers": [
-                {"selected": list(answer.selected), "other": answer.other}
-                for answer in answers
-            ],
-            "origin": origin,
-        })
+        selections = tuple(
+            AnswerSelectionBody(selected=answer.selected, other=answer.other)
+            for answer in answers
+        )
+        return self._save(
+            f"/api/sessions/{session_id}/application/dialog-draft",
+            DialogDraftRequest(
+                attention_id=attention_id,
+                answers=selections,
+                origin=origin,
+            ),
+        )
 
     def set_view_mode(self, session: SessionRef, view_mode: str) -> SavedResponse:
         session_id = quote(session.session_id, safe="")
         return self._save(
             f"/api/sessions/{session_id}/application/view-mode",
-            {"view_mode": view_mode},
+            ViewModeRequest(view_mode=view_mode),
         )
 
     def set_notifications_muted(self, session: SessionRef, muted: bool) -> SavedResponse:
         session_id = quote(session.session_id, safe="")
         return self._save(
             f"/api/sessions/{session_id}/application/notifications-muted",
-            {"muted": muted},
+            NotificationsMutedRequest(muted=muted),
         )
 
     def set_tasks_hidden(self, session: SessionRef, hidden: bool) -> SavedResponse:
         session_id = quote(session.session_id, safe="")
         return self._save(
             f"/api/sessions/{session_id}/application/tasks-hidden",
-            {"hidden": hidden},
+            TasksHiddenRequest(hidden=hidden),
         )
 
 
@@ -721,20 +822,8 @@ class TerminalResource:
     def _gesture(
         self,
         command: str,
-        *,
-        window_id: str,
-        workspace: str,
-        columns: int | None = None,
-        percent: int | None = None,
+        document: PaneGestureRequest,
     ) -> PaneCommandResponse:
-        document: dict[str, object] = {
-            "window_id": window_id,
-            "working_directory": workspace,
-        }
-        if columns is not None:
-            document["columns"] = columns
-        if percent is not None:
-            document["percent"] = percent
         _status, response = self.transport.post(
             f"/api/terminal/panes/{command}",
             document,
@@ -744,7 +833,10 @@ class TerminalResource:
         return response
 
     def toggle_panes(self, *, window_id: str, workspace: str) -> PaneCommandResponse:
-        return self._gesture("toggle", window_id=window_id, workspace=workspace)
+        return self._gesture(
+            "toggle",
+            TogglePanesRequest(window_id=window_id, working_directory=workspace),
+        )
 
     def grow_activity_pane(
         self,
@@ -755,9 +847,11 @@ class TerminalResource:
     ) -> PaneCommandResponse:
         return self._gesture(
             "grow",
-            window_id=window_id,
-            workspace=workspace,
-            columns=columns,
+            GrowPaneRequest(
+                window_id=window_id,
+                working_directory=workspace,
+                columns=columns,
+            ),
         )
 
     def shrink_activity_pane(
@@ -769,13 +863,18 @@ class TerminalResource:
     ) -> PaneCommandResponse:
         return self._gesture(
             "shrink",
-            window_id=window_id,
-            workspace=workspace,
-            columns=columns,
+            ShrinkPaneRequest(
+                window_id=window_id,
+                working_directory=workspace,
+                columns=columns,
+            ),
         )
 
     def reset_activity_pane(self, *, window_id: str, workspace: str) -> PaneCommandResponse:
-        return self._gesture("reset", window_id=window_id, workspace=workspace)
+        return self._gesture(
+            "reset",
+            ResetPaneRequest(window_id=window_id, working_directory=workspace),
+        )
 
     def set_activity_pane_width(
         self,
@@ -786,9 +885,11 @@ class TerminalResource:
     ) -> PaneCommandResponse:
         return self._gesture(
             "set-percent",
-            window_id=window_id,
-            workspace=workspace,
-            percent=percent,
+            SetPanePercentRequest(
+                window_id=window_id,
+                working_directory=workspace,
+                percent=percent,
+            ),
         )
 
 

@@ -15,11 +15,9 @@ every failure and the delegate runs regardless.
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys
-import time
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # my own directory
 
@@ -30,6 +28,7 @@ HARNESS = "claude_code"
 # The status line must never be held up: a wedged daemon costs this pause per
 # render, and no more.
 DELIVERY_TIMEOUT_SECONDS = 1.0
+STATUSLINE_HEADERS = {_http.TELEMETRY_KIND_HEADER: "statusline"}
 
 
 def capture(raw: bytes) -> None:
@@ -40,17 +39,12 @@ def capture(raw: bytes) -> None:
     (`harness/impl/claude_code/otel/gateway.py`).
     """
     try:
-        document = json.loads(raw or b"{}")
-        if not isinstance(document, dict) or not (document.get("session_id") or "").strip():
+        if not raw:
             return
-        body = dict(
-            document,
-            _ts=document.get("_ts") or time.time(),
-        )
         _daemon.post(
             _http.TELEMETRY_PATH % HARNESS,
-            json.dumps(body, ensure_ascii=False).encode("utf-8"),
-            {_http.TELEMETRY_KIND_HEADER: "statusline"},
+            raw,
+            STATUSLINE_HEADERS,
             timeout=DELIVERY_TIMEOUT_SECONDS,
         )
     except Exception:

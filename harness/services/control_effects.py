@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 
 from domain.entries import (
     AssignmentFinishedBody,
@@ -293,7 +294,7 @@ def _open_work(
 
 def _work_observations(
     open_work_kind: OpenWorkKind,
-    open_items: dict[TurnId | ShellId | AssignmentId, SessionEntry],
+    open_items: Mapping[TurnId | ShellId | AssignmentId, SessionEntry],
 ) -> tuple[tuple[SessionEntry, SessionCloseWorkObservation], ...]:
     return tuple(
         (entry, SessionCloseWorkObservation(open_work_kind, subject_id, entry.turn_id))
