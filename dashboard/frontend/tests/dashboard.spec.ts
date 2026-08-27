@@ -367,7 +367,7 @@ test('keeps activity details readable and expandable', async ({ page }) => {
   await expect(compaction).toHaveAttribute('data-open', '0');
   await compaction.locator('.bhead').click();
   await expect(compaction).toHaveAttribute('data-open', '0');
-  await expect(compaction.locator('.bbody')).toBeEmpty();
+  await expect(compaction.locator('.bbody')).toHaveCount(0);
 
   const webSearchLabel = webSearch.locator('.operation-label');
   const background = page.locator('.operation-label', {

@@ -25,6 +25,7 @@ from harness.impl.claude_code.canonical.tasks import task_file_event
 from harness.impl.claude_code.canonical.toolcalls import ToolCallSemantics
 from harness.impl.claude_code.canonical.turns import TurnSemantics
 from harness.impl.claude_code.ids import (
+    ClaudeCodeCompactionId,
     ClaudeCodeTaskId,
     task_id_from_claude_code,
     task_list_id_from_claude_code,
@@ -40,7 +41,7 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
         self._turns = TurnSemantics()
         self._selections = SelectionSemantics()
         self._pending_compactions: dict[
-            tuple[SessionId, str], tuple[str, int | None]
+            tuple[SessionId, str], tuple[ClaudeCodeCompactionId, int | None]
         ] = {}
 
     def translate(self, raw_event: RawEvent) -> TranslationResult:
@@ -183,7 +184,9 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
             raise TranslationError("malformed Claude Code transcript record", context=raw_event.source_position)
         compaction_key = raw_event.session_id, str(raw_event.actor_id)
         if isinstance(record, transcript.CompactTranscriptRecord):
-            boundary_id = str(transcript_document.uuid or raw_event.source_position)
+            boundary_id = ClaudeCodeCompactionId(
+                str(transcript_document.uuid or raw_event.source_position)
+            )
             self._pending_compactions[compaction_key] = (
                 boundary_id,
                 record.before_tokens,

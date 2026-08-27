@@ -20,6 +20,7 @@ from domain.ids import (
 ClaudeCodeSessionId = NewType("ClaudeCodeSessionId", str)
 ClaudeCodeActorId = NewType("ClaudeCodeActorId", str)
 ClaudeCodeCallId = NewType("ClaudeCodeCallId", str)
+ClaudeCodeCompactionId = NewType("ClaudeCodeCompactionId", str)
 ClaudeCodeMessageId = NewType("ClaudeCodeMessageId", str)
 ClaudeCodeQuestionId = NewType("ClaudeCodeQuestionId", str)
 ClaudeCodeReasoningId = NewType("ClaudeCodeReasoningId", str)

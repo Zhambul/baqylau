@@ -87,7 +87,12 @@ from typing import TypeAlias
 from pydantic import ValidationError
 
 from harness.impl.claude_code.canonical import records
-from harness.impl.claude_code.ids import ClaudeCodeActorId, ClaudeCodeCallId, ClaudeCodeShellId
+from harness.impl.claude_code.ids import (
+    ClaudeCodeActorId,
+    ClaudeCodeCallId,
+    ClaudeCodeCompactionId,
+    ClaudeCodeShellId,
+)
 from harness.models import TitleWriteOutcome, TranslationError
 from repository.contract.titles import NativeSessionTitleRepository
 
@@ -157,7 +162,7 @@ class CompactTranscriptRecord:
 @dataclass(frozen=True)
 class CompactSummaryTranscriptRecord:
     text: str
-    boundary_id: str | None
+    boundary_id: ClaudeCodeCompactionId | None
     before_tokens: int | None = None
     kind: TranscriptKind = TranscriptKind.COMPACT_SUMMARY
 
@@ -548,7 +553,12 @@ def parse_line(s: str) -> TranscriptRecord | None:
             if not content.strip():
                 return None
             if user.isCompactSummary:
-                return CompactSummaryTranscriptRecord(content, user.parentUuid)
+                return CompactSummaryTranscriptRecord(
+                    content,
+                    ClaudeCodeCompactionId(user.parentUuid)
+                    if user.parentUuid is not None
+                    else None,
+                )
             if user.origin is not None and user.origin.kind == "task-notification":
                 notification = _task_notification(content)
                 # The earlier queue enqueue owns monitor records. Unlike

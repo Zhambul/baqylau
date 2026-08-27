@@ -1,7 +1,7 @@
 Feature: web activity stays on the work that requested it
 
-  Scenario: Claude tool discovery keeps the loaded tools in the result
-    Given session configuration "primary" uses claude_code with model haiku and low effort
+  Scenario Outline: tool discovery keeps the loaded tools in the result
+    Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" and assign work "tool discovery" to the lead with prompt
       """
       Your first tool call must be ToolSearch with the exact query
@@ -13,6 +13,10 @@ Feature: web activity stays on the work that requested it
     When I name the search in work "tool discovery" with query containing 'select:Monitor,TaskOutput' "tool search"
     Then search "tool search" has result containing '→ loaded tool: Monitor'
     And search "tool search" has result containing '→ loaded tool: TaskOutput'
+
+    Examples:
+      | harness     | model |
+      | claude_code | haiku |
 
   Scenario Outline: a real web search belongs to one worker
     Given session configuration "primary" uses <harness> with model <model> and low effort

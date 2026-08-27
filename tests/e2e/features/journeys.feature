@@ -208,8 +208,8 @@ Feature: sessions cross dashboard and terminal boundaries
       | codex       | gpt-5.6-luna |
       | claude_code | haiku        |
 
-  Scenario: stopping a Claude background command returns its terminal tab to done
-    Given session configuration "primary" uses claude_code with model haiku and low effort
+  Scenario Outline: stopping a background command returns its terminal tab to done
+    Given session configuration "primary" uses <harness> with model <model> and low effort
     When I start journey session "primary" from the terminal as turn "stop background command" with prompt
       """
       Your first tool call must use Bash to run the exact command `sleep 120`
@@ -224,3 +224,7 @@ Feature: sessions cross dashboard and terminal boundaries
     And session "primary" has no running work
     And the lead in session "primary" has status awaiting_response
     And the terminal tab for journey session "primary" has color awaiting_response
+
+    Examples:
+      | harness     | model |
+      | claude_code | haiku |

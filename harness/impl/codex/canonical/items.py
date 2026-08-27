@@ -495,7 +495,7 @@ def _rsp_custom_tool_call(custom_tool_call_payload: CustomToolCallPayload) -> Ro
                         continue
                 elif name == "exec":
                     # A few early code-mode rollouts contain a nested
-                    # `tools.exec(...)` produced by a malformed tool envelope.
+                    # `tools.exec(...)` produced by a malformed tool wrapper.
                     # The outer custom `exec` record is already its transport.
                     continue
                 else:

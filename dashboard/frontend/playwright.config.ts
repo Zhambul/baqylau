@@ -16,6 +16,7 @@ export default defineConfig({
   use: {
     baseURL,
     screenshot: 'only-on-failure',
+    serviceWorkers: 'block',
     trace: 'on-first-retry',
   },
   projects: [

@@ -769,6 +769,7 @@ def test_harness_adapters_never_use_raw_dictionaries_or_jsonvalue():
             "calls",
             "agent_assignments",
             "monitors",
+            "background_tasks",
         },
         "harness/impl/claude_code/usage/live.py": {"samples"},
         "harness/impl/claude_code/controls/controller.py": {"HANDLERS"},

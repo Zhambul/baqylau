@@ -50,6 +50,7 @@ from harness.impl.claude_code.ids import (
     ClaudeCodeCallId,
     ClaudeCodeMessageId,
     ClaudeCodeSessionId,
+    ClaudeCodeShellId,
     ClaudeCodeTaskId,
     ClaudeCodeTaskListId,
     ClaudeCodeTurnId,
@@ -629,7 +630,7 @@ class ToolArguments(BaseModel):
     description: str | None = None
     run_in_background: bool | None = None
     timeout: int | float | None = None
-    task_id: str | None = None
+    task_id: ClaudeCodeShellId | None = None
     file_path: str | None = None
     notebook_path: str | None = None
     content: str | None = None

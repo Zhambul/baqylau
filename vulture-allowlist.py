@@ -64,6 +64,9 @@ _.claim_next
 _.complete
 _.fail
 
+# The session renamer calls this method through the terminal Protocol.
+_.rename_session_tab
+
 # pydantic's own config attribute (harness/impl/codex/canonical/records.py,
 # harness/impl/codex/usage.py): pydantic's metaclass reads `model_config` off
 # every BaseModel subclass to build its validator. We only ever ASSIGN it —
@@ -166,6 +169,16 @@ receiver_thread_ids  # records.py CollabAgentToolCallItem
 receiver_agents      # records.py CollabAgentToolCallItem
 agents_states        # records.py CollabAgentToolCallItem
 image_url            # records.py ContentPart
+queries              # records.py WebSearchAction / WebSearchCallAction
+author               # records.py CompactedHistoryItem
+workdir              # records.py ExecArguments
+yield_time_ms         # records.py ExecArguments / StdinArguments
+max_output_tokens    # records.py ExecArguments / StdinArguments
+tty                  # records.py ExecArguments
+login                # records.py ExecArguments
+sandbox_permissions  # records.py ExecArguments
+justification        # records.py ExecArguments
+prefix_rule          # records.py ExecArguments
 
 # A TypedDict field read only through dict-literal construction and ["check"]
 # subscripts (askdialog_screen.rows / its dialog callers) — the ANNOTATION is
@@ -283,6 +296,13 @@ filePath                           # ToolResponseFile
 numLines                           # ToolResponseFile
 startLine                          # ToolResponseFile
 totalLines                         # ToolResponseFile
+originalWidth                      # ToolResponseImageDimensions
+originalHeight                     # ToolResponseImageDimensions
+displayWidth                       # ToolResponseImageDimensions
+displayHeight                      # ToolResponseImageDimensions
+truncatedByTokenCap                # ToolResponseFile
+originalSize                       # ToolResponseFile
+dimensions                         # ToolResponseFile
 token_budget                       # codex GoalArguments
 tool_calls                          # HookPayload
 is_interrupt                        # HookPayload

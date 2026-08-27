@@ -207,7 +207,7 @@ class _SmallModel:
                 _error_context(error),
             )
             raise
-        failures: list[str] = []
+        failures: list[JsonValue] = []
         # A CLI or remote request can fail transiently even though account
         # capacity remains. Try every provider twice in fresh ephemeral
         # processes. A malformed title gets an immediate retry from the same
@@ -222,37 +222,41 @@ class _SmallModel:
             attempt += 1
             try:
                 return self._send(candidate, model_prompt_request)
-            except ProviderUnavailableError as error:
-                failures.append(f"{candidate.harness}: {error}")
+            except ProviderUnavailableError as provider_error:
+                failures.append(f"{candidate.harness}: {provider_error}")
                 if retries[candidate] > 0:
                     retries[candidate] -= 1
-                    if error.stage == "parse output" and "title" in str(error):
+                    if provider_error.stage == "parse output" and "title" in str(provider_error):
                         attempts.insert(0, candidate)
                     else:
                         attempts.append(candidate)
-            except Exception as error:
+            except Exception as unexpected_error:
                 self.audit.error(
                     model_prompt_request.session_id,
                     "small model (provider attempt)",
                     {
-                        **_error_context(error),
+                        **_error_context(unexpected_error),
                         "provider": str(candidate.harness),
                         "attempt": attempt,
                     },
                 )
                 raise
-        reason = "; ".join(failures) if failures else "no provider is available"
-        error = ModelUnavailableError(reason)
+        reason = (
+            "; ".join(str(failure) for failure in failures)
+            if failures
+            else "no provider is available"
+        )
+        model_unavailable_error = ModelUnavailableError(reason)
         self.audit.error(
             model_prompt_request.session_id,
             "small model (unavailable)",
             {
-                **_error_context(error),
+                **_error_context(model_unavailable_error),
                 "providers": provider_states,
                 "attempt_failures": failures,
             },
         )
-        raise error
+        raise model_unavailable_error
 
     def _candidates(self) -> tuple[tuple[_Candidate, ...], list[JsonValue]]:
         rows = self.usage.usage_rows()
