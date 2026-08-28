@@ -351,7 +351,7 @@ class BrowserSessionDriver:
         lead = before.lead()
         composer = self._page.get_by_label("message composer")
         composer.locator("textarea").fill(prompt)
-        composer.get_by_role("button", name="send", exact=True).click()
+        self._submit_composer(session, composer)
         return TurnRef(
             session,
             prompt,
@@ -380,11 +380,7 @@ class BrowserSessionDriver:
         prompt = composer.locator("textarea").input_value().strip()
         if not prompt:
             raise AssertionError("browser composer draft is empty")
-        button = composer.get_by_role("button", name="send", exact=True)
-        expect(button).to_be_enabled(
-            timeout=self._milliseconds(self._wait_policy.feed),
-        )
-        button.click()
+        self._submit_composer(session, composer)
         return TurnRef(
             session,
             prompt,
@@ -392,6 +388,33 @@ class BrowserSessionDriver:
             lead.statistics.prompt_count + 1,
             actor_id=lead.actor_id,
         )
+
+    def _submit_composer(self, session: SessionRef, composer: Locator) -> None:
+        button = composer.get_by_role("button", name="send", exact=True)
+        expect(button).to_be_enabled(
+            timeout=self._milliseconds(self._wait_policy.feed),
+        )
+        path = f"/api/sessions/{session.session_id}/controls/send-text"
+        try:
+            with self._page.expect_response(
+                lambda response: (
+                    response.request.method == "POST" and response.url.endswith(path)
+                ),
+                timeout=self._milliseconds(self._wait_policy.pipeline),
+            ) as response_info:
+                button.click()
+        except PlaywrightTimeoutError as error:
+            value = composer.locator("textarea").input_value()
+            disabled = button.is_disabled()
+            recent_paths = self._request_paths[-10:]
+            raise AssertionError(
+                "browser composer Send did not issue its request: "
+                f"value={value!r}, disabled={disabled}, "
+                f"recent_request_paths={recent_paths!r}"
+            ) from error
+        response = response_info.value
+        if not response.ok and response.status != 409:
+            raise AssertionError(f"browser send returned HTTP {response.status}")
 
     def reload(self, session: SessionRef) -> None:
         self._page.reload()

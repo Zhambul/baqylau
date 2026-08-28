@@ -42,6 +42,7 @@ from tests.e2e.testkit.failure_diagnostics import (
     save_e2e_failure_diagnostics,
     e2e_stall_diagnostics,
 )
+from tests.e2e.testkit.journeys import JourneyDriver
 from tests.e2e.testkit.repository import ClaudeCodeProjectTrust, RepositoryWorkspace
 from tests.e2e.testkit.references import (
     AccountSelections,
@@ -97,6 +98,13 @@ BACKGROUND_OUTPUT_FIXTURES = (
 )
 
 
+def _journey_window_ids(item: pytest.Item) -> frozenset[str] | None:
+    if not isinstance(item, pytest.Function):
+        return None
+    driver = item.funcargs.get("journey_driver")
+    return driver.window_ids if isinstance(driver, JourneyDriver) else None
+
+
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_makereport(
     item: pytest.Item,
@@ -112,7 +120,10 @@ def pytest_runtest_makereport(
     if not isinstance(application, ApplicationProcess):
         return report
     try:
-        diagnostics = e2e_failure_diagnostics(application)
+        diagnostics = e2e_failure_diagnostics(
+            application,
+            _journey_window_ids(item),
+        )
         report_path = save_e2e_failure_diagnostics(
             application,
             item.nodeid,
@@ -151,7 +162,10 @@ def stalled_scenario_report(
                 f"{round(time.monotonic() - started_at)} seconds for "
                 f"{request.node.nodeid}\n"
                 f"progress_marker={current}\n"
-                f"{e2e_stall_diagnostics(application_process)}",
+                f"{e2e_stall_diagnostics(
+                    application_process,
+                    _journey_window_ids(request.node),
+                )}",
                 file=sys.stderr,
                 flush=True,
             )
@@ -455,11 +469,37 @@ def repository_workspace(
 
 
 @pytest.fixture(scope="session")
+def isolated_harness_runtime_configs(
+    isolated_codex_home: Path,
+    isolated_claude_home: Path,
+) -> HarnessRuntimeConfigs:
+    installed = default_harness_runtime_configs()
+    return HarnessRuntimeConfigs(
+        (
+            (
+                HarnessName.CLAUDE_CODE,
+                HarnessRuntimeConfig(
+                    installed.for_harness(HarnessName.CLAUDE_CODE).executable,
+                    isolated_claude_home,
+                    isolated_claude_home / "managed-settings.json",
+                ),
+            ),
+            (
+                HarnessName.CODEX,
+                HarnessRuntimeConfig(
+                    installed.for_harness(HarnessName.CODEX).executable,
+                    isolated_codex_home,
+                ),
+            ),
+        )
+    )
+
+
+@pytest.fixture(scope="session")
 def application_process(
     pytestconfig: pytest.Config,
     tmp_path_factory: pytest.TempPathFactory,
-    isolated_codex_home: Path,
-    isolated_claude_home: Path,
+    isolated_harness_runtime_configs: HarnessRuntimeConfigs,
     claude_workspace_trust: None,
 ) -> Iterator[ApplicationProcess]:
     del claude_workspace_trust
@@ -467,26 +507,7 @@ def application_process(
     usage_cache = Path(tempfile.gettempdir()) / (
         f"baqylau-e2e-usage-{run_identity}.json"
     )
-    codex_executable = shutil.which("codex")
-    claude_executable = shutil.which("claude")
-    if codex_executable is None or claude_executable is None:
-        raise pytest.UsageError("Codex and Claude executables are required")
-    runtime_configs = HarnessRuntimeConfigs(
-        (
-            (
-                HarnessName.CLAUDE_CODE,
-                HarnessRuntimeConfig(
-                    claude_executable,
-                    isolated_claude_home,
-                    isolated_claude_home / "managed-settings.json",
-                ),
-            ),
-            (
-                HarnessName.CODEX,
-                HarnessRuntimeConfig(codex_executable, isolated_codex_home),
-            ),
-        )
-    )
+    runtime_configs = isolated_harness_runtime_configs
     # A structured usage process can update profile metadata. Use the vendor
     # default profiles for this account-level probe. The isolated profiles are
     # for scenario sessions only.

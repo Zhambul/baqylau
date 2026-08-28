@@ -36,16 +36,13 @@ from harness.models import (
     SelectModel,
     SendText,
 )
-from terminal.contract import TerminalPlugin
 from terminal.models import (
     KeySendRequest,
-    ScreenReadRequest,
     TabCloseRequest,
-    TextSubmitMode,
+    TextInputMode,
     TextSubmitRequest,
 )
 from domain.events import QuestionAsked
-from domain.ids import WindowId
 from core.process import process_executable
 
 # The terminal's own window id: `terminal/` may depend on nothing outside
@@ -57,35 +54,13 @@ from harness.impl.codex.canonical import rollout, title
 from harness.impl.codex.canonical.records import PromptRecord, RolloutRecord, TaskStartedRecord, TurnAbortedRecord
 from harness.impl.codex.continuity import RewindContinuity
 from harness.impl.codex.controls import backtrack, composer, dialog, modeldialog, plandialog
-from harness.impl.codex.controls.dialog import Driver
+from harness.services.terminal_driver import TerminalDriver
+from harness.services.composer import ComposerRestoreError, with_preserved_draft
 from harness.runtime import HarnessRuntimeConfig, default_harness_runtime_configs
 from domain.ids import HarnessName
 
-
-class _TerminalDriver(Driver):
-    """Expose the small driver vocabulary used by Codex's screen modules."""
-
-    def __init__(self, terminal_plugin: TerminalPlugin) -> None:
-        self.terminal = terminal_plugin
-
-    def get_text(self, window_id: WindowId, extent: str = "screen", ansi: bool = False) -> str | None:
-        del extent
-        response = self.terminal.viewport.read_screen(ScreenReadRequest(NativeWindowId(str(window_id)), ansi=ansi))
-        return response.text
-
-    def send_key(self, window_id: WindowId, *keys: str) -> bool:
-        native = NativeWindowId(str(window_id))
-        return all(self.terminal.input.send_key(KeySendRequest(native, str(key))).succeeded for key in keys)
-
-    def send_text(self, window_id: WindowId, text: str) -> bool:
-        return self.terminal.input.submit_text(
-            TextSubmitRequest(NativeWindowId(str(window_id)), str(text), TextSubmitMode.TYPE)
-        ).succeeded
-
-    def paste_text(self, window_id: WindowId, text: str) -> bool:
-        return self.terminal.input.submit_text(
-            TextSubmitRequest(NativeWindowId(str(window_id)), str(text), TextSubmitMode.PASTE)
-        ).succeeded
+NATIVE_TITLE_CONFIRM_TIMEOUT_SECONDS = 5.0
+NATIVE_TITLE_CONFIRM_POLL_SECONDS = 0.05
 
 
 def _result(request: ControlRequest, succeeded: bool, reason: str) -> ControlResult:
@@ -101,7 +76,7 @@ def _submit(request: ControlRequest, control_context: ControlContext, text: str)
     if window_id is None:
         return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
     result = control_context.terminal.input.submit_text(
-        TextSubmitRequest(NativeWindowId(str(window_id)), text, TextSubmitMode.PASTE)
+        TextSubmitRequest(NativeWindowId(str(window_id)), text, TextInputMode.PASTE)
     )
     return _result(request, result.succeeded, result.reason or "terminal text was not delivered")
 
@@ -188,15 +163,14 @@ class SendTextHandler(ControlHandler):
                 control_context.session.harness_process_id,
                 self.runtime,
             )
-        if request.replace_terminal_draft:
-            try:
-                composer.clear(_TerminalDriver(control_context.terminal), window_id)
-            except composer.ComposerError as error:
-                return ControlResult(
-                    request.request_id,
-                    ControlAcknowledgement.REJECTED,
-                    str(error),
-                )
+        try:
+            composer.clear(TerminalDriver(control_context.terminal), window_id)
+        except composer.ComposerError as error:
+            return ControlResult(
+                request.request_id,
+                ControlAcknowledgement.REJECTED,
+                str(error),
+            )
         result = _submit(request, control_context, _message(request))
         if result.status != ControlAcknowledgement.ACKNOWLEDGED:
             return ControlResult(
@@ -319,22 +293,50 @@ class RenameSessionHandler(ControlHandler):
                 request.request_id,
                 ControlAcknowledgement.ACKNOWLEDGED,
             )
-        result = _submit(request, control_context, f"/rename {request.name}")
-        if result.status == ControlAcknowledgement.ACKNOWLEDGED:
-            durable = self.titles.set_title(session.source_reference, request.name)
-            if durable == "unavailable":
+        window_id = control_context.terminal_window_id
+        driver = TerminalDriver(control_context.terminal)
+
+        def rename() -> ControlResult:
+            try:
+                composer.CodexComposer().submit(
+                    driver,
+                    window_id,
+                    f"/rename {request.name}",
+                )
+            except composer.ComposerError as error:
                 return ControlResult(
                     request.request_id,
                     ControlAcknowledgement.INDETERMINATE,
-                    "native title store is unavailable",
+                    str(error),
                 )
-            if durable == "unsupported":
-                return ControlResult(
-                    request.request_id,
-                    ControlAcknowledgement.REJECTED,
-                    "session source is not renameable",
-                )
-        return result
+            deadline = time.monotonic() + NATIVE_TITLE_CONFIRM_TIMEOUT_SECONDS
+            while time.monotonic() < deadline:
+                observed = self.titles.read_title(session.source_reference)
+                if observed is not None and observed.text == request.name:
+                    return ControlResult(
+                        request.request_id,
+                        ControlAcknowledgement.ACKNOWLEDGED,
+                    )
+                time.sleep(NATIVE_TITLE_CONFIRM_POLL_SECONDS)
+            return ControlResult(
+                request.request_id,
+                ControlAcknowledgement.INDETERMINATE,
+                "Codex did not confirm the title",
+            )
+
+        try:
+            return with_preserved_draft(
+                composer.CodexComposer(),
+                driver,
+                window_id,
+                rename,
+            )
+        except ComposerRestoreError as error:
+            return ControlResult(
+                request.request_id,
+                ControlAcknowledgement.INDETERMINATE,
+                str(error),
+            )
 
 
 class CompactHandler(ControlHandler):
@@ -353,7 +355,7 @@ class CompactHandler(ControlHandler):
             # TUI restores its prompt.  Verify the native composer is ready
             # before submitting the slash command; otherwise terminal input
             # can report successful delivery while Codex silently drops it.
-            composer.clear(_TerminalDriver(control_context.terminal), window_id)
+            composer.clear(TerminalDriver(control_context.terminal), window_id)
         except composer.ComposerError as error:
             return ControlResult(
                 request.request_id,
@@ -385,7 +387,7 @@ class ApplyRewindHandler(ControlHandler):
             )
         try:
             backtrack.drive(
-                _TerminalDriver(control_context.terminal),
+                TerminalDriver(control_context.terminal),
                 window_id,
                 request.target_text,
                 newer_prompt_count=request.newer_prompt_count,
@@ -414,7 +416,7 @@ class SelectModelHandler(ControlHandler):
             return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
         try:
             modeldialog.set_model_effort(
-                _TerminalDriver(terminal),
+                TerminalDriver(terminal),
                 window_id,
                 model=request.model,
                 effort=control_context.current_effort,
@@ -434,7 +436,7 @@ class SelectEffortHandler(ControlHandler):
             return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
         try:
             modeldialog.set_model_effort(
-                _TerminalDriver(terminal),
+                TerminalDriver(terminal),
                 window_id,
                 effort=request.effort,
             )
@@ -478,7 +480,7 @@ class AnswerQuestionHandler(ControlHandler):
         try:
             if request.decision == AnswerDecision.DISCUSS:
                 dialog.decline(
-                    _TerminalDriver(terminal),
+                    TerminalDriver(terminal),
                     window_id,
                     _native_prompts(control_context.pending_attention),
                     "Continue in chat.",
@@ -489,7 +491,7 @@ class AnswerQuestionHandler(ControlHandler):
                         return delivered
             else:
                 dialog.drive(
-                    _TerminalDriver(terminal),
+                    TerminalDriver(terminal),
                     window_id,
                     _native_prompts(control_context.pending_attention),
                     answers,
@@ -512,7 +514,7 @@ class ReadPlanChoicesHandler(ControlHandler):
         if window_id is None:
             return PlanChoicesResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
         try:
-            rows = plandialog.options(_TerminalDriver(terminal), window_id)
+            rows = plandialog.options(TerminalDriver(terminal), window_id)
         except plandialog.CodexPlanError as error:
             return PlanChoicesResult(request.request_id, ControlAcknowledgement.INDETERMINATE, str(error))
         return PlanChoicesResult(
@@ -534,7 +536,7 @@ class DecidePlanHandler(ControlHandler):
         window_id = control_context.terminal_window_id
         if window_id is None:
             return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
-        driver = _TerminalDriver(terminal)
+        driver = TerminalDriver(terminal)
         try:
             if request.decision == "dismiss":
                 plandialog.dismiss(driver, window_id)

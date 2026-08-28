@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import time
+
 from pytest_bdd import parsers, then, when
 
-from sdk.client import BaqylauClient
+from sdk.client import BaqylauClient, wait_for
 from tests.e2e.testkit.journeys import JourneyDriver
+from tests.e2e.testkit.policy import WaitPolicy
 from tests.e2e.testkit.resume import assert_saved_metadata
 from tests.e2e.testkit.references import (
     JourneyOrigin,
@@ -14,6 +17,7 @@ from tests.e2e.testkit.references import (
     SessionSpecs,
     Sessions,
     Turns,
+    TurnRef,
 )
 
 
@@ -84,6 +88,107 @@ def submit_native_journey_command(
     journey_driver.submit_native_command(
         session_journeys.get(session_name),
         command,
+    )
+
+
+@when(
+    parsers.parse(
+        'I insert terminal draft \'{text}\' in journey session "{session_name}"'
+    )
+)
+def insert_journey_terminal_draft(
+    journey_driver: JourneyDriver,
+    session_journeys: SessionJourneys,
+    session_name: str,
+    text: str,
+) -> None:
+    journey_driver.insert_terminal_draft(
+        session_journeys.get(session_name),
+        text,
+    )
+
+
+@when(
+    parsers.parse(
+        'I put journey session "{session_name}" in {mode} editor mode'
+    )
+)
+def set_journey_editor_mode(
+    journey_driver: JourneyDriver,
+    session_journeys: SessionJourneys,
+    session_name: str,
+    mode: str,
+) -> None:
+    if mode == "standard":
+        return
+    if mode != "visual":
+        raise AssertionError(f"unknown editor mode {mode!r}")
+    journey_driver.use_visual_editor_mode(session_journeys.get(session_name))
+
+
+@then(
+    parsers.re(
+        r'journey session "(?P<session_name>[^"]+)" terminal draft is exactly '
+        r"'(?P<text>.*)'"
+    )
+)
+def journey_terminal_draft_is_exact(
+    client: BaqylauClient,
+    session_journeys: SessionJourneys,
+    wait_policy: WaitPolicy,
+    session_name: str,
+    text: str,
+) -> None:
+    journey = session_journeys.get(session_name)
+
+    def observed() -> bool | None:
+        input_state = client.preferences.session_state(journey.session).terminal.input_state
+        return True if input_state is not None and input_state.typed_text == text else None
+
+    wait_for(
+        f"journey session {session_name!r} terminal draft to equal {text!r}",
+        observed,
+        timeout=wait_policy.feed,
+    )
+
+
+@when(
+    parsers.parse(
+        'I send the shared draft for journey session "{session_name}" as turn "{turn_name}"'
+    )
+)
+def send_journey_shared_draft(
+    client: BaqylauClient,
+    session_journeys: SessionJourneys,
+    turns: Turns,
+    session_name: str,
+    turn_name: str,
+) -> None:
+    journey = session_journeys.get(session_name)
+    application = client.preferences.session_state(journey.session)
+    draft = application.composer.draft
+    if draft is None or not draft.text:
+        raise AssertionError(f"journey session {session_name!r} has no shared draft")
+    before = client.sessions.snapshot(journey.session)
+    lead = before.lead()
+    client.preferences.save_composer_draft(
+        journey.session,
+        text="",
+        origin="e2e-browser",
+        sequence=time.time() * 1000,
+    )
+    receipt = client.sessions.send(journey.session, draft.text)
+    if receipt.status_code != 200 or receipt.outcome.status not in ("sent", "queued"):
+        raise AssertionError(f"shared draft was not accepted: {receipt.outcome}")
+    turns.bind(
+        turn_name,
+        TurnRef(
+            journey.session,
+            draft.text,
+            receipt.cursor_before,
+            lead.statistics.prompt_count + 1,
+            actor_id=lead.actor_id,
+        ),
     )
 
 

@@ -39,25 +39,31 @@ def save_e2e_failure_diagnostics(
     return path
 
 
-def e2e_failure_diagnostics(application: ApplicationProcess) -> str:
+def e2e_failure_diagnostics(
+    application: ApplicationProcess,
+    window_ids: frozenset[str] | None = None,
+) -> str:
     """Describe the failed test process, its stored state, and its terminal."""
     sections = [
         _system_state(),
         _application_state(application),
-        _terminal_state(application),
+        _terminal_state(application, window_ids),
         _profile_state(application),
         _database_state(application.config.data_directory),
     ]
     return "\n\n".join(section for section in sections if section)
 
 
-def e2e_stall_diagnostics(application: ApplicationProcess) -> str:
+def e2e_stall_diagnostics(
+    application: ApplicationProcess,
+    window_ids: frozenset[str] | None = None,
+) -> str:
     """Return the small live-state part of the full failure report."""
     return "\n\n".join(
         (
             _system_state(),
             _application_state(application),
-            _terminal_state(application),
+            _terminal_state(application, window_ids),
             _profile_state(application),
         )
     )
@@ -247,7 +253,10 @@ def _query_sections(
     return result
 
 
-def _terminal_state(application: ApplicationProcess) -> str:
+def _terminal_state(
+    application: ApplicationProcess,
+    window_ids: frozenset[str] | None,
+) -> str:
     lines = ["terminal"]
     client = BaqylauClient(application.endpoint.url)
     try:
@@ -256,6 +265,10 @@ def _terminal_state(application: ApplicationProcess) -> str:
         return f"terminal\n  read_error={type(error).__name__}: {error}"
     finally:
         client.close()
+    if window_ids is not None:
+        windows = tuple(
+            window for window in windows if str(window.window_id) in window_ids
+        )
     if not windows:
         return "terminal\n  windows=[]"
     for window in windows:

@@ -272,6 +272,28 @@ class KittyRemote:
         except Exception:
             return False
 
+    def insert_text(self, win: str, text: str, bracketed: bool = False) -> bool:
+        """Put text in window `win` without an Enter key.
+
+        The text goes over standard input, so it is not a shell argument and
+        kitten does not interpret escape sequences.
+        """
+        if self.kitten is None:
+            return False
+        try:
+            argv = [self.kitten, "@", "--to", self.listen, "send-text", "--match", f"id:{win}", "--stdin"]
+            text_argv = argv[:-1] + ["--bracketed-paste=enable", "--stdin"] if bracketed else argv
+            result = subprocess.run(
+                text_argv,
+                input=text.encode("utf-8"),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=KITTEN_TIMEOUT_SECONDS,
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+
     def send_text(self, win: str, text: str, bracketed: bool = False) -> bool:
         """`kitten @ send-text --stdin` to window `win`: the text goes over STDIN
         precisely so it is never a shell argument NOR a kitten escape vector —
@@ -284,20 +306,11 @@ class KittyRemote:
         reads it as ONE atomic paste — needed for the cancel-edit resend, where
         a raw send into an input whose state just changed drops the leading
         bytes (measured). The CR stays OUTSIDE the paste, so it still submits."""
-        if self.kitten is None:
+        kitten = self.kitten
+        if kitten is None or not self.insert_text(win, text, bracketed=bracketed):
             return False
         try:
-            argv = [self.kitten, "@", "--to", self.listen, "send-text", "--match", f"id:{win}", "--stdin"]
-            text_argv = argv[:-1] + ["--bracketed-paste=enable", "--stdin"] if bracketed else argv
-            r = subprocess.run(
-                text_argv,
-                input=text.encode("utf-8"),
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=KITTEN_TIMEOUT_SECONDS,
-            )
-            if r.returncode != 0:
-                return False
+            argv = [kitten, "@", "--to", self.listen, "send-text", "--match", f"id:{win}", "--stdin"]
             time.sleep(SEND_ENTER_DELAY_SECONDS)
             r = subprocess.run(
                 argv, input=b"\r", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=KITTEN_TIMEOUT_SECONDS

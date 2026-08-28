@@ -49,6 +49,7 @@ from harness.models import (
 )
 from fake_terminal import FakeSessions, FakeTerminal, window
 from terminal.adapter import SessionPaneRequest, SessionTerminalResult, TerminalAdapter
+from harness.services.terminal_driver import TerminalDriver
 from terminal.models import (
     ACTIVITY_PANE_TAG,
     SCOREBOARD_PANE_TAG,
@@ -1758,7 +1759,8 @@ class SubmitProbeDriver:
         divider = "─" * 20
         return f"{divider}\n❯\u00a0\n{divider}"
 
-    def paste_text(self, window_id, text):
+    def submit_text(self, window_id, text, *, paste=True):
+        del paste
         self.box = text
         return True
 
@@ -4047,14 +4049,14 @@ def test_direct_terminal_launch_rejects_invalid_environment_names():
         )
 
 
-def test_claude_terminal_probe_owns_input_box_grammar(tmp_path):
+def test_claude_composer_owns_input_box_grammar(tmp_path):
     divider = "\x1b[m\x1b[38:2:136:136:136m" + "─" * 20
     screen = divider + "\n\x1b[m❯\xa0\x1b[22;2mapply the fix\n" + divider
 
     terminal = FakeTerminal(screen_text=screen)
 
     plugin = ProviderGraph().registry.plugin("claude_code")
-    state = plugin.terminal_probe.input_state(terminal, "window-one")
+    state = plugin.composer.read(TerminalDriver(terminal.plugin()), "window-one")
 
     assert state.suggestion == "apply the fix"
     assert state.typed_text == ""
@@ -4168,6 +4170,11 @@ def control_context(
     return ControlContext(session, terminal, window_id, None, lead_active, pending_attention)
 
 
+def claude_composer_screen(text: str = "") -> str:
+    divider = "\x1b[m\x1b[38:2:136:136:136m" + "─" * 20
+    return f"{divider}\n\x1b[m❯\xa0{text}\n{divider}"
+
+
 @pytest.mark.parametrize(
     ("harness", "interrupt_handler"),
     (
@@ -4253,7 +4260,7 @@ def test_claude_active_send_retries_until_the_native_queue_accepts_it(
         request,
         control_context(
             session,
-            FakeTerminal().plugin(),
+                FakeTerminal(screen_text=claude_composer_screen()).plugin(),
             lead_active=True,
         ),
     )
@@ -4350,7 +4357,7 @@ def test_claude_active_send_is_not_called_queued_without_native_confirmation(
         request,
         control_context(
             session,
-            FakeTerminal().plugin(),
+                FakeTerminal(screen_text=claude_composer_screen()).plugin(),
             lead_active=True,
         ),
     )
@@ -4526,7 +4533,7 @@ def test_claude_attachment_delivery_keeps_the_prompt_visible_for_verification(
         ),
     )
 
-    terminal = FakeTerminal()
+    terminal = FakeTerminal(screen_text=claude_composer_screen())
     outcome = application.registry.plugin("claude_code").controller.execute(
         request,
         control_context(session, terminal.plugin()),
@@ -5055,13 +5062,19 @@ def test_parked_rename_uses_only_the_owning_harness_title_store(
     assert calls == [(session.source_reference, "New title")]
 
 
-def test_live_codex_rename_also_updates_the_native_title_store(monkeypatch):
-    calls = []
+def test_live_codex_rename_waits_for_the_native_title_store(monkeypatch):
+    from harness.impl.codex.canonical.title import CodexNativeTitle
+    from domain.values import TitleOrigin
+
+    monkeypatch.setattr(
+        "harness.impl.codex.canonical.title.CodexThreadTitleRepository.read_title",
+        lambda _self, _source_reference: CodexNativeTitle(
+            "New title", TitleOrigin.AUTOMATIC
+        ),
+    )
     monkeypatch.setattr(
         "harness.impl.codex.canonical.title.CodexThreadTitleRepository.set_title",
-        lambda _self, source_reference, value: (
-            calls.append((source_reference, value)) or "renamed"
-        ),
+        lambda *_args: pytest.fail("a live rename must not write the Codex store"),
     )
     application = ProviderGraph()
     session = Session(
@@ -5070,7 +5083,7 @@ def test_live_codex_rename_also_updates_the_native_title_store(monkeypatch):
         "/work/rollout-session-one.jsonl",
         "/work",
     )
-    terminal = FakeTerminal()
+    terminal = FakeTerminal(screen_text="› Ask Codex to do anything")
 
     outcome = application.registry.plugin("codex").controller.execute(
         RenameSession(session.session_id, "request-one", "New title"),
@@ -5078,8 +5091,147 @@ def test_live_codex_rename_also_updates_the_native_title_store(monkeypatch):
     )
 
     assert outcome.status == "acknowledged"
-    assert calls == [(session.source_reference, "New title")]
+    assert terminal.submitted[-1][1] == "/rename New title"
     assert terminal.renamed_tabs == []
+
+
+def test_live_claude_rename_restores_a_visual_mode_draft(tmp_path):
+    from terminal.models import (
+        KeySendResponse,
+        ScreenReadResponse,
+        TextInsertResponse,
+        TextSubmitResponse,
+    )
+
+    source = tmp_path / "session-one.jsonl"
+    source.write_text("", encoding="utf-8")
+
+    class DraftTerminal(FakeTerminal):
+        def __init__(self):
+            super().__init__()
+            self.text = "test"
+            self.mode = "VISUAL"
+
+        def read_screen(self, request):
+            del request
+            divider = "\x1b[m\x1b[38:2:136:136:136m" + "─" * 20
+            return ScreenReadResponse(
+                True,
+                f"{divider}\n\x1b[m❯\xa0{self.text}\n{divider}\n-- {self.mode} --",
+            )
+
+        def send_key(self, request):
+            self.keys.append((request.window_id, request.key))
+            if request.key == "escape":
+                self.mode = "NORMAL"
+            elif request.key == "i" and self.mode == "NORMAL":
+                self.mode = "INSERT"
+            elif request.key in ("ctrl+u", "ctrl+k"):
+                self.text = ""
+            return KeySendResponse(True)
+
+        def insert_text(self, request):
+            self.inserted.append((request.window_id, request.text, request.mode))
+            self.text += request.text
+            return TextInsertResponse(True)
+
+        def submit_text(self, request):
+            self.submitted.append((request.window_id, request.text, request.mode))
+            self.text = ""
+            name = request.text.removeprefix("/rename ")
+            with source.open("a", encoding="utf-8") as target:
+                target.write(
+                    json.dumps(
+                        {
+                            "type": "agent-name",
+                            "agentName": name,
+                            "sessionId": "session-one",
+                        }
+                    )
+                    + "\n"
+                )
+            return TextSubmitResponse(True)
+
+    terminal = DraftTerminal()
+    session = Session(
+        SessionId("session-one"),
+        ActorId("session-one:lead"),
+        str(source),
+        str(tmp_path),
+    )
+
+    outcome = ProviderGraph().registry.plugin("claude_code").controller.execute(
+        RenameSession(session.session_id, "request-one", "New title"),
+        control_context(session, terminal.plugin()),
+    )
+
+    assert outcome.status == "acknowledged"
+    assert terminal.text == "test"
+    assert terminal.submitted[-1][1] == "/rename New title"
+    assert [key for _window, key in terminal.keys[:2]] == ["escape", "i"]
+
+
+def test_live_codex_rename_restores_an_existing_draft(monkeypatch):
+    from harness.impl.codex.canonical.title import CodexNativeTitle
+    from domain.values import TitleOrigin
+    from terminal.models import (
+        KeySendResponse,
+        ScreenReadResponse,
+        TextInsertResponse,
+        TextSubmitResponse,
+    )
+
+    class DraftTerminal(FakeTerminal):
+        def __init__(self):
+            super().__init__()
+            self.text = "test"
+
+        def read_screen(self, request):
+            del request
+            content = self.text or "Ask Codex to do anything"
+            return ScreenReadResponse(True, f"› {content}\n\n  gpt-5.6-sol high")
+
+        def send_key(self, request):
+            self.keys.append((request.window_id, request.key))
+            if request.key in ("ctrl+u", "ctrl+k"):
+                self.text = ""
+            return KeySendResponse(True)
+
+        def insert_text(self, request):
+            self.inserted.append((request.window_id, request.text, request.mode))
+            self.text += request.text
+            return TextInsertResponse(True)
+
+        def submit_text(self, request):
+            self.submitted.append((request.window_id, request.text, request.mode))
+            self.text = ""
+            return TextSubmitResponse(True)
+
+    terminal = DraftTerminal()
+    monkeypatch.setattr(
+        "harness.impl.codex.canonical.title.CodexThreadTitleRepository.read_title",
+        lambda _self, _source_reference: (
+            CodexNativeTitle("New title", TitleOrigin.AUTOMATIC)
+            if terminal.submitted
+            else None
+        ),
+    )
+    session = Session(
+        SessionId("session-one"),
+        ActorId("session-one:lead"),
+        "/work/rollout-session-one.jsonl",
+        "/work",
+    )
+
+    outcome = ProviderGraph().registry.plugin("codex").controller.execute(
+        RenameSession(session.session_id, "request-one", "New title"),
+        control_context(session, terminal.plugin()),
+    )
+
+    assert outcome.status == "acknowledged"
+    assert terminal.text == "test"
+    assert terminal.submitted[-1][1] == "/rename New title"
+    assert "escape" not in [key for _window, key in terminal.keys]
 
 
 def test_claude_prompt_and_codex_prompt_share_the_message_model():

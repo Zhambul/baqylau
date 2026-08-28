@@ -38,6 +38,8 @@ from terminal.models import (
     TabAppearance,
     TabColorSetRequest,
     TabOpenRequest,
+    TextInsertRequest,
+    TextInputMode,
     TextSubmitRequest,
     WindowTagRequest,
 )
@@ -87,6 +89,10 @@ class FakeRemote:
 
     def send_text(self, win, text, bracketed=False):
         self.calls.append(("send-text", win, text, bracketed))
+        return True
+
+    def insert_text(self, win, text, bracketed=False):
+        self.calls.append(("insert-text", win, text, bracketed))
         return True
 
     def get_text(self, win_id, extent="screen", ansi=False):
@@ -141,14 +147,27 @@ def test_the_terminal_that_is_not_there_fails_every_operation_in_shape():
     responses = [
         plugin.tabs.open_tab(TabOpenRequest("/work", ("claude",), "")),
         plugin.metadata.tag_window(WindowTagRequest("1", {})),
+        plugin.input.insert_text(TextInsertRequest("1", "draft", "paste")),
         plugin.input.submit_text(TextSubmitRequest("1", "hello", "paste")),
         plugin.viewport.read_screen(ScreenReadRequest("1")),
     ]
-    assert [response.succeeded for response in responses] == [False] * 4
+    assert [response.succeeded for response in responses] == [False] * 5
     assert all(response.reason for response in responses)
     # a read answers with emptiness, not an exception: services stay unconditional
     assert plugin.metadata.windows() == ()
     assert plugin.metadata.current_window_id() is None
+
+
+def test_kitty_insert_does_not_submit_the_text() -> None:
+    remote = FakeRemote()
+    plugin = kitty_plugin(cast(KittyRemote, remote))
+
+    result = plugin.input.insert_text(
+        TextInsertRequest(WindowId("7"), "saved draft", TextInputMode.PASTE)
+    )
+
+    assert result.succeeded
+    assert remote.calls == [("insert-text", "7", "saved draft", True)]
 
 
 def test_a_terminal_is_detected_and_pinned_by_name(monkeypatch):

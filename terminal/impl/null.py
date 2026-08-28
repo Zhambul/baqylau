@@ -21,6 +21,8 @@ from terminal.contract import (
 from terminal.models.input import (
     KeySendRequest,
     KeySendResponse,
+    TextInsertRequest,
+    TextInsertResponse,
     TextSubmitRequest,
     TextSubmitResponse,
 )
@@ -96,6 +98,9 @@ class NullMetadata(TerminalMetadata):
 
 
 class NullInput(TerminalInput):
+    def insert_text(self, text_insert_request: TextInsertRequest) -> TextInsertResponse:
+        return TextInsertResponse(False, NO_TERMINAL)
+
     def submit_text(self, text_submit_request: TextSubmitRequest) -> TextSubmitResponse:
         return TextSubmitResponse(False, NO_TERMINAL)
 

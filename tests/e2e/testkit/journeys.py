@@ -13,7 +13,13 @@ from harness.runtime import HarnessRuntimeConfigs
 from sdk.client import BaqylauClient, LaunchRef, SessionRef, wait_for
 from terminal.contract import TerminalPlugin
 from terminal.launch import launch_tab_request
-from terminal.models import KeySendRequest, TabCloseRequest, TextSubmitMode, TextSubmitRequest
+from terminal.models import (
+    KeySendRequest,
+    TabCloseRequest,
+    TextInputMode,
+    TextInsertRequest,
+    TextSubmitRequest,
+)
 from terminal.models.values import WindowId
 from tests.e2e.testkit import selectors
 from tests.e2e.testkit.policy import WaitPolicy
@@ -60,6 +66,10 @@ class JourneyDriver:
         self._launch_environment = launch_environment
         self._resume = SessionResumeSupport(client, wait_policy)
         self._windows: set[WindowId] = set()
+
+    @property
+    def window_ids(self) -> frozenset[str]:
+        return frozenset(str(window_id) for window_id in self._windows)
 
     def close(self) -> None:
         for window_id in tuple(self._windows):
@@ -117,7 +127,7 @@ class JourneyDriver:
                 TextSubmitRequest(
                     window_id,
                     prompt,
-                    TextSubmitMode.PASTE,
+                    TextInputMode.PASTE,
                 )
             )
             if not outcome.succeeded:
@@ -156,11 +166,37 @@ class JourneyDriver:
             TextSubmitRequest(
                 WindowId(journey.window_id),
                 command,
-                TextSubmitMode.TYPE,
+                TextInputMode.TYPE,
             )
         )
         if not outcome.succeeded:
             raise AssertionError(f"native command was not delivered: {outcome.reason}")
+
+    def insert_terminal_draft(
+        self,
+        journey: SessionJourneyRef,
+        text: str,
+    ) -> None:
+        outcome = self._terminal.input.insert_text(
+            TextInsertRequest(
+                WindowId(journey.window_id),
+                text,
+                TextInputMode.PASTE,
+            )
+        )
+        if not outcome.succeeded:
+            raise AssertionError(
+                f"terminal draft was not inserted: {outcome.reason}"
+            )
+
+    def use_visual_editor_mode(self, journey: SessionJourneyRef) -> None:
+        window_id = WindowId(journey.window_id)
+        for key in ("escape", "v"):
+            outcome = self._terminal.input.send_key(KeySendRequest(window_id, key))
+            if not outcome.succeeded:
+                raise AssertionError(
+                    f"terminal editor mode key was not delivered: {outcome.reason}"
+                )
 
     def interrupt_from_terminal(self, journey: SessionJourneyRef) -> None:
         """Press Escape twice without an HTTP control.

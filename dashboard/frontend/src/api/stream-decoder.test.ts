@@ -6,6 +6,7 @@ import {
   decodeGlobalApplicationFrame,
   decodeGlobalStreamFrame,
   decodeReadyFrame,
+  decodeSessionApplicationFrame,
   decodeSessionStreamFrame,
 } from './stream-decoder';
 
@@ -117,5 +118,35 @@ describe('stream decoder', () => {
         }),
       ),
     ).toThrow(/switchable/);
+  });
+
+  it('decodes a terminal draft from a session application event', () => {
+    const application = decodeSessionApplicationFrame(
+      JSON.stringify({
+        preferences: {
+          view_mode: 'default',
+          notifications_muted: false,
+          tasks_hidden: false,
+        },
+        composer: {
+          draft: { text: 'test', origin: 'terminal', sequence: 1000 },
+          queue: null,
+        },
+        dialog: { draft: null },
+        terminal: {
+          window_id: 'window-one',
+          input_state: { typed_text: 'test', suggestion: null },
+        },
+        errors: [],
+      }),
+    );
+
+    expect(application.composer.draft?.text).toBe('test');
+    expect(application.composer.draft?.origin).toBe('terminal');
+    expect(() =>
+      decodeSessionApplicationFrame(
+        JSON.stringify({ preferences: { view_mode: 'unknown' } }),
+      ),
+    ).toThrow(StreamValidationFailure);
   });
 });

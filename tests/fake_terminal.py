@@ -21,6 +21,7 @@ from terminal.models import (
     TabColorSetResponse,
     TabOpenResponse,
     TabRenameResponse,
+    TextInsertResponse,
     TextSubmitResponse,
     ViewportScrollResponse,
     WindowFocusResponse,
@@ -71,6 +72,7 @@ class FakeTerminal:
         self.painted = []
         self.cleared = []
         self.submitted = []
+        self.inserted = []
         self.keys = []
         self.scrolled = []
         self._next_window_id = 100
@@ -150,6 +152,10 @@ class FakeTerminal:
         return TabColorClearResponse(True)
 
     # --- input / viewport ----------------------------------------------------
+    def insert_text(self, request):
+        self.inserted.append((request.window_id, request.text, request.mode))
+        return TextInsertResponse(True)
+
     def submit_text(self, request):
         self.submitted.append((request.window_id, request.text, request.mode))
         return TextSubmitResponse(True)

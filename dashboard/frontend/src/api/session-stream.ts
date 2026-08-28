@@ -1,11 +1,16 @@
 import type { SessionId } from '../app/domain-ids';
-import { decodeSessionStreamFrame } from './stream-decoder';
+import type { SessionApplication } from '../application/session-model';
+import {
+  decodeSessionApplicationFrame,
+  decodeSessionStreamFrame,
+} from './stream-decoder';
 import type { SessionStreamDelta } from './stream-decoder';
 
 export type SessionStreamCallbacks = {
   readonly opened: () => void;
   readonly disconnected: () => void;
   readonly delta: (frame: SessionStreamDelta, cursor: number) => void;
+  readonly application: (application: SessionApplication) => void;
   readonly invalid: (error: Error) => void;
 };
 
@@ -54,6 +59,17 @@ export class SessionStream {
         callbacks.delta(
           decodeSessionStreamFrame(messageText(event)),
           eventCursor(event),
+        );
+      } catch (error) {
+        callbacks.invalid(
+          error instanceof Error ? error : new Error(String(error)),
+        );
+      }
+    });
+    this.source.addEventListener('application', (event) => {
+      try {
+        callbacks.application(
+          decodeSessionApplicationFrame(messageText(event)),
         );
       } catch (error) {
         callbacks.invalid(

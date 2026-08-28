@@ -4,8 +4,9 @@ Feature: shell work reaches the session feed
     Given session configuration "primary" uses <harness> with model <model> and <effort> effort
     When I launch session "primary" and assign work "run hello" to the <worker> with prompt
       """
-      Run the shell command `echo hello world`. Then, reply with exactly these
-      four lowercase letters and no other text: done
+      Use the shell execution tool exactly once. Run the exact command
+      `echo hello world`. Wait for the tool result. Then, reply with exactly
+      these four lowercase letters and no other text: done
       """
     Then work "run hello" completes
     And work "run hello" has worker type <worker>

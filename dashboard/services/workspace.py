@@ -14,6 +14,7 @@ dialog draft is dropped once its attention stops being pending.
 from __future__ import annotations
 
 import time
+import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Protocol
@@ -42,6 +43,7 @@ from domain.values import AttentionPrompt
 from harness.contract import CanonicalEventReaction
 from repository.contract.session_data import SessionDataRepository
 from harness.models import TerminalSessionState
+from harness.services.terminal_gate import SessionTerminalGate
 from repository.contract.audit import AuditReadRepository
 from repository.contract.preferences import (
     NotificationSettingRepository,
@@ -90,6 +92,7 @@ class SessionApplicationService:
         view_mode_repository: ViewModeRepository,
         notification_setting_repository: NotificationSettingRepository,
         task_dismissal_repository: TaskDismissalRepository,
+        session_terminal_gate: SessionTerminalGate | None = None,
         clock: Callable[[], float] | None = None,
     ) -> None:
         self.session_data_repository = session_data_repository
@@ -99,7 +102,10 @@ class SessionApplicationService:
         self.view_mode_repository = view_mode_repository
         self.notification_setting_repository = notification_setting_repository
         self.task_dismissal_repository = task_dismissal_repository
+        self.session_terminal_gate = session_terminal_gate or SessionTerminalGate()
         self.clock = clock or time.time
+        self._terminal_text: dict[SessionId, str] = {}
+        self._terminal_text_lock = threading.Lock()
 
     # --- what you chose -------------------------------------------------------
 
@@ -160,6 +166,7 @@ class SessionApplicationService:
     # --- the whole page's state in one answer ---------------------------------
 
     def snapshot(self, session_id: SessionId) -> SessionApplicationSnapshot:
+        self._sync_terminal_draft(session_id)
         composer, dialog = self._state(session_id)
         tasks = self._tasks(session_id)
         dismissed = self.task_dismissal_repository.dismissed_task_ids(session_id)
@@ -177,6 +184,33 @@ class SessionApplicationService:
             terminal=self.terminal_session_reader.state(session_id),
             errors=self.audit_read_repository.errors_for_session(session_id),
         )
+
+    def _sync_terminal_draft(self, session_id: SessionId) -> None:
+        """Move a changed terminal draft to the shared composer state."""
+        with self.session_terminal_gate.enter(session_id):
+            terminal = self.terminal_session_reader.state(session_id)
+            state = terminal.input_state
+            if state is None or state.typed_text is None:
+                return
+            text = state.typed_text
+            with self._terminal_text_lock:
+                known = session_id in self._terminal_text
+                previous = self._terminal_text.get(session_id)
+                if known and previous == text:
+                    return
+                self._terminal_text[session_id] = text
+            workspace = self.session_workspace_repository.find(session_id)
+            draft = None if workspace is None else workspace.draft
+            if text:
+                self.session_workspace_repository.save_composer_draft(
+                    session_id,
+                    ComposerDraft(text, "terminal", self.clock() * 1000),
+                )
+            elif draft is not None and draft.origin == "terminal":
+                self.session_workspace_repository.save_composer_draft(
+                    session_id,
+                    ComposerDraft("", "terminal", self.clock() * 1000),
+                )
 
     def _state(self, session_id: SessionId) -> tuple[ComposerState, DialogState]:
         workspace = self.session_workspace_repository.find(session_id)

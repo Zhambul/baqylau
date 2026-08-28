@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import os
-import shutil
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from api.runtime import ApplicationConfig
-from domain.ids import HarnessName
-from harness.runtime import HarnessRuntimeConfig, HarnessRuntimeConfigs
+from harness.runtime import HarnessRuntimeConfigs
 from sdk.client import BaqylauClient
 from terminal.impl.kitty.plugin import kitty_plugin
 from terminal.impl.kitty.remote import resolve_listen_on
@@ -42,33 +40,13 @@ def real_terminal_identity(
 @pytest.fixture(scope="session")
 def application_process(
     tmp_path_factory: pytest.TempPathFactory,
-    isolated_codex_home: Path,
-    isolated_claude_home: Path,
+    isolated_harness_runtime_configs: HarnessRuntimeConfigs,
     claude_workspace_trust: None,
 ) -> Iterator[ApplicationProcess]:
     del claude_workspace_trust
     if resolve_listen_on() is None:
         pytest.skip("no Kitty remote-control socket is available")
-    codex_executable = shutil.which("codex")
-    claude_executable = shutil.which("claude")
-    if codex_executable is None or claude_executable is None:
-        raise pytest.UsageError("Codex and Claude executables are required")
-    runtime_configs = HarnessRuntimeConfigs(
-        (
-            (
-                HarnessName.CLAUDE_CODE,
-                HarnessRuntimeConfig(
-                    claude_executable,
-                    isolated_claude_home,
-                    isolated_claude_home / "managed-settings.json",
-                ),
-            ),
-            (
-                HarnessName.CODEX,
-                HarnessRuntimeConfig(codex_executable, isolated_codex_home),
-            ),
-        )
-    )
+    runtime_configs = isolated_harness_runtime_configs
     process = ApplicationProcess.start(ApplicationConfig(
         data_directory=Path(tmp_path_factory.mktemp("baqylau-kitty-data")),
         port=0,

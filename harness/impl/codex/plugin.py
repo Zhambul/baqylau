@@ -16,6 +16,7 @@ from harness.impl.codex.launcher import CodexLauncher
 from harness.impl.codex.usage_rows import CodexUsage
 from harness.impl.codex.resume import CodexResumeLocator
 from harness.impl.codex.controls import modeldialog
+from harness.impl.codex.controls.composer import CodexComposer
 from harness.runtime import HarnessRuntimeConfig, default_harness_runtime_configs
 from terminal.contract import TerminalPlugin
 
@@ -93,6 +94,7 @@ def build_plugin(
             else None
         ),
         resume_locator=CodexResumeLocator(),
+        composer=CodexComposer(),
     )
 
 

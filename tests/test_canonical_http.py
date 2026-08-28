@@ -24,6 +24,7 @@ from api.server import build_server
 from app import providers
 from canonical_runtime import ProviderGraph
 from audit.recorder import AuditRecorder
+from harness.services.terminal_gate import SessionTerminalGate
 from audit.telemetry import BrowserTelemetryService
 from harness.models import RawEvent, Session, TranslationResult
 from notify.presence import Presence
@@ -646,7 +647,7 @@ def _audited_control(monkeypatch, outcome):
 
     service = object.__new__(services.HarnessControlService)
     service.audit = RowRecorder()
-    service._control_gate = services._SessionControlGate()
+    service._control_gate = SessionTerminalGate()
     request = SelectModel(SESSION_ID, "request-one", model="gpt-5.6-sol")
 
     def run(_request):
@@ -712,7 +713,7 @@ def test_a_broken_audit_never_takes_down_the_gesture(monkeypatch):
 
     service = object.__new__(services.HarnessControlService)
     service.audit = BrokenAudit()
-    service._control_gate = services._SessionControlGate()
+    service._control_gate = SessionTerminalGate()
     service.sessions = SimpleNamespace(find=lambda _session_id: None)
     monkeypatch.setattr(service, "_execute", lambda r: ControlResult(r.request_id, "acknowledged"))
 
@@ -772,7 +773,7 @@ def test_every_control_method_writes_exactly_one_audit_row_through_one_core(monk
 
     service = object.__new__(services.HarnessControlService)
     service.audit = RowRecorder()
-    service._control_gate = services._SessionControlGate()
+    service._control_gate = SessionTerminalGate()
     service.interrupts = _NullInterruptRegistry()
     service.control_effects = _NullControlEffects()
     service.sessions = _NoSessions()

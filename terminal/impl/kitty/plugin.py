@@ -38,7 +38,9 @@ from terminal.models.panes import (
 from terminal.models.input import (
     KeySendRequest,
     KeySendResponse,
-    TextSubmitMode,
+    TextInputMode,
+    TextInsertRequest,
+    TextInsertResponse,
     TextSubmitRequest,
     TextSubmitResponse,
 )
@@ -328,11 +330,19 @@ class KittyInput(TerminalInput):
     def __init__(self, kitty_remote: KittyRemote) -> None:
         self.kitty_remote = kitty_remote
 
+    def insert_text(self, text_insert_request: TextInsertRequest) -> TextInsertResponse:
+        delivered = self.kitty_remote.insert_text(
+            text_insert_request.window_id,
+            text_insert_request.text,
+            bracketed=text_insert_request.mode == TextInputMode.PASTE,
+        )
+        return TextInsertResponse(delivered, None if delivered else "terminal input failed")
+
     def submit_text(self, text_submit_request: TextSubmitRequest) -> TextSubmitResponse:
         delivered = self.kitty_remote.send_text(
             text_submit_request.window_id,
             text_submit_request.text,
-            bracketed=text_submit_request.mode == TextSubmitMode.PASTE,
+            bracketed=text_submit_request.mode == TextInputMode.PASTE,
         )
         return TextSubmitResponse(delivered, None if delivered else "terminal input failed")
 

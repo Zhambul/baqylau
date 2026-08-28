@@ -9,7 +9,9 @@ about windows, not about sessions or harnesses.
 from terminal.models.input import (
     KeySendRequest,
     KeySendResponse,
-    TextSubmitMode,
+    TextInputMode,
+    TextInsertRequest,
+    TextInsertResponse,
     TextSubmitRequest,
     TextSubmitResponse,
 )
@@ -82,7 +84,9 @@ __all__ = [
     "TabOpenResponse",
     "TabRenameRequest",
     "TabRenameResponse",
-    "TextSubmitMode",
+    "TextInputMode",
+    "TextInsertRequest",
+    "TextInsertResponse",
     "TextSubmitRequest",
     "TextSubmitResponse",
     "ViewportScrollRequest",

@@ -36,7 +36,9 @@ from terminal.impl.pty.window import PtyWindow, open_window
 from terminal.models.input import (
     KeySendRequest,
     KeySendResponse,
-    TextSubmitMode,
+    TextInputMode,
+    TextInsertRequest,
+    TextInsertResponse,
     TextSubmitRequest,
     TextSubmitResponse,
 )
@@ -295,13 +297,24 @@ class PtyInput(TerminalInput):
     def __init__(self, pty_windows: PtyWindows) -> None:
         self.pty_windows = pty_windows
 
+    def insert_text(self, text_insert_request: TextInsertRequest) -> TextInsertResponse:
+        with self.pty_windows.lock:
+            window = self.pty_windows.get(text_insert_request.window_id)
+            if window is None:
+                return TextInsertResponse(False, NO_WINDOW)
+            payload = text_insert_request.text.encode("utf-8")
+            if text_insert_request.mode == TextInputMode.PASTE:
+                payload = keys.BRACKETED_PASTE_START + payload + keys.BRACKETED_PASTE_END
+            delivered = window.write(payload)
+        return TextInsertResponse(delivered, None if delivered else "pty input failed")
+
     def submit_text(self, text_submit_request: TextSubmitRequest) -> TextSubmitResponse:
         with self.pty_windows.lock:
             window = self.pty_windows.get(text_submit_request.window_id)
             if window is None:
                 return TextSubmitResponse(False, NO_WINDOW)
             payload = text_submit_request.text.encode("utf-8")
-            if text_submit_request.mode == TextSubmitMode.PASTE:
+            if text_submit_request.mode == TextInputMode.PASTE:
                 payload = keys.BRACKETED_PASTE_START + payload + keys.BRACKETED_PASTE_END
             # The Enter stays a separate keystroke, so it submits rather than
             # becoming a newline in the draft (TextSubmitRequest). The delay also

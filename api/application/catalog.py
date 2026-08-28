@@ -39,7 +39,7 @@ def harnesses(registry: Registry) -> list[HarnessDescriptionResponse]:
                 *(() if plugin.info.supports_native_automatic_renaming else (ControlName.AUTO_NAME_SESSION,)),
             })),
             supports_accounts=plugin.info.supports_accounts,
-            supports_terminal_input=plugin.terminal_probe is not None,
+            supports_terminal_input=plugin.composer is not None,
             supports_readable_compaction_context=(
                 plugin.info.supports_readable_compaction_context
             ),

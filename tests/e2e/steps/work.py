@@ -294,6 +294,34 @@ def work_has_final_answer(
     )
 
 
+@then(parsers.parse('work "{name}" has final answer containing \'{text}\''))
+def work_has_final_answer_containing(
+    client: BaqylauClient,
+    works: Works,
+    wait_policy: WaitPolicy,
+    name: str,
+    text: str,
+) -> None:
+    work = works.get(name)
+    if work.assignment is not None:
+        client.sessions.watch(work.session).wait(
+            f"subagent work {name!r} to have a final answer containing {text!r}",
+            lambda snapshot: (
+                True
+                if text in (_assignment(snapshot, work).result or "")
+                else None
+            ),
+            timeout=wait_policy.background,
+        )
+        return
+    answers = turn_checks.final_answer_texts(client, work.turn)
+    found = [answer for answer in answers if text in answer]
+    assert len(found) == 1, (
+        f"work {name!r} has {len(found)} final answers containing {text!r}; "
+        f"actual final answers: {answers}"
+    )
+
+
 @then(parsers.parse('work "{name}" has first final answer \'{text}\''))
 def work_has_first_final_answer(
     client: BaqylauClient,

@@ -815,7 +815,7 @@ def test_owned_packages_never_use_raw_dictionaries_or_jsonvalue():
         "dashboard/config.py": {"STATIC"},
         "dashboard/dictate.py": {"request_headers"},
         "dashboard/services/preferences.py": {"hidden_directories"},
-        "dashboard/services/workspace.py": {"pending_questions"},
+            "dashboard/services/workspace.py": {"_terminal_text", "pending_questions"},
         "domain/entries.py": {"BODY_TYPES", "ENTRY_TYPES", "open_attentions"},
         "domain/events.py": {"EVENT_TYPES", "PAYLOAD_TYPES"},
         "engine/interpret/loop.py": {"identities"},
@@ -833,7 +833,7 @@ def test_owned_packages_never_use_raw_dictionaries_or_jsonvalue():
         "harness/models/interrupts.py": {"_marked_at"},
             "harness/models/selections.py": {"_efforts", "_models"},
             "harness/registry.py": {"_plugins"},
-            "harness/services/controls.py": {"_locks"},
+                "harness/services/terminal_gate.py": {"_locks"},
             "harness/services/control_effects.py": {"assignments", "shells", "turns"},
         "harness/impl/claude_code/catalog.py": {"COMMAND_PROMPT_FLOORS"},
         "harness/impl/claude_code/canonical/messages.py": {
@@ -1634,10 +1634,6 @@ PROTOCOL_DECLARATION_EXEMPTIONS = {
     ("TerminalAdapter", "SessionTerminalState"): "the Protocol lives in harness/, which terminal/ may not import",
     ("TerminalInputService", "TerminalSessionReader"): "the Protocol lives in dashboard/, which app/ may not import",
     ("ApplicationUsageState", "UsageReader"): "the Protocol lives in dashboard/, which harness/ may not import",
-    ("_TerminalDriver", "ScreenDriver"): "the Protocol lives in claude_code/, which codex/ may not import "
-    "(one harness may not name another)",
-    ("_TerminalDriver", "Driver"): "the Protocol lives in codex/, which claude_code/ may not import "
-    "(one harness may not name another)",
 }
 
 

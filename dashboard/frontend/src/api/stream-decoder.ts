@@ -1,9 +1,11 @@
 import type { Entry } from '../entries/model';
 import type { GlobalApplication } from '../application/model';
+import type { SessionApplication } from '../application/session-model';
 import type { Actor, Session } from '../sessions/model';
 import type { components } from './generated/schema';
 import { decodeEntry } from './translators/entries';
 import { translateGlobalApplication } from './translators/application';
+import { translateSessionApplication } from './translators/session-application';
 import { translateActor, translateSession } from './translators/session-data';
 
 type Schemas = components['schemas'];
@@ -101,6 +103,104 @@ function arrayValue(value: unknown, name: string): readonly unknown[] {
     throw new StreamValidationFailure(`event field must be an array: ${name}`);
   }
   return candidate;
+}
+
+function viewMode(value: unknown, name: string): Schemas['ViewMode'] {
+  const candidate = stringValue(value, name);
+  if (
+    candidate === 'verbose' ||
+    candidate === 'default' ||
+    candidate === 'focus'
+  )
+    return candidate;
+  throw new StreamValidationFailure(
+    `event field has an unknown view mode: ${name}`,
+  );
+}
+
+function decodeSessionApplication(
+  value: unknown,
+): Schemas['SessionApplicationResponse'] {
+  const preferences = field(value, 'preferences');
+  const composer = field(value, 'composer');
+  const composerDraft = field(composer, 'draft');
+  const queue = field(composer, 'queue');
+  const dialog = field(value, 'dialog');
+  const dialogDraft = field(dialog, 'draft');
+  const terminal = field(value, 'terminal');
+  const inputState = field(terminal, 'input_state');
+  return {
+    preferences: {
+      view_mode: viewMode(preferences, 'view_mode'),
+      notifications_muted: booleanValue(preferences, 'notifications_muted'),
+      tasks_hidden: booleanValue(preferences, 'tasks_hidden'),
+    },
+    composer: {
+      draft:
+        composerDraft === null
+          ? null
+          : {
+              text: stringValue(composerDraft, 'text'),
+              origin: stringValue(composerDraft, 'origin'),
+              sequence: numberValue(composerDraft, 'sequence'),
+            },
+      queue:
+        queue === null
+          ? null
+          : {
+              items: arrayValue(queue, 'items').map((item) => ({
+                request_id: stringValue(item, 'request_id'),
+                text: stringValue(item, 'text'),
+              })),
+              origin: stringValue(queue, 'origin'),
+            },
+    },
+    dialog: {
+      draft:
+        dialogDraft === null
+          ? null
+          : {
+              attention_id: stringValue(dialogDraft, 'attention_id'),
+              answers: arrayValue(dialogDraft, 'answers').map((answer) => ({
+                selected: arrayValue(answer, 'selected').map((item) => {
+                  if (typeof item !== 'string')
+                    throw new StreamValidationFailure(
+                      'event answer selection must be a string',
+                    );
+                  return item;
+                }),
+                other: stringValue(answer, 'other'),
+              })),
+              origin: stringValue(dialogDraft, 'origin'),
+            },
+    },
+    terminal: {
+      window_id: nullableString(terminal, 'window_id'),
+      input_state:
+        inputState === null
+          ? null
+          : {
+              typed_text: nullableString(inputState, 'typed_text'),
+              suggestion: nullableString(inputState, 'suggestion'),
+            },
+    },
+    errors: arrayValue(value, 'errors').map((error) => ({
+      error_id: numberValue(error, 'error_id'),
+      timestamp: numberValue(error, 'timestamp'),
+      component: stringValue(error, 'component'),
+      action: stringValue(error, 'action'),
+      traceback: stringValue(error, 'traceback'),
+      context: stringValue(error, 'context'),
+    })),
+  };
+}
+
+export function decodeSessionApplicationFrame(
+  text: string,
+): SessionApplication {
+  return translateSessionApplication(
+    decodeSessionApplication(parsedJson(text)),
+  );
 }
 
 function numberRecord(value: unknown, name: string): Record<string, number> {

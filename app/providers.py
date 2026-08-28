@@ -90,6 +90,7 @@ from harness.services.control_effects import ControlEffectRecorder
 from harness.services.controls import HarnessControlService
 from harness.services.launch_effects import SessionLaunchEffectRecorder
 from harness.services.probe import TerminalInputService
+from harness.services.terminal_gate import SessionTerminalGate
 from harness.services.telemetry import TelemetryGatewayService
 from harness.services.usage import ApplicationUsageState, HarnessUsageService
 from inference.contract import ModelFactory
@@ -564,6 +565,14 @@ def naming_worker(
 
 
 @singleton
+def session_terminal_gate() -> SessionTerminalGate:
+    return SessionTerminalGate()
+
+
+TerminalGate = Annotated[SessionTerminalGate, Depends(session_terminal_gate)]
+
+
+@singleton
 def controls(
     session_storage: Sessions,
     adapter: Terminal,
@@ -574,6 +583,7 @@ def controls(
     effects: ControlEffects,
     namer: AutomaticNamer,
     titles: SessionTitles,
+    terminal_gate: TerminalGate,
 ) -> HarnessControlService:
     return HarnessControlService(
         session_storage,
@@ -585,6 +595,7 @@ def controls(
         effects,
         namer,
         titles,
+        terminal_gate,
     )
 
 
@@ -593,7 +604,7 @@ Controls = Annotated[HarnessControlService, Depends(controls)]
 
 @singleton
 def terminal_input(session_storage: Sessions, adapter: Terminal, plugin: InstalledTerminal) -> TerminalInputService:
-    return TerminalInputService(session_storage, adapter, plugin.viewport)
+    return TerminalInputService(session_storage, adapter, plugin)
 
 
 TerminalInput = Annotated[TerminalInputService, Depends(terminal_input)]
@@ -680,6 +691,7 @@ def session_application(
     modes: ViewModes,
     settings: NotificationSettings,
     hidden_tasks: Dismissals,
+    terminal_gate: TerminalGate,
 ) -> SessionApplicationService:
     return SessionApplicationService(
         read_model,
@@ -689,6 +701,7 @@ def session_application(
         modes,
         settings,
         hidden_tasks,
+        terminal_gate,
     )
 
 

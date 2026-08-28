@@ -11,10 +11,11 @@ import time
 from collections.abc import Callable
 
 from domain.ids import WindowId
+from harness.contract import ComposerDriver
 
 from harness.impl.claude_code import suggestion
 from harness.impl.claude_code.controls import clipboard_image
-from harness.impl.claude_code.controls.screen_driver import ScreenDriver, poll_until
+from harness.impl.claude_code.controls.screen_driver import poll_until
 
 # after the line-kill that clears whatever the box held, settle before pasting —
 # a paste into a just-cleared input drops leading bytes (measured; the mangle).
@@ -29,7 +30,7 @@ COMPOSER_READY_TIMEOUT_S = 10.0
 
 
 def type_command(
-    screen_driver: ScreenDriver,
+    composer_driver: ComposerDriver,
     win: WindowId,
     text: str,
     *,
@@ -71,7 +72,7 @@ def type_command(
     pastes collapse into Claude Code's placeholder. Attachment delivery uses
     `ensure_submit`, which sends the bounded Enter retry budget for that case."""
     _screen, ready = poll_until(
-        screen_driver,
+        composer_driver,
         win,
         suggestion.input_box_visible,
         COMPOSER_READY_TIMEOUT_S,
@@ -79,23 +80,23 @@ def type_command(
     if not ready:
         return False, False
     clip = clipboard_image.clear_image()
-    if not screen_driver.paste_text(win, text):
+    if not composer_driver.submit_text(win, text, paste=True):
         return False, clip
     marker = _submission_marker(text)
     time.sleep(SUBMIT_SETTLE_S)
     if ensure_submit:
         for delay in SUBMIT_RETRY_DELAYS_S:
-            if not screen_driver.send_key(win, "enter"):
+            if not composer_driver.send_key(win, "enter"):
                 return False, clip
             time.sleep(delay)
     if not marker:
         return True, clip
     for delay in SUBMIT_RETRY_DELAYS_S:
-        if not _submission_pending(screen_driver, win, marker):
+        if not _submission_pending(composer_driver, win, marker):
             return True, clip
-        screen_driver.send_key(win, "enter")
+        composer_driver.send_key(win, "enter")
         time.sleep(delay)
-    return not _submission_pending(screen_driver, win, marker), clip
+    return not _submission_pending(composer_driver, win, marker), clip
 
 
 # After the paste's own CR, give the TUI a beat before reading the box back; then
@@ -114,12 +115,12 @@ def _submission_marker(text: str) -> str:
     return lines[0][:SUBMISSION_MARKER_LENGTH].strip()
 
 
-def _submission_pending(screen_driver: ScreenDriver, win: WindowId, marker: str) -> bool:
+def _submission_pending(composer_driver: ComposerDriver, win: WindowId, marker: str) -> bool:
     """Is the message still sitting in the input box? Unreadable = assume sent."""
     try:
-        from harness.impl.claude_code.probe import ClaudeCodeTerminalProbe  # noqa: PLC0415 — probe is optional; unreadable means assume sent
+        from harness.impl.claude_code.probe import ClaudeCodeComposer  # noqa: PLC0415 — composer is optional; unreadable means assume sent
 
-        state = ClaudeCodeTerminalProbe().input_state(screen_driver.terminal.viewport, win)
+        state = ClaudeCodeComposer().read(composer_driver, win)
     except Exception:
         try:
             from audit import record  # noqa: PLC0415 — audit fallback inside the failure path
@@ -133,7 +134,7 @@ def _submission_pending(screen_driver: ScreenDriver, win: WindowId, marker: str)
 
 
 def clear_input(
-    screen_driver: ScreenDriver,
+    composer_driver: ComposerDriver,
     win: WindowId,
     prev_text: str = "",
     sleep: Callable[[float], None] = time.sleep,
@@ -147,34 +148,34 @@ def clear_input(
     longer changes. `prev_text` is only a fallback when the screen is not
     readable."""
     fallback_lines = min(prev_text.count("\n") + 1 if prev_text else 1, CLEAR_LINES_MAX)
-    before = _input_text(screen_driver, win)
+    before = _input_text(composer_driver, win)
     killed = 0
     for _ in range(CLEAR_LINES_MAX):
-        screen_driver.send_key(win, "ctrl+u")
-        screen_driver.send_key(win, "ctrl+k")
+        composer_driver.send_key(win, "ctrl+u")
+        composer_driver.send_key(win, "ctrl+k")
         killed += 1
-        after = _wait_for_input_change(screen_driver, win, before, sleep)
+        after = _wait_for_input_change(composer_driver, win, before, sleep)
         if after == "":
             return killed
         if after is not None and after == before:
             return killed
         if after is None and killed >= fallback_lines:
             return killed
-        screen_driver.send_key(win, "backspace")
-        joined = _wait_for_input_change(screen_driver, win, after, sleep)
+        composer_driver.send_key(win, "backspace")
+        joined = _wait_for_input_change(composer_driver, win, after, sleep)
         before = joined if joined is not None else after
     return killed
 
 
 def _wait_for_input_change(
-    screen_driver: ScreenDriver,
+    composer_driver: ComposerDriver,
     win: WindowId,
     before: str | None,
     sleep: Callable[[float], None],
 ) -> str | None:
     deadline = time.monotonic() + CLEAR_EFFECT_TIMEOUT_S
     while True:
-        current = _input_text(screen_driver, win)
+        current = _input_text(composer_driver, win)
         if current != before:
             return current
         if time.monotonic() >= deadline:
@@ -182,10 +183,10 @@ def _wait_for_input_change(
         sleep(CLEAR_GAP_S)
 
 
-def _input_text(screen_driver: ScreenDriver, win: WindowId) -> str | None:
+def _input_text(composer_driver: ComposerDriver, win: WindowId) -> str | None:
     """Read real composer text, with a plain-screen fallback for PTY tests."""
     for ansi in (True, False):
-        screen = screen_driver.get_text(win, ansi=ansi)
+        screen = composer_driver.get_text(win, ansi=ansi)
         if screen is None:
             continue
         if not suggestion.input_box_visible(screen):

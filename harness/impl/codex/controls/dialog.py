@@ -59,9 +59,11 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol
 
 from domain.ids import WindowId
+from harness.contract import ComposerDriver
+
+Driver = ComposerDriver
 
 POLL_S = 0.15           # screen re-read beat while waiting for a dialog state
 STEP_TIMEOUT_S = 2.5    # a key press → its screen effect visible
@@ -89,16 +91,6 @@ _HEADER = re.compile(r"Question\s+(\d+)\s*/\s*(\d+)")
 # description, which is not part of the label).
 _OPT = re.compile(r"^\s*(?P<cur>[›❯]\s+)?(?P<num>\d+)\.\s+"
                   r"(?P<label>.+?)(?:\s{2,}.*)?\s*$")
-
-
-class Driver(Protocol):
-    """The screen-driver vocabulary these dialog modules speak — satisfied by
-    controller._TerminalDriver (and structurally by the tests' fakes)."""
-
-    def get_text(self, window_id: WindowId) -> str | None: ...
-    def send_key(self, window_id: WindowId, *keys: str) -> bool: ...
-    def send_text(self, window_id: WindowId, text: str) -> bool: ...
-    def paste_text(self, window_id: WindowId, text: str) -> bool: ...
 
 
 @dataclass(frozen=True)

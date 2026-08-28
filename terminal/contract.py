@@ -22,6 +22,8 @@ from typing import Callable, Protocol
 from terminal.models.input import (
     KeySendRequest,
     KeySendResponse,
+    TextInsertRequest,
+    TextInsertResponse,
     TextSubmitRequest,
     TextSubmitResponse,
 )
@@ -121,6 +123,7 @@ class TerminalMetadata(Protocol):
 
 
 class TerminalInput(Protocol):
+    def insert_text(self, text_insert_request: TextInsertRequest) -> TextInsertResponse: ...
     def submit_text(self, text_submit_request: TextSubmitRequest) -> TextSubmitResponse: ...
     def send_key(self, key_send_request: KeySendRequest) -> KeySendResponse: ...
 

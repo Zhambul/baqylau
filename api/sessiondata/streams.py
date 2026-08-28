@@ -42,14 +42,17 @@ from app.providers import (
     ApplicationPreferences,
     ApplicationUpdates,
     Recorder,
+    SessionApplication,
     SessionDataStore,
 )
 from audit.recorder import AuditRecorder
 from audit.models import PathAudit, SessionAudit
 from domain.ids import SessionId
 from repository.contract.session_data import SessionDataRepository
+from dashboard.services.workspace import SessionApplicationService
 
 router = APIRouter()
+SESSION_APPLICATION_POLL_SECONDS = 1.0
 
 
 def _from_cursor(last_event_id: str | None, after_cursor: int) -> int:
@@ -69,12 +72,17 @@ def session_stream(
     session_id: SessionIdPath,
     read_model: SessionDataStore,
     audit: Recorder,
+    session_application_service: SessionApplication,
     after_cursor: int = 0,
     last_event_id: str | None = Header(None, alias="Last-Event-ID"),
 ) -> StreamingResponse:
     return StreamingResponse(
         _session_frames(
-            read_model, audit, SessionId(session_id), _from_cursor(last_event_id, after_cursor)
+            read_model,
+            audit,
+            SessionId(session_id),
+            _from_cursor(last_event_id, after_cursor),
+            session_application_service,
         ),
         media_type=EVENT_STREAM,
         headers=NO_STORE,
@@ -110,9 +118,21 @@ async def _session_frames(
     audit_recorder: AuditRecorder,
     session_id: SessionId,
     cursor: int,
+    session_application_service: SessionApplicationService | None = None,
 ) -> AsyncIterator[str]:
     try:
+        application = (
+            None
+            if session_application_service is None
+            else await off_loop(session_application_service.snapshot, session_id)
+        )
+        if application is not None:
+            yield sse_frame(
+                "application",
+                application_mapper.session_application(application),
+            )
         heartbeat_at = asyncio.get_running_loop().time()
+        application_read_at = heartbeat_at
         while True:
             delta = await off_loop(session_data_repository.delta, session_id, cursor)
             now = asyncio.get_running_loop().time()
@@ -134,7 +154,20 @@ async def _session_frames(
                 )
                 cursor = delta.cursor
                 heartbeat_at = now
-            elif now - heartbeat_at >= STREAM_HEARTBEAT_SECONDS:
+            if (
+                session_application_service is not None
+                and now - application_read_at >= SESSION_APPLICATION_POLL_SECONDS
+            ):
+                next_application = await off_loop(session_application_service.snapshot, session_id)
+                application_read_at = now
+                if next_application != application:
+                    application = next_application
+                    yield sse_frame(
+                        "application",
+                        application_mapper.session_application(application),
+                    )
+                    heartbeat_at = now
+            elif delta.empty and now - heartbeat_at >= STREAM_HEARTBEAT_SECONDS:
                 yield BEAT
                 heartbeat_at = now
             await asyncio.sleep(STREAM_POLL_SECONDS)

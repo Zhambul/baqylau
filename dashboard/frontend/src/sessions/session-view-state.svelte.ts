@@ -587,6 +587,22 @@ export class SessionViewState {
       delta: (frame, nextCursor) => {
         this.applyDelta(frame, nextCursor);
       },
+      application: (application) => {
+        const current = this.application;
+        this.application =
+          current === null
+            ? application
+            : {
+                ...current,
+                composer: {
+                  ...current.composer,
+                  draft: application.composer.draft,
+                },
+                terminal: application.terminal,
+                errors: application.errors,
+              };
+        this.applicationState = 'ready';
+      },
       invalid: (error) => {
         this.streamState = 'failed';
         this.streamFailure = error.message;

@@ -56,7 +56,7 @@ from harness.models.telemetry import (
 )
 from harness.models.usage import UsageRow
 from domain.events import CanonicalEvent, EventPayload
-from terminal.contract import TerminalViewport
+from terminal.contract import TerminalPlugin
 from terminal.models import SESSION_WINDOW_TAG, WindowInfo
 
 TerminalWindows = tuple[WindowInfo, ...]
@@ -237,8 +237,32 @@ class HarnessUsage(Protocol):
     def read(self) -> tuple[UsageRow, ...]: ...
 
 
-class HarnessTerminalProbe(Protocol):
-    def input_state(self, terminal_viewport: TerminalViewport, window_id: WindowId) -> TerminalInputState | None: ...
+class ComposerDriver(Protocol):
+    terminal: TerminalPlugin
+
+    def get_text(
+        self,
+        window_id: WindowId,
+        extent: str = "screen",
+        ansi: bool = False,
+    ) -> str | None: ...
+
+    def send_key(self, window_id: WindowId, *keys: str) -> bool: ...
+    def insert_text(self, window_id: WindowId, text: str, *, paste: bool = True) -> bool: ...
+    def submit_text(self, window_id: WindowId, text: str, *, paste: bool = True) -> bool: ...
+    def send_text(self, window_id: WindowId, text: str) -> bool: ...
+    def paste_text(self, window_id: WindowId, text: str) -> bool: ...
+    def lines(self, window_id: WindowId) -> int | None: ...
+    def resize_lines(self, window_id: WindowId, cells: int) -> bool: ...
+
+
+class HarnessComposer(Protocol):
+    """Read and change one harness's native prompt composer."""
+
+    def read(self, composer_driver: ComposerDriver, window_id: WindowId) -> TerminalInputState | None: ...
+    def clear(self, composer_driver: ComposerDriver, window_id: WindowId) -> None: ...
+    def insert(self, composer_driver: ComposerDriver, window_id: WindowId, text: str) -> None: ...
+    def submit(self, composer_driver: ComposerDriver, window_id: WindowId, text: str) -> None: ...
 
 
 class HarnessResumeLocator(Protocol):
@@ -294,5 +318,5 @@ class HarnessPlugin:
     # means the honest default: the display the source gave, or the native id.
     model_display: Callable[[ModelReference], str] | None = None
     usage: HarnessUsage | None = None
-    terminal_probe: HarnessTerminalProbe | None = None
+    composer: HarnessComposer | None = None
     resume_locator: HarnessResumeLocator | None = None

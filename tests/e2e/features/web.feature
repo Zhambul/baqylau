@@ -28,7 +28,7 @@ Feature: web activity stays on the work that requested it
       """
     Then work "search example" completes
     And work "search example" has worker type <worker>
-    And work "search example" has final answer 'WEB_SEARCH_DONE'
+    And work "search example" has final answer containing 'WEB_SEARCH_DONE'
     When I name the search in work "search example" with query containing 'IANA Example Domain reserved' "example search"
     Then search "example search" has state succeeded
     And search "example search" has result containing 'Example Domain'

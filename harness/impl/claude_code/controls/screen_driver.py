@@ -4,30 +4,18 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from typing import Protocol
 
 from domain.ids import WindowId
-from terminal.contract import TerminalPlugin
+from harness.contract import ComposerDriver
+
+ScreenDriver = ComposerDriver
 
 POLL_SECONDS = 0.15
 SCREEN_LIMIT = 2000
 
 
-class ScreenDriver(Protocol):
-    """The small driver vocabulary the dialog drivers press keys through."""
-
-    terminal: TerminalPlugin
-
-    def get_text(self, window_id: WindowId, extent: str = "screen", ansi: bool = False) -> str | None: ...
-    def send_key(self, window_id: WindowId, *keys: str) -> bool: ...
-    def send_text(self, window_id: WindowId, text: str) -> bool: ...
-    def paste_text(self, window_id: WindowId, text: str) -> bool: ...
-    def lines(self, window_id: WindowId) -> int | None: ...
-    def resize_lines(self, window_id: WindowId, cells: int) -> bool: ...
-
-
 def poll_until(
-    screen_driver: ScreenDriver,
+    composer_driver: ComposerDriver,
     window_id: WindowId,
     predicate: Callable[[str], object],
     timeout: float,
@@ -35,12 +23,12 @@ def poll_until(
     poll: float = POLL_SECONDS,
 ) -> tuple[str, bool]:
     deadline = time.monotonic() + timeout
-    screen = screen_driver.get_text(window_id) or ""
+    screen = composer_driver.get_text(window_id) or ""
     while not predicate(screen):
         if time.monotonic() >= deadline:
             return screen, False
         sleep(poll)
-        screen = screen_driver.get_text(window_id) or ""
+        screen = composer_driver.get_text(window_id) or ""
     return screen, True
 
 

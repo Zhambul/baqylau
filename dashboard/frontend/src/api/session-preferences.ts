@@ -22,6 +22,19 @@ export async function saveComposerDraft(
   return response.saved;
 }
 
+export function saveComposerDraftOnExit(
+  sessionId: SessionId,
+  text: string,
+  origin: ClientId,
+  sequence: number,
+): boolean {
+  const path = `/api/sessions/${encodeURIComponent(sessionId)}/application/composer-draft`;
+  const body = new Blob([JSON.stringify({ text, origin, sequence })], {
+    type: 'application/json',
+  });
+  return navigator.sendBeacon(path, body);
+}
+
 export async function saveViewMode(
   sessionId: SessionId,
   viewMode: ViewMode,

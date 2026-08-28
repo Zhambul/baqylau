@@ -14,7 +14,7 @@ from harness.impl.claude_code.catalog import ClaudeCodeCatalog
 from harness.impl.claude_code.controls.controller import controller
 from harness.impl.claude_code.launcher import ClaudeCodeLauncher
 from harness.impl.claude_code.reactors import ClaudeOtelCanonicalEventReactor
-from harness.impl.claude_code.probe import ClaudeCodeTerminalProbe
+from harness.impl.claude_code.probe import ClaudeCodeComposer
 from harness.impl.claude_code.usage.rows import ClaudeCodeUsage
 from harness.impl.claude_code.controls import rewindmenu
 from harness.runtime import HarnessRuntimeConfig, default_harness_runtime_configs
@@ -102,7 +102,7 @@ def build_plugin(
             and audit_recorder is not None
             else None
         ),
-        terminal_probe=ClaudeCodeTerminalProbe(),
+        composer=ClaudeCodeComposer(),
     )
 
 

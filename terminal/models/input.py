@@ -8,9 +8,28 @@ from enum import StrEnum
 from terminal.models.values import WindowId
 
 
-class TextSubmitMode(StrEnum):
+class TextInputMode(StrEnum):
     TYPE = "type"
     PASTE = "paste"
+
+
+@dataclass(frozen=True)
+class TextInsertRequest:
+    """Put `text` in a window without an Enter key.
+
+    `mode=PASTE` delivers the text as one bracketed paste. This operation is
+    for draft text that must stay in the terminal composer.
+    """
+
+    window_id: WindowId
+    text: str
+    mode: TextInputMode
+
+
+@dataclass(frozen=True)
+class TextInsertResponse:
+    succeeded: bool
+    reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -26,7 +45,7 @@ class TextSubmitRequest:
 
     window_id: WindowId
     text: str
-    mode: TextSubmitMode
+    mode: TextInputMode
 
 
 @dataclass(frozen=True)

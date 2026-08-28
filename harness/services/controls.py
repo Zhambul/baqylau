@@ -2,18 +2,15 @@
 
 from __future__ import annotations
 
-import threading
 import time
-from _thread import LockType
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable
 from typing import Protocol
 
 from audit.models import AuditDocument
 from audit.recorder import AuditRecorder
 from domain.entries import PlanProposedBody, QuestionAskedBody, SessionEntry
 from domain.events import PlanProposed, QuestionAsked
-from domain.ids import RequestId, SessionId
+from domain.ids import RequestId
 from harness.contract import HarnessController, HarnessReactorContext
 from harness.models import (
     AnswerQuestion,
@@ -42,6 +39,7 @@ from harness.models import (
     Session,
 )
 from harness.services.control_effects import ControlEffectRecorder
+from harness.services.terminal_gate import SessionTerminalGate
 from repository.contract.session_data import SessionDataRepository
 from repository.contract.sessions import SessionRepository
 from terminal.adapter import TerminalAdapter
@@ -78,21 +76,6 @@ def _control_result(outcome: ControlOutcome) -> ControlResult:
     if isinstance(outcome, MessageDeliveryResult):
         raise TypeError("non-message control returned a message delivery result")
     return outcome
-
-
-class _SessionControlGate:
-    """Run one terminal gesture at a time for each session."""
-
-    def __init__(self) -> None:
-        self._guard = threading.Lock()
-        self._locks: dict[SessionId, LockType] = {}
-
-    @contextmanager
-    def enter(self, session_id: SessionId) -> Iterator[None]:
-        with self._guard:
-            lock = self._locks.setdefault(session_id, threading.Lock())
-        with lock:
-            yield
 
 
 # Every control gesture's OUTCOME, recorded at the one dispatch point every
@@ -155,6 +138,7 @@ class HarnessControlService(HarnessReactorContext):
         control_effect_recorder: ControlEffectRecorder,
         automatic_session_naming: AutomaticSessionNaming,
         session_renaming: SessionRenaming,
+        session_terminal_gate: SessionTerminalGate | None = None,
     ) -> None:
         self.sessions = session_repository
         self.terminal = terminal_adapter
@@ -165,7 +149,7 @@ class HarnessControlService(HarnessReactorContext):
         self.control_effects = control_effect_recorder
         self.automatic_namer = automatic_session_naming
         self.session_renamer = session_renaming
-        self._control_gate = _SessionControlGate()
+        self._control_gate = session_terminal_gate or SessionTerminalGate()
 
     # One typed public method per gesture — the request type IS the parameter,
     # so a caller never builds a bare `ControlRequest` and this class never

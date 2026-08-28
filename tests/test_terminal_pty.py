@@ -12,14 +12,22 @@ import sys
 import time
 from contextlib import nullcontext
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 import psutil
 
 from terminal.impl.pty import plugin as pty_module
 from terminal.impl.pty.plugin import PtyInput, PtyWindows, pty_plugin
-from terminal.models import ScreenReadRequest, TabOpenRequest, TextSubmitRequest
+from terminal.models import (
+    ScreenReadRequest,
+    TabOpenRequest,
+    TextInsertRequest,
+    TextInputMode,
+    TextSubmitRequest,
+)
 from terminal.models.input import KeySendRequest
+from terminal.models.values import WindowId
 from terminal.models.tabs import TabCloseRequest, TabRenameRequest
 
 TIMEOUT_SECONDS = 10.0
@@ -309,6 +317,26 @@ def test_text_submit_keeps_enter_in_a_separate_terminal_read(monkeypatch):
         ("paint", 7, pty_module.SUBMIT_PAINT_TIMEOUT_SECONDS),
         ("write", b"\r"),
     ]
+
+
+def test_text_insert_never_writes_enter():
+    events: list[bytes] = []
+
+    def write(payload: bytes) -> bool:
+        events.append(payload)
+        return True
+
+    window = SimpleNamespace(write=write)
+    windows = SimpleNamespace(get=lambda _window_id: window, lock=nullcontext())
+
+    result = PtyInput(cast(PtyWindows, windows)).insert_text(
+        TextInsertRequest(
+            WindowId("window-one"), "saved draft", TextInputMode.PASTE
+        )
+    )
+
+    assert result.succeeded
+    assert events == [b"\x1b[200~saved draft\x1b[201~"]
 
 
 def test_a_key_this_terminal_cannot_send_is_refused_rather_than_guessed(terminal):

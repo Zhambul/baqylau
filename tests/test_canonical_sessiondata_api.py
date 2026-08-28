@@ -43,6 +43,7 @@ from domain.ids import (
     ShellId,
     TaskId,
     TurnId,
+    WindowId,
 )
 from domain.sessiondata import (
     ActorContext,
@@ -87,6 +88,13 @@ from dashboard.services.preferences import (
     GlobalNotificationState,
     NewSessionPreferences,
 )
+from dashboard.services.workspace import (
+    SessionApplicationSnapshot,
+    SessionPreferences,
+)
+from domain.workspace import ComposerDraft, ComposerState, DialogState
+from domain.preferences import DEFAULT_VIEW_MODE
+from harness.models import TerminalInputState, TerminalSessionState
 from decimal import Decimal
 from repository.contract.session_data import SessionDataChanges
 from repository.contract.session_data import SessionDataRepository
@@ -749,6 +757,23 @@ class ApplicationSnapshots:
         )
 
 
+class SessionApplicationSnapshots:
+    def snapshot(self, _session_id: SessionId) -> SessionApplicationSnapshot:
+        return SessionApplicationSnapshot(
+            preferences=SessionPreferences(DEFAULT_VIEW_MODE, False, False),
+            composer=ComposerState(
+                ComposerDraft("test", "terminal", 1000),
+                None,
+            ),
+            dialog=DialogState(None),
+            terminal=TerminalSessionState(
+                WindowId("window-one"),
+                TerminalInputState("test", None),
+            ),
+            errors=(),
+        )
+
+
 def frame_body(frame: str) -> dict:
     """The `data:` line of one SSE frame, as the object it is."""
     for line in frame.splitlines():
@@ -798,6 +823,31 @@ def test_a_session_stream_sends_one_frame_per_poll_with_news(tmp_path):
     assert [row["status"] for row in news["actors"]] == ["thinking"]
     assert [item["type"] for item in news["entries"]] == ["message"]
     assert frame_id(second) > frame_id(first)
+
+
+def test_a_session_stream_starts_with_the_shared_application_state(tmp_path):
+    read_model = store(tmp_path)
+    read_model.apply(SESSION, SessionDataChanges(session=FACTS, actors=(ACTOR,)), 1)
+
+    async def frames():
+        stream = streams._session_frames(
+            read_model,
+            SilentAudit(),
+            SESSION,
+            0,
+            SessionApplicationSnapshots(),
+        )
+        application = await asyncio.wait_for(stream.__anext__(), 3)
+        session_data = await asyncio.wait_for(stream.__anext__(), 3)
+        await stream.aclose()
+        return application, session_data
+
+    application, session_data = asyncio.run(frames())
+
+    assert "event: application" in application
+    assert "id:" not in application
+    assert frame_body(application)["composer"]["draft"]["text"] == "test"
+    assert "event: sessionData" in session_data
 
 
 def test_a_stream_resumes_from_the_id_the_client_last_saw(tmp_path):

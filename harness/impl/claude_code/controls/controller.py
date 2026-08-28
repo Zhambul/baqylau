@@ -44,12 +44,8 @@ from harness.models import (
 from terminal.contract import TerminalPlugin
 from terminal.models import (
     KeySendRequest,
-    PaneResizeRequest,
     ScreenReadRequest,
-    SplitAxis,
     TabCloseRequest,
-    TextSubmitMode,
-    TextSubmitRequest,
 )
 from domain.events import QuestionAsked
 from domain.ids import WindowId
@@ -71,50 +67,9 @@ from harness.impl.claude_code.controls import (
     screen_driver as screendrive,
     tui,
 )
-from harness.impl.claude_code.probe import ClaudeCodeTerminalProbe
-
-
-class _TerminalDriver:
-    """Expose the small driver vocabulary used by Claude Code's screen modules."""
-
-    def __init__(self, terminal_plugin: TerminalPlugin) -> None:
-        self.terminal = terminal_plugin
-
-    def get_text(self, window_id: WindowId, extent: str = "screen", ansi: bool = False) -> str | None:
-        del extent
-        response = self.terminal.viewport.read_screen(ScreenReadRequest(NativeWindowId(str(window_id)), ansi=ansi))
-        return response.text
-
-    def send_key(self, window_id: WindowId, *keys: str) -> bool:
-        native = NativeWindowId(str(window_id))
-        return all(self.terminal.input.send_key(KeySendRequest(native, str(key))).succeeded for key in keys)
-
-    def send_text(self, window_id: WindowId, text: str) -> bool:
-        return self.terminal.input.submit_text(
-            TextSubmitRequest(NativeWindowId(str(window_id)), str(text), TextSubmitMode.TYPE)
-        ).succeeded
-
-    def paste_text(self, window_id: WindowId, text: str) -> bool:
-        return self.terminal.input.submit_text(
-            TextSubmitRequest(NativeWindowId(str(window_id)), str(text), TextSubmitMode.PASTE)
-        ).succeeded
-
-    def lines(self, window_id: WindowId) -> int | None:
-        native = NativeWindowId(str(window_id))
-        return next(
-            (window.lines for window in self.terminal.metadata.windows() if window.window_id == native),
-            None,
-        )
-
-    def resize_lines(self, window_id: WindowId, cells: int) -> bool:
-        response = self.terminal.panes.resize_pane(
-            PaneResizeRequest(
-                NativeWindowId(str(window_id)),
-                SplitAxis.VERTICAL,
-                cells,
-            )
-        )
-        return response.succeeded
+from harness.impl.claude_code.probe import ClaudeCodeComposer
+from harness.services.terminal_driver import TerminalDriver
+from harness.services.composer import ComposerRestoreError, with_preserved_draft
 
 
 def _screen_text(terminal_plugin: TerminalPlugin, window_id: WindowId) -> str | None:
@@ -151,6 +106,7 @@ NATIVE_TEXT_CONFIRM_POLL_SECONDS = 0.05
 NATIVE_TEXT_DELIVERY_ATTEMPTS = 2
 NATIVE_TEXT_QUEUED = "queued"
 NATIVE_TEXT_SENT = "sent"
+NATIVE_TITLE_CONFIRM_TIMEOUT_SECONDS = 5.0
 
 
 def _same_native_prompt(expected: str, observed: str) -> bool:
@@ -270,7 +226,7 @@ def _wait_for_native_text_state(
 
 def _deliver_native_text(
     control_context: ControlContext,
-    _terminal_driver: _TerminalDriver,
+    _terminal_driver: TerminalDriver,
     window_id: WindowId,
     message: str,
     *,
@@ -327,13 +283,13 @@ def _command(
     window_id = control_context.terminal_window_id
     if window_id is None:
         return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
-    succeeded, _cleared_image = tui.type_command(_TerminalDriver(terminal), window_id, text)
+    succeeded, _cleared_image = tui.type_command(TerminalDriver(terminal), window_id, text)
     if not succeeded:
         return _result(request, False, "terminal command was not delivered")
     if not confirm:
         return CommandResult(request.request_id, ControlAcknowledgement.ACKNOWLEDGED)
     try:
-        confirmation = confirmdialog.confirm(_TerminalDriver(terminal), window_id)
+        confirmation = confirmdialog.confirm(TerminalDriver(terminal), window_id)
     except confirmdialog.ConfirmError as error:
         return CommandResult(
             request.request_id,
@@ -348,6 +304,84 @@ def _command(
     )
 
 
+def _title_record(
+    source_reference: str,
+    after_position: int,
+    expected: str | None,
+) -> bool:
+    try:
+        with open(source_reference, "rb") as source:
+            source.seek(max(after_position, 0))
+            lines = source.read().splitlines()
+    except OSError:
+        return False
+    for line in lines:
+        try:
+            record = records.TitleRecord.model_validate_json(line)
+        except ValidationError:
+            continue
+        if record.type == "agent-name" and (
+            expected is None or (record.agentName or "").strip() == expected
+        ):
+            return True
+    return False
+
+
+def _rename_command(
+    request: ControlRequest,
+    control_context: ControlContext,
+    command: str,
+    expected: str | None,
+) -> ControlResult:
+    source_reference = control_context.session.source_reference
+    try:
+        position = os.path.getsize(source_reference)
+    except OSError:
+        position = -1
+    result = _command(request, control_context, command)
+    if result.status != ControlAcknowledgement.ACKNOWLEDGED:
+        return result
+    deadline = time.monotonic() + NATIVE_TITLE_CONFIRM_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        if position >= 0 and _title_record(source_reference, position, expected):
+            return result
+        time.sleep(NATIVE_TEXT_CONFIRM_POLL_SECONDS)
+    return ControlResult(
+        request.request_id,
+        ControlAcknowledgement.INDETERMINATE,
+        "Claude Code did not confirm the title",
+    )
+
+
+def _rename_with_preserved_draft(
+    request: ControlRequest,
+    control_context: ControlContext,
+    command: str,
+    expected: str | None,
+) -> ControlResult:
+    window_id = control_context.terminal_window_id
+    if window_id is None:
+        return ControlResult(
+            request.request_id,
+            ControlAcknowledgement.REJECTED,
+            "session is not live",
+        )
+    driver = TerminalDriver(control_context.terminal)
+    try:
+        return with_preserved_draft(
+            ClaudeCodeComposer(),
+            driver,
+            window_id,
+            lambda: _rename_command(request, control_context, command, expected),
+        )
+    except ComposerRestoreError as error:
+        return ControlResult(
+            request.request_id,
+            ControlAcknowledgement.INDETERMINATE,
+            str(error),
+        )
+
+
 class SendTextHandler(ControlHandler):
     def __call__(
         self,
@@ -360,10 +394,15 @@ class SendTextHandler(ControlHandler):
         window_id = control_context.terminal_window_id
         if window_id is None:
             return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
-        driver = _TerminalDriver(terminal)
-        if request.replace_terminal_draft:
-            input_state = ClaudeCodeTerminalProbe().input_state(terminal.viewport, window_id)
-            tui.clear_input(driver, window_id, (input_state.typed_text or "") if input_state else "")
+        driver = TerminalDriver(terminal)
+        try:
+            ClaudeCodeComposer().clear(driver, window_id)
+        except Exception as error:
+            return ControlResult(
+                request.request_id,
+                ControlAcknowledgement.REJECTED,
+                str(error),
+            )
         message = control_prompt_with_attachments(request.text, request.attachments)
         native_state, reason = _deliver_native_text(
             control_context,
@@ -419,17 +458,14 @@ class InterruptHandler(ControlHandler):
                     control_context.session.source_reference,
                     position,
                 ):
-                    input_state = ClaudeCodeTerminalProbe().input_state(
-                        terminal.viewport,
-                        window_id,
-                    )
+                    input_state = ClaudeCodeComposer().read(TerminalDriver(terminal), window_id)
                     return InterruptResult(
                         request.request_id,
                         ControlAcknowledgement.ACKNOWLEDGED,
                         restored_text=(input_state.typed_text if input_state and input_state.typed_text else ""),
                         corroborated=True,
                     )
-        input_state = ClaudeCodeTerminalProbe().input_state(terminal.viewport, window_id)
+        input_state = ClaudeCodeComposer().read(TerminalDriver(terminal), window_id)
         return InterruptResult(
             request.request_id,
             (ControlAcknowledgement.INDETERMINATE if delivered else ControlAcknowledgement.REJECTED),
@@ -534,14 +570,24 @@ class RenameSessionHandler(ControlHandler):
                 request.request_id,
                 ControlAcknowledgement.ACKNOWLEDGED,
             )
-        return _command(request, control_context, f"/rename {request.name}")
+        return _rename_with_preserved_draft(
+            request,
+            control_context,
+            f"/rename {request.name}",
+            request.name,
+        )
 
 
 class AutoNameSessionHandler(ControlHandler):
     def __call__(self, request: ControlRequest, control_context: ControlContext) -> ControlResult:
         if not isinstance(request, AutoNameSession):
             raise TypeError("auto_name_session handler requires AutoNameSession")
-        return _command(request, control_context, "/rename")
+        return _rename_with_preserved_draft(
+            request,
+            control_context,
+            "/rename",
+            None,
+        )
 
 
 class OpenRewindHandler(ControlHandler):
@@ -561,7 +607,7 @@ class ApplyRewindHandler(ControlHandler):
             return RewindResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
         try:
             result = rewindmenu.drive(
-                _TerminalDriver(terminal),
+                TerminalDriver(terminal),
                 window_id,
                 request.target_text,
                 request.mode,
@@ -641,7 +687,7 @@ class AnswerQuestionHandler(ControlHandler):
             return ControlResult(
                 request.request_id, ControlAcknowledgement.REJECTED, f"malformed question answer: {error}"
             )
-        driver = _TerminalDriver(terminal)
+        driver = TerminalDriver(terminal)
         try:
             askdialog.drive(
                 driver,
@@ -681,7 +727,7 @@ class ReadPlanChoicesHandler(ControlHandler):
         if window_id is None:
             return PlanChoicesResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
         try:
-            rows = plandialog.options(_TerminalDriver(terminal), window_id)
+            rows = plandialog.options(TerminalDriver(terminal), window_id)
         except plandialog.PlanError as error:
             return PlanChoicesResult(request.request_id, ControlAcknowledgement.INDETERMINATE, str(error))
         return PlanChoicesResult(
@@ -699,7 +745,7 @@ class DecidePlanHandler(ControlHandler):
         window_id = control_context.terminal_window_id
         if window_id is None:
             return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
-        driver = _TerminalDriver(terminal)
+        driver = TerminalDriver(terminal)
         try:
             if request.feedback is not None:
                 plandialog.feedback(driver, window_id, request.feedback)

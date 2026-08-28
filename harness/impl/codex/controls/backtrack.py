@@ -5,9 +5,9 @@ from __future__ import annotations
 import re
 import time
 from collections.abc import Callable
-from typing import Protocol
 
 from domain.ids import WindowId
+from harness.contract import ComposerDriver as Driver
 
 from harness.impl.codex.controls import composer
 
@@ -17,17 +17,6 @@ ESCAPE_HINT = "esc again to edit previous message"
 TRANSCRIPT_HEADER = "/ T R A N S C R I P T /"
 TRANSCRIPT_FOOTER = "enter to edit message"
 _SGR = re.compile(r"\x1b\[([0-9;]*)m")
-
-
-class Driver(Protocol):
-    def get_text(
-        self,
-        window_id: WindowId,
-        extent: str = "screen",
-        ansi: bool = False,
-    ) -> str | None: ...
-
-    def send_key(self, window_id: WindowId, *keys: str) -> bool: ...
 
 
 class BacktrackError(Exception):

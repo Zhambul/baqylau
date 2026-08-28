@@ -1,8 +1,11 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { onDestroy, untrack } from 'svelte';
 
   import { sendText } from '../../api/controls';
-  import { saveComposerDraft } from '../../api/session-preferences';
+  import {
+    saveComposerDraft,
+    saveComposerDraftOnExit,
+  } from '../../api/session-preferences';
   import { getAppState } from '../../app/app-context';
   import AttachmentButton from '../../attachments/AttachmentButton.svelte';
   import AttachmentStrip from '../../attachments/AttachmentStrip.svelte';
@@ -35,6 +38,10 @@
   let draft = $state('');
   let seeded = $state(false);
   let edited = false;
+  let focused = $state(false);
+  let localSequence = 0;
+  let remoteSequence = -1;
+  let pendingRemote = $state<{ text: string; sequence: number } | null>(null);
   let sending = $state(false);
   let failure = $state<string | null>(null);
   let dropping = $state(false);
@@ -84,10 +91,34 @@
 
   $effect(() => {
     const application = view.application;
-    if (seeded || application === null) return;
+    if (application === null) return;
     const saved = application.composer.draft;
-    if (!edited && saved !== null) draft = saved.text;
-    seeded = true;
+    untrack(() => {
+      if (!seeded) {
+        if (!edited && saved !== null) {
+          draft = saved.text;
+          remoteSequence = saved.sequence;
+        }
+        seeded = true;
+        return;
+      }
+      if (saved === null) {
+        if (!focused && !edited) draft = '';
+        return;
+      }
+      if (
+        (saved.origin === view.clientId && saved.sequence <= localSequence) ||
+        saved.sequence <= remoteSequence
+      )
+        return;
+      if (edited) {
+        pendingRemote = { text: saved.text, sequence: saved.sequence };
+        return;
+      }
+      draft = saved.text;
+      edited = false;
+      remoteSequence = saved.sequence;
+    });
   });
 
   $effect(() => {
@@ -109,14 +140,13 @@
   });
 
   function dispatchDraft(text: string): void {
-    void saveComposerDraft(
-      view.sessionId,
-      text,
-      view.clientId,
-      Date.now(),
-    ).catch((error: unknown) => {
-      failure = error instanceof Error ? error.message : String(error);
-    });
+    const sequence = Date.now();
+    localSequence = Math.max(localSequence, sequence);
+    void saveComposerDraft(view.sessionId, text, view.clientId, sequence).catch(
+      (error: unknown) => {
+        failure = error instanceof Error ? error.message : String(error);
+      },
+    );
   }
 
   function flushDraft(): void {
@@ -127,7 +157,15 @@
   }
 
   function persistDraft(): void {
-    flushDraft();
+    if (timer === null) return;
+    clearTimeout(timer);
+    timer = null;
+    const sequence = Date.now();
+    localSequence = Math.max(localSequence, sequence);
+    if (
+      !saveComposerDraftOnExit(view.sessionId, draft, view.clientId, sequence)
+    )
+      dispatchDraft(draft);
   }
 
   function scheduleDraft(): void {
@@ -140,9 +178,26 @@
 
   function input(): void {
     edited = true;
+    localSequence = Math.max(localSequence, Date.now());
     failure = null;
     historyIndex = null;
     scheduleDraft();
+  }
+
+  function focus(): void {
+    focused = true;
+  }
+
+  function blur(event: FocusEvent): void {
+    focused = false;
+    const next = event.relatedTarget;
+    if (next instanceof Node && composer?.contains(next)) return;
+    edited = false;
+    const pending = pendingRemote;
+    pendingRemote = null;
+    if (pending === null || pending.sequence <= localSequence) return;
+    draft = pending.text;
+    remoteSequence = pending.sequence;
   }
 
   function outcomeFailure(outcome: ControlOutcome): string | null {
@@ -202,6 +257,8 @@
         view.settlePendingPrompt(requestId, 'dropped', 'queued');
         view.queuePendingPrompt(requestId, text);
       }
+      edited = false;
+      pendingRemote = null;
       draft = '';
       attachmentTray.clear();
     } catch (error) {
@@ -450,6 +507,8 @@
     disabled={!usable || sending}
     {placeholder}
     oninput={input}
+    onfocus={focus}
+    onblur={blur}
     onpaste={paste}
     onkeydown={keydown}></textarea>
   {#if view.harness?.supportsAttachments === true}
