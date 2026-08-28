@@ -14,7 +14,7 @@ web dashboard.
 To debug a session bug, use the **`audit-debug` skill**
 (`.claude/skills/audit-debug/SKILL.md`) — it has the schema and the known bug shapes.
 
-Important!
+<Important! HARD RULES. read carefully and follow them!>
 only use ASD-STE100 Simplified Technical English everywhere
 We care about design and simplicity
 Simplicity is not about simplest and quickest approach. Simplicity takes effort and redesign and refactoring and thinking about how in the future this code would be simple to read and to extend.
@@ -25,7 +25,7 @@ Do not just focus on the hacky quickest solution. Think about the future and how
 Comunicate with the user and ask for feedback. If you are not sure about a design or a solution, ask for help.
 Do not overengineer. Do not add features which are not needed. Do not add features which are not asked for.
 Do not reinvent the wheel. If a library or a package exists which does what you need, use it. Do not write your own implementation unless it is ix explicitly asked for.
-
+</Important! HARD RULES. read carefully and follow them!>
 
 ## How restart a daemon/dashboard
 
