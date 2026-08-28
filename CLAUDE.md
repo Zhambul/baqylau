@@ -22,7 +22,7 @@ If you are adding a new feature which does break the simplicity a redesign and r
 But it should be always asked from the user.
 Always think about how to make a code better and simpler to read and to extend.
 Do not just focus on the hacky quickest solution. Think about the future and how to make it better.
-Comunicate with the user and ask for feedback. If you are not sure about a design or a solution, ask for help.
+Communicate with the user and ask for feedback. If you are not sure about a design or a solution, ask for help.
 Do not overengineer. Do not add features which are not needed. Do not add features which are not asked for.
 Do not reinvent the wheel. If a library or a package exists which does what you need, use it. Do not write your own implementation unless it is ix explicitly asked for.
 </Important! HARD RULES. read carefully and follow them!>
