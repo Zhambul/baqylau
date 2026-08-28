@@ -333,7 +333,7 @@ export function markdownHtml(value: string): EscapedHtml {
 }
 
 export function plainTextHtml(value: string): EscapedHtml {
-  return escapedHtml(`<p>${escapeText(value)}</p>`);
+  return escapedHtml(`<p class="plain-text">${escapeText(value)}</p>`);
 }
 
 function changedRanges(

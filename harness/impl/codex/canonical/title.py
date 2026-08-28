@@ -57,7 +57,10 @@ class CodexTitleStoreMarker:
     write_ahead_state: tuple[int, int, int] | None
 
 
-def _codex_directory(source_reference: str) -> str:
+def _codex_directory(
+    source_reference: str,
+    configuration_directory: str,
+) -> str:
     """Find the Codex home that owns one rollout.
 
     A daemon can observe sessions from more than one Codex home. The rollout
@@ -69,16 +72,13 @@ def _codex_directory(source_reference: str) -> str:
         if os.path.basename(current) == "sessions":
             return os.path.dirname(current)
         current = os.path.dirname(current)
-    return os.environ.get("CODEX_HOME") or os.path.join(
-        os.path.expanduser("~"),
-        ".codex",
-    )
+    return configuration_directory
 
 
-def _state_database(source_reference: str) -> str:
+def _state_database(source_reference: str, configuration_directory: str) -> str:
     """The newest codex `state_<N>.sqlite` index (highest N), or "" — resolved
     defensively because the numbered name drifts across codex versions."""
-    codex_directory = _codex_directory(source_reference)
+    codex_directory = _codex_directory(source_reference, configuration_directory)
     candidates = glob.glob(os.path.join(codex_directory, "state_*.sqlite"))
     best, best_number = "", -1
     for candidate in candidates:
@@ -92,9 +92,12 @@ def _state_database(source_reference: str) -> str:
     return plain if os.path.isfile(plain) else ""
 
 
-def title_store_marker(source_reference: str) -> CodexTitleStoreMarker | None:
+def title_store_marker(
+    source_reference: str,
+    configuration_directory: str,
+) -> CodexTitleStoreMarker | None:
     """Return the state needed to skip an unchanged native title read."""
-    database = _state_database(source_reference)
+    database = _state_database(source_reference, configuration_directory)
     if not database:
         return None
     database_state = _file_marker(database)
@@ -123,6 +126,9 @@ def _thread_uuid(path: str) -> str:
 
 
 class CodexThreadTitleRepository(NativeSessionTitleRepository):
+    def __init__(self, configuration_directory: str) -> None:
+        self.configuration_directory = configuration_directory
+
     def renameable(self, source_reference: str) -> bool:
         """True for a codex rollout this plugin owns — the gate both the
         dashboard's live rename and the parked write ask before naming a
@@ -133,7 +139,10 @@ class CodexThreadTitleRepository(NativeSessionTitleRepository):
     def set_title(self, source_reference: str, title: str) -> TitleWriteOutcome:
         if not self.renameable(source_reference):
             return TitleWriteOutcome.UNSUPPORTED
-        database = _state_database(source_reference)
+        database = _state_database(
+            source_reference,
+            self.configuration_directory,
+        )
         thread_uuid = _thread_uuid(source_reference)
         if not database or not thread_uuid:
             return TitleWriteOutcome.UNAVAILABLE
@@ -159,7 +168,10 @@ class CodexThreadTitleRepository(NativeSessionTitleRepository):
         """Read the current title from the native thread index."""
         if not self.renameable(source_reference):
             return None
-        database = _state_database(source_reference)
+        database = _state_database(
+            source_reference,
+            self.configuration_directory,
+        )
         thread_uuid = _thread_uuid(source_reference)
         if not database or not thread_uuid:
             return None
@@ -199,4 +211,4 @@ def _has_thread_name(connection: sqlite3.Connection) -> bool:
     )
 
 
-titles = CodexThreadTitleRepository()
+titles = CodexThreadTitleRepository(os.path.expanduser("~/.codex"))

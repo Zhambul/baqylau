@@ -16,6 +16,9 @@ def _minimum_prompt_count(command: str) -> int:
 
 
 class ClaudeCodeCatalog(HarnessCatalog):
+    def __init__(self, configuration_directory: str) -> None:
+        self.configuration_directory = configuration_directory
+
     def read(self, query_context: QueryContext) -> HarnessCatalogSnapshot:
         return HarnessCatalogSnapshot(
             commands=tuple(
@@ -24,6 +27,9 @@ class ClaudeCodeCatalog(HarnessCatalog):
                     description=row.description,
                     minimum_prompt_count=_minimum_prompt_count(row.name),
                 )
-                for row in slashcmds.slash_commands(query_context.working_directory or "")
+                for row in slashcmds.slash_commands(
+                    query_context.working_directory or "",
+                    self.configuration_directory,
+                )
             ),
         )

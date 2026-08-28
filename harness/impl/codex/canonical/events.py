@@ -21,7 +21,12 @@ from enum import StrEnum
 
 from pydantic import BaseModel
 
-from harness.impl.codex.ids import CodexActorId, CodexCallId, CodexShellId
+from harness.impl.codex.ids import (
+    CodexActorId,
+    CodexCallId,
+    CodexShellId,
+    CodexTurnId,
+)
 from harness.impl.codex.canonical.records import (
     AgentMessagePayload,
     AgentReasoningPayload,
@@ -240,7 +245,7 @@ def _ev_item_completed(item_completed_payload: ItemCompletedPayload) -> RolloutR
     if isinstance(item, FileChangeItem):
         return _file_change(item)
     if isinstance(item, CommandExecutionItem):
-        return _command_execution(item)
+        return _command_execution(item, p.turn_id)
     if isinstance(item, SubAgentActivityItem):
         return _subagent_activity(item, p)
     if isinstance(item, McpToolCallItem):
@@ -269,7 +274,10 @@ def _ev_item_completed(item_completed_payload: ItemCompletedPayload) -> RolloutR
     return PlanRecord(text=text, id=item.id or "") if text else empty_record()
 
 
-def _command_execution(command_execution_item: CommandExecutionItem) -> CommandCompletedRecord | None:
+def _command_execution(
+    command_execution_item: CommandExecutionItem,
+    turn_id: CodexTurnId | None,
+) -> CommandCompletedRecord | None:
     if command_execution_item.process_id is None:
         return None
     output = command_execution_item.aggregated_output
@@ -283,6 +291,7 @@ def _command_execution(command_execution_item: CommandExecutionItem) -> CommandC
         output=output,
         exit=command_execution_item.exit_code,
         item_id=command_execution_item.id or "",
+        turn=turn_id,
     )
 
 

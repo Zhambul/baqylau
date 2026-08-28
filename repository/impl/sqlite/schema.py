@@ -992,27 +992,6 @@ CREATE TABLE IF NOT EXISTS pane_widths(
 );
 
 
--- === what a plan has left =================================================
-
-CREATE TABLE IF NOT EXISTS account_usage_snapshots(
-    harness TEXT NOT NULL,
-    account_id TEXT NOT NULL,
-    display_name TEXT NOT NULL,
-    captured_at REAL NOT NULL,
-    PRIMARY KEY(harness, account_id)
-);
-
-CREATE TABLE IF NOT EXISTS account_usage_windows(
-    harness TEXT NOT NULL,
-    account_id TEXT NOT NULL,
-    window_key TEXT NOT NULL,
-    used_percent TEXT NOT NULL,
-    resets_at REAL,
-    PRIMARY KEY(harness, account_id, window_key),
-    FOREIGN KEY(harness, account_id)
-        REFERENCES account_usage_snapshots(harness, account_id) ON DELETE CASCADE
-);
-
 -- === what the browser attached ============================================
 
 CREATE TABLE IF NOT EXISTS uploads(

@@ -16,11 +16,12 @@ pure behavior modules and state machines. Playwright covers compiled components
 and API boundaries, where statement coverage measures generated component code
 instead of useful behavior.
 
-`make test-browser` builds and stamps the production bundle. It seeds a temporary
-data directory through the canonical event pipeline. It then starts a second
-daemon with explicit `--port`, `--data-dir`, and `--log` values. The suite uses
-port 8794 by default and runs Chromium and WebKit. It does not use the normal
-daemon or its data.
+The Playwright setup always builds and stamps the production bundle first. This
+applies to `make test-browser`, `npm run test:browser`, and direct Playwright
+commands. The tests seed a temporary data directory through the canonical event
+pipeline. They then start a second daemon with explicit `--port`, `--data-dir`,
+and `--log` values. The suite uses port 8794 by default and runs Chromium and
+WebKit. It does not use the normal daemon or its data.
 
 ```sh
 make test-frontend
@@ -89,13 +90,13 @@ Use `E2E_WORKERS=1` for real-terminal or installed-daemon cases because those
 explicit opt-in suites control one machine-level resource.
 
 `make e2e` is the complete end-to-end gate. It runs the live scenarios, the
-live-browser scenarios, and then static Playwright against one compiled
-production application. Every suite uses its measured maximum reliable
-parallelism: 20 workers for each live suite and four for static Playwright.
-The suite boundaries are serial, so a failed token-spending layer stops the
-gate before the next layer starts. Override `E2E_WORKERS` when benchmarking
-another machine. Cases do not share ports, data directories, harness homes, or
-workspaces.
+live-browser scenarios, and then static Playwright. Playwright rebuilds the
+production application before its suite. Every suite uses its measured maximum
+reliable parallelism: 20 workers for each live suite and four for static
+Playwright. The suite boundaries are serial, so a failed token-spending layer
+stops the gate before the next layer starts. Override `E2E_WORKERS` when you
+measure another machine. Cases do not share ports, data directories, harness
+homes, or workspaces.
 
 `make test-drift` collects only `tests/e2e/test_scenarios.py`, the active live
 matrix. Browser drift, real-Kitty, and installed-daemon tests remain separate

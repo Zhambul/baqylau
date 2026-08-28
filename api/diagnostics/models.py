@@ -34,3 +34,18 @@ class DiagnosticsReportResponse(BaseModel):
     interpretation_problems: tuple[InterpretationProblemResponse, ...]
     audit_problems: tuple[AuditProblemResponse, ...]
 
+
+class TerminalProcessDiagnosticResponse(BaseModel):
+    process_id: int | None
+    command: tuple[str, ...]
+
+
+class TerminalWindowDiagnosticResponse(BaseModel):
+    window_id: str
+    processes: tuple[TerminalProcessDiagnosticResponse, ...]
+    screen: str | None
+    screen_error: str | None
+
+
+class TerminalDiagnosticsResponse(BaseModel):
+    windows: tuple[TerminalWindowDiagnosticResponse, ...]

@@ -20,6 +20,7 @@
   import SlashCommandMenu from '../commands/SlashCommandMenu.svelte';
   import DictationButton from '../dictation/DictationButton.svelte';
   import type { HarnessCatalog } from '../harnesses/model';
+  import { autoGrow } from '../shared/browser/auto-grow';
   import { isIPad } from '../shared/browser/device';
   import type {
     LaunchDisplay,
@@ -74,6 +75,7 @@
         '',
       accountId: seed?.accountId ?? '',
       prompt: seed?.prompt ?? savedDraft(directory),
+      draftEdited: seed?.prompt !== undefined,
       fresh: (seed?.resumeSessionId ?? null) === null,
       resumeSessionId: seed?.resumeSessionId ?? null,
       attachments: seed?.attachments ?? [],
@@ -106,6 +108,7 @@
   let effort = $state(initial.effort);
   let accountId = $state(initial.accountId);
   let prompt = $state(initial.prompt);
+  let draftEdited = $state(initial.draftEdited);
   let fresh = $state(initial.fresh);
   let resumeSessionId = $state<SessionId | null>(initial.resumeSessionId);
   let catalog = $state<HarnessCatalog | null>(null);
@@ -158,6 +161,13 @@
       options.push({ value: row.accountId, label: row.displayName });
     }
     return options;
+  });
+
+  $effect(() => {
+    const saved = appState.application?.preferences.newSessionDrafts.find(
+      (draft) => draft.workingDirectory === draftDirectory,
+    );
+    if (!draftEdited && saved !== undefined) prompt = saved.text;
   });
 
   $effect(() => {
@@ -269,6 +279,7 @@
   }
 
   function scheduleDraft(): void {
+    draftEdited = true;
     if (draftTimer !== null) clearTimeout(draftTimer);
     const directory = draftDirectory;
     const text = prompt;
@@ -286,8 +297,15 @@
     dispatchDraft(draftDirectory, carried);
     draftDirectory = next;
     const saved = savedDraft(next);
-    if (saved.length > 0) prompt = saved;
-    else if (carried.trim().length > 0) dispatchDraft(next, carried);
+    if (saved.length > 0) {
+      prompt = saved;
+      draftEdited = false;
+    } else if (carried.trim().length > 0) {
+      draftEdited = true;
+      dispatchDraft(next, carried);
+    } else {
+      draftEdited = false;
+    }
   }
 
   function selectResume(row: ResumableSession): void {
@@ -626,6 +644,7 @@
         <textarea
           bind:this={promptBox}
           bind:value={prompt}
+          use:autoGrow={prompt}
           class="nsinput nsprompt"
           rows="3"
           spellcheck="false"

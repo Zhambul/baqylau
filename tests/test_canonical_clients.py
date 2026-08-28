@@ -557,9 +557,8 @@ def test_the_codex_hook_ships_only_what_codex_has(daemon):
     assert headers.LAUNCH_MODEL_HEADER not in delivery.headers
 
 
-def test_the_statusline_ships_the_windows_and_still_runs_the_real_status_line(daemon):
-    """The shim must NEVER break the status line: the delegate's stdout is what
-    Claude Code renders, and it runs whatever the capture did."""
+def test_the_statusline_only_runs_the_real_status_line(daemon):
+    """The shim keeps the configured display command and sends no usage data."""
     stdin = json.dumps({
         "session_id": "session-usage",
         "rate_limits": {"five_hour": {"used_percentage": 25, "resets_at": 2_000_000_000}},
@@ -574,13 +573,7 @@ def test_the_statusline_ships_the_windows_and_still_runs_the_real_status_line(da
 
     assert completed.returncode == 0
     assert completed.stdout == b"HUD\n"
-    delivery = daemon.delivery("/telemetry")
-    assert delivery.path == "/api/harnesses/claude_code/telemetry"
-    assert delivery.headers[TELEMETRY_KIND_HEADER] == "statusline"
-    document = json.loads(delivery.body)
-    assert document["rate_limits"]["five_hour"]["used_percentage"] == 25
-    assert "_account_id" not in document
-    assert "_account_name" not in document
+    assert daemon.deliveries == []
 
 
 def test_the_keybinding_ships_only_its_environment(daemon):

@@ -17,14 +17,13 @@ from audit.models import AuditDocument
 from audit.recorder import AuditRecorder
 from domain.ids import HarnessName
 from harness.models import UsageRow
+from harness.runtime import HarnessRuntimeConfig, HarnessRuntimeConfigs, default_harness_runtime_configs
 from inference.contract import Model, ModelPromptRequest, ModelPromptResponse
 from inference.errors import ModelUnavailableError, ProviderUnavailableError
 from terminal.contract import TerminalPlugin
 from terminal.models import ScreenReadRequest, TabCloseRequest, TabOpenRequest
 
 INTERNAL_MODEL_VARIABLE = "BAQYLAU_INTERNAL_MODEL"
-CODEX_EXECUTABLE_VARIABLE = "BAQYLAU_CODEX_EXECUTABLE"
-CLAUDE_EXECUTABLE_VARIABLE = "BAQYLAU_CLAUDE_EXECUTABLE"
 DEFAULT_TIMEOUT_SECONDS = 45.0
 PROVIDER_ATTEMPT_TIMEOUT_SECONDS = 30.0
 POLL_SECONDS = 0.05
@@ -167,19 +166,25 @@ CANDIDATES = (
     _Candidate(HarnessName.CODEX, "codex", _codex_command),
     _Candidate(HarnessName.CLAUDE_CODE, "claude", _claude_command),
 )
-EXECUTABLE_VARIABLES = {
-    "codex": CODEX_EXECUTABLE_VARIABLE,
-    "claude": CLAUDE_EXECUTABLE_VARIABLE,
-}
+def _configured_executable(config: HarnessRuntimeConfig) -> str | None:
+    configured = os.path.abspath(os.path.expanduser(config.executable))
+    if os.path.dirname(config.executable):
+        return (
+            configured
+            if os.path.isfile(configured) and os.access(configured, os.X_OK)
+            else None
+        )
+    return shutil.which(config.executable)
 
 
-def _configured_executable(name: str) -> str | None:
-    variable = EXECUTABLE_VARIABLES[name]
-    configured = os.environ.get(variable)
-    if configured:
-        path = os.path.abspath(os.path.expanduser(configured))
-        return path if os.path.isfile(path) and os.access(path, os.X_OK) else None
-    return shutil.which(name)
+def _runtime_executable(
+    runtime_configs: HarnessRuntimeConfigs,
+    name: str,
+) -> str | None:
+    harness = (
+        HarnessName.CLAUDE_CODE if name == "claude" else HarnessName.CODEX
+    )
+    return _configured_executable(runtime_configs.for_harness(harness))
 
 
 class DefaultModelFactory:
@@ -188,6 +193,7 @@ class DefaultModelFactory:
         terminal_plugin: TerminalPlugin,
         usage_reader: UsageReader,
         audit_recorder: AuditRecorder,
+        runtime_configs: HarnessRuntimeConfigs | None = None,
         *,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         executable_available: Callable[[str], bool] | None = None,
@@ -196,13 +202,14 @@ class DefaultModelFactory:
         self.terminal = terminal_plugin
         self.usage = usage_reader
         self.audit = audit_recorder
+        self.runtime_configs = runtime_configs or default_harness_runtime_configs()
         self.timeout_seconds = timeout_seconds
         if executable_available is not None and executable_resolver is not None:
             raise ValueError("configure executable availability or resolution, not both")
         self.executable_resolver = executable_resolver or (
             (lambda name: name if executable_available(name) else None)
             if executable_available is not None
-            else _configured_executable
+            else lambda name: _runtime_executable(self.runtime_configs, name)
         )
 
     def big(self) -> Model:
@@ -218,6 +225,7 @@ class DefaultModelFactory:
             self.audit,
             self.timeout_seconds,
             self.executable_resolver,
+            self.runtime_configs,
         )
 
 
@@ -229,12 +237,14 @@ class _SmallModel:
         audit_recorder: AuditRecorder,
         timeout_seconds: float,
         executable_resolver: Callable[[str], str | None],
+        runtime_configs: HarnessRuntimeConfigs,
     ) -> None:
         self.terminal = terminal_plugin
         self.usage = usage_reader
         self.audit = audit_recorder
         self.timeout_seconds = timeout_seconds
         self.executable_resolver = executable_resolver
+        self.runtime_configs = runtime_configs
 
     def send(self, model_prompt_request: ModelPromptRequest) -> ModelPromptResponse:
         try:
@@ -312,7 +322,9 @@ class _SmallModel:
                     _ExecutableUnavailable(
                         provider=candidate.harness,
                         status="executable unavailable",
-                        configuration=EXECUTABLE_VARIABLES[candidate.executable],
+                        configuration=self.runtime_configs.for_harness(
+                            candidate.harness
+                        ).executable,
                     )
                 )
                 continue
@@ -348,7 +360,10 @@ class _SmallModel:
                     working_directory=directory,
                     command=(candidate.executable, *command[1:]),
                     title="Baqylau internal model",
-                    environment=_model_environment(candidate.executable),
+                    environment=_model_environment(
+                        candidate.harness,
+                        self.runtime_configs.for_harness(candidate.harness),
+                    ),
                 )
             )
             if not opened.succeeded or opened.window_id is None:
@@ -390,13 +405,31 @@ class _SmallModel:
                 self.terminal.tabs.close_tab(TabCloseRequest(window_id))
 
 
-def _model_environment(executable: str) -> tuple[tuple[str, str], ...]:
-    directory = os.path.dirname(executable)
-    if not directory:
-        return ((INTERNAL_MODEL_VARIABLE, "1"),)
-    inherited = os.environ.get("PATH", os.defpath)
-    path = os.pathsep.join((directory, inherited))
-    return ((INTERNAL_MODEL_VARIABLE, "1"), ("PATH", path))
+def _model_environment(
+    harness: HarnessName,
+    runtime_config: HarnessRuntimeConfig,
+) -> tuple[tuple[str, str], ...]:
+    if harness == HarnessName.CLAUDE_CODE:
+        environment = [(INTERNAL_MODEL_VARIABLE, "1")]
+        if not runtime_config.use_vendor_default_configuration:
+            environment.append(
+                (
+                    "CLAUDE_CONFIG_DIR",
+                    str(runtime_config.configuration_directory),
+                )
+            )
+        if runtime_config.settings_file is not None:
+            environment.append(
+                (
+                    "CLAUDE_CODE_MANAGED_SETTINGS_PATH",
+                    str(runtime_config.settings_file),
+                )
+            )
+        return tuple(environment)
+    return (
+        (INTERNAL_MODEL_VARIABLE, "1"),
+        ("CODEX_HOME", str(runtime_config.configuration_directory)),
+    )
 
 
 def _error_context(error: Exception) -> _ErrorAudit:

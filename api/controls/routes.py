@@ -21,7 +21,7 @@ from api.controls.models.select_model_request import SelectModelRequest
 from api.controls.models.send_text_request import SendTextRequest
 from api.controls.models.launch_session_request import LaunchSessionRequest
 from api.common.models.fields import SessionIdPath
-from app.providers import Controls, Launcher
+from app.providers import Controls, Registry
 from api.controls import mapper
 from api.controls.models.control_outcome_response import ControlOutcomeResponse
 from api.controls.models.launch_response import LaunchResponse
@@ -31,6 +31,7 @@ from harness.models import (
     ControlAcknowledgement,
     ControlOutcome,
     LaunchStatus,
+    LaunchResult,
     MessageDeliveryResult,
 )
 
@@ -40,7 +41,10 @@ router = APIRouter()
 # published schema and the bytes are the same statement. The harness layer's own
 # result dataclasses never reach the HTTP boundary: `control_outcome` maps one to the
 # api model that mirrors it, and nothing here builds a dict.
-LAUNCH_STATUS = {LaunchStatus.STARTED: 202, LaunchStatus.REJECTED: 409}
+LAUNCH_STATUS = {
+    LaunchStatus.STARTED: 202,
+    LaunchStatus.REJECTED: 409,
+}
 CONTROL_STATUS = {
     ControlAcknowledgement.ACKNOWLEDGED: 200,
     ControlAcknowledgement.INDETERMINATE: 202,
@@ -61,11 +65,15 @@ CONTROL_RESPONSES = with_body(ControlOutcomeResponse, {
 
 @router.post("/api/sessions", status_code=202, responses=LAUNCH_RESPONSES)
 def launch(
-    launch_session_request: LaunchSessionRequest, launcher: Launcher, response: Response
+    launch_session_request: LaunchSessionRequest,
+    harnesses: Registry,
+    response: Response,
 ) -> LaunchResponse:
-    result = launcher.launch(
-        HarnessName(launch_session_request.harness), launch_session_request.request()
-    )
+    plugin = harnesses.plugin(HarnessName(launch_session_request.harness))
+    if plugin.launcher is None:
+        result = LaunchResult(LaunchStatus.REJECTED, reason="unsupported launch")
+    else:
+        result = plugin.launcher.launch(launch_session_request.request())
     response.status_code = LAUNCH_STATUS[result.status]
     return mapper.launch(result)
 

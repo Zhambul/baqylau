@@ -8,8 +8,8 @@ only exists inside the daemon.
 
 from __future__ import annotations
 
-from harness.contract import HarnessCanonicalEventReactor, HarnessReactorContext
 from domain.events import CanonicalEvent, EventPayload, SessionStarted
+from harness.contract import HarnessCanonicalEventReactor, HarnessReactorContext
 from harness.impl.claude_code.otel import launch as otel
 
 
@@ -19,4 +19,3 @@ class ClaudeOtelCanonicalEventReactor(HarnessCanonicalEventReactor):
     ) -> None:
         if isinstance(canonical_event.payload, SessionStarted):
             otel.start()
-

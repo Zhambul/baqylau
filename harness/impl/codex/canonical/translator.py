@@ -219,9 +219,6 @@ CODEX_TOOLS: Mapping[str, ToolMeaning] = {
     ),
     "image_gen__imagegen": ToolMeaning(CodexToolKind.IGNORED, "GenerateImage"),
     "notify": ToolMeaning(CodexToolKind.IGNORED, "Notify"),
-    "chrome_extension__getTabContext": ToolMeaning(
-        CodexToolKind.WEB, "BrowserContext"
-    ),
     # Deferred web execution yields a local orchestration handle and Codex
     # later waits on that handle.  The search/fetch call owns the user-visible
     # fact; waiting for its cell has no separate canonical meaning.
@@ -510,7 +507,8 @@ def _node_read_path(arguments: str | None) -> str:
 
 
 _REPORTED_PROCESS_ID = re.compile(
-    r"(?:session(?:_id)?\s*[:=]?\s*)?(\d+)"
+    r"(?:session(?:_id)?\s*[:=]?\s*)?(\d+)",
+    re.IGNORECASE,
 )
 _SKILL_DIRECTORY_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
@@ -1275,8 +1273,6 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     not in self._finished_shells
             ]
             for shell_id in interrupted_shells:
-                if (source_key, shell_id) in self._backgrounded_shells:
-                    continue
                 self._finished_shells.add((source_key, shell_id))
                 self._finished_shell_outcomes.add(
                     (source_key, shell_id, Outcome.CANCELLED)
@@ -1290,6 +1286,17 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     turn_id,
                     occurred_at,
                 ))
+                if (source_key, shell_id) in self._backgrounded_shells:
+                    self._backgrounded_shells.discard((source_key, shell_id))
+                    events.append(event(
+                        raw_event,
+                        "shell",
+                        str(shell_id),
+                        "output_finished",
+                        ShellOutputFinished(shell_id, Outcome.CANCELLED),
+                        turn_id,
+                        occurred_at,
+                    ))
             interrupted_skills = [
                 skill_id_from_codex(CodexSkillId(call_id))
                 for (known_source, call_id), call in self._call_records.items()
@@ -1632,7 +1639,18 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 )]
             shell_id = shell_id_from_codex_call(call_id)
             payload = ShellStarted(shell_id, content(record.cmd), ExecutionMode.FOREGROUND, None)
-            return [event(raw_event, "shell", str(shell_id), "started", payload, occurred_at=occurred_at)]
+            shell_turn_id = (
+                turn_id_from_codex(record.turn) if record.turn else None
+            )
+            return [event(
+                raw_event,
+                "shell",
+                str(shell_id),
+                "started",
+                payload,
+                shell_turn_id,
+                occurred_at,
+            )]
         if isinstance(record, StdinRecord):
             process_id = record.process_id
             if not process_id:
@@ -1765,6 +1783,11 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     occurred_at,
                 )]
             shell_id = shell_id_from_codex_call(call_id)
+            shell_turn_id = (
+                turn_id_from_codex(call_record.turn)
+                if call_record.turn
+                else None
+            )
             if (source_key, shell_id) in self._finished_shells:
                 settled_outcome = next(
                     (
@@ -1791,7 +1814,8 @@ class CodexCanonicalTranslator(HarnessTranslator):
                         str(shell_id),
                         "settled_after_native_finish",
                         ShellOutputFinished(shell_id, settled_outcome),
-                        occurred_at=occurred_at,
+                        shell_turn_id,
+                        occurred_at,
                     )]
                 return []
             process_exit_code = exit_code(record.exit)
@@ -1818,7 +1842,8 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     str(shell_id),
                     "finished",
                     ShellFinished(shell_id, Outcome.CANCELLED, None, None),
-                    occurred_at=occurred_at,
+                    shell_turn_id,
+                    occurred_at,
                 )]
             yielded_without_identity = (
                 call_record.yield_ms is not None
@@ -1847,7 +1872,8 @@ class CodexCanonicalTranslator(HarnessTranslator):
                         str(shell_id),
                         "backgrounded",
                         ShellBackgrounded(shell_id),
-                        occurred_at=occurred_at,
+                        shell_turn_id,
+                        occurred_at,
                     ))
                 output = "" if yielded_with_identity else record.output
                 if output:
@@ -1858,7 +1884,8 @@ class CodexCanonicalTranslator(HarnessTranslator):
                         str(shell_id),
                         f"progress:{ordinal}",
                         ShellProgressed(shell_id, ordinal, ProgressStream.OUTPUT, content(output), OutputMode.APPEND),
-                        occurred_at=occurred_at,
+                        shell_turn_id,
+                        occurred_at,
                     ))
                 return running_events
             outcome: Outcome = Outcome.SUCCEEDED if process_exit_code in (None, 0) else Outcome.FAILED
@@ -1872,7 +1899,8 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     str(shell_id),
                     "finished",
                     payload,
-                    occurred_at=occurred_at,
+                    shell_turn_id,
+                    occurred_at,
                 )
             ]
             if (source_key, shell_id) in self._backgrounded_shells:
@@ -1883,12 +1911,16 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     str(shell_id),
                     "output_finished",
                     ShellOutputFinished(shell_id, outcome),
-                    occurred_at=occurred_at,
+                    shell_turn_id,
+                    occurred_at,
                 ))
             return finished_events
         if isinstance(record, CommandCompletedRecord):
             source_key = self._source_key(raw_event)
             process_id = record.process_id
+            shell_turn_id = (
+                turn_id_from_codex(record.turn) if record.turn else None
+            )
             # Same reason as the write_stdin branch above: the lookup is
             # optional, the id every line after it uses is not.
             completed_shell_id = self._process_shell(raw_event, process_id)
@@ -1926,7 +1958,8 @@ class CodexCanonicalTranslator(HarnessTranslator):
                         ExecutionMode.FOREGROUND,
                         None,
                     ),
-                    occurred_at=occurred_at,
+                    shell_turn_id,
+                    occurred_at,
                 )
             else:
                 self._process_shells[(source_key, process_id)] = completed_shell_id
@@ -1945,7 +1978,8 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 str(shell_id),
                 "finished",
                 payload,
-                occurred_at=occurred_at,
+                shell_turn_id,
+                occurred_at,
             )]
             if started is not None:
                 finished_events.insert(0, started)
@@ -1957,7 +1991,8 @@ class CodexCanonicalTranslator(HarnessTranslator):
                     str(shell_id),
                     "output_finished",
                     ShellOutputFinished(shell_id, outcome),
-                    occurred_at=occurred_at,
+                    shell_turn_id,
+                    occurred_at,
                 ))
             return finished_events
         if isinstance(record, McpToolCompletedRecord):

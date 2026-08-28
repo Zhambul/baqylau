@@ -18,6 +18,7 @@ from enum import StrEnum
 from domain.events import (
     ActorAssignmentFinished,
     ActorAssignmentStarted,
+    BrowserInteracted,
     CanonicalEvent,
     EventPayload,
     FileAccessed,
@@ -85,6 +86,7 @@ class ToolKind(StrEnum):
     FILE = "file"
     SEARCH = "search"
     WEB = "web"
+    BROWSER = "browser"
     WORKTREE = "worktree"
     SKILL = "skill"
     ASSIGNMENT = "assignment"
@@ -137,7 +139,15 @@ SEARCH_QUERY_FIELDS = ("pattern", "query")
 # document, which only the hook delivery carries, so those two facts stay the
 # hook's — exactly the division of labour the generic operation finish had.
 TRANSCRIPT_RESULT_KINDS: frozenset[ToolKind] = frozenset(
-    {ToolKind.SHELL, ToolKind.FILE, ToolKind.SEARCH, ToolKind.WEB, ToolKind.WORKTREE, ToolKind.SKILL}
+    {
+        ToolKind.SHELL,
+        ToolKind.FILE,
+        ToolKind.SEARCH,
+        ToolKind.WEB,
+        ToolKind.BROWSER,
+        ToolKind.WORKTREE,
+        ToolKind.SKILL,
+    }
 )
 
 FILE_ACTIONS: Mapping[str, FileAction] = {
@@ -152,11 +162,93 @@ def tool_kind(native_name: str) -> ToolKind:
     # independently. They all describe interaction with or reading from a web
     # page, the same canonical family Codex uses for open/click/find/screenshot.
     if native_name.startswith("mcp__claude-in-chrome__"):
-        return ToolKind.WEB
+        return ToolKind.BROWSER
     kind = TOOL_KINDS.get(native_name)
     if kind is None:
         raise UnknownRawEvent(f"unmapped Claude Code tool: {native_name or '<missing>'}")
     return kind
+
+
+CHROME_TOOL_PREFIX = "mcp__claude-in-chrome__"
+
+CHROME_ACTIONS: tuple[tuple[str, str], ...] = (
+    ("browser_batch", "Run browser actions"),
+    ("file_upload", "Upload file in browser"),
+    ("form_input", "Fill browser form"),
+    ("get_page_text", "Read page text"),
+    ("gif_creator", "Record browser GIF"),
+    ("javascript_tool", "Run JavaScript in browser"),
+    ("list_connected_browsers", "List connected browsers"),
+    ("read_console_messages", "Read browser console"),
+    ("read_network_requests", "Read browser network requests"),
+    ("read_page", "Read page"),
+    ("resize_window", "Resize browser window"),
+    ("select_browser", "Select browser"),
+    ("shortcuts_execute", "Run browser shortcut"),
+    ("shortcuts_list", "List browser shortcuts"),
+    ("switch_browser", "Switch browser"),
+    ("tabs_close_mcp", "Close browser tab"),
+    ("tabs_context_mcp", "Read browser tabs"),
+    ("tabs_create_mcp", "Create browser tab"),
+    ("upload_image", "Upload image in browser"),
+)
+
+
+def _plain_action(value: str) -> str:
+    return " ".join(value.removesuffix("_mcp").split("_")).capitalize()
+
+
+def browser_action(native_name: str, arguments: records.ToolArguments) -> str:
+    """Make one short action label from a Claude Chrome call."""
+    tool_name = native_name.removeprefix(CHROME_TOOL_PREFIX)
+    if tool_name == "navigate" and arguments.url:
+        return f"Navigate to {arguments.url}"
+    if tool_name == "find":
+        query = arguments.query or arguments.pattern
+        if query:
+            return f"Find {query} on page"
+    if tool_name == "computer" and arguments.action:
+        action = arguments.action.strip().lower()
+        if action == "screenshot":
+            return "Capture browser screenshot"
+        if action == "wait":
+            return "Wait in browser"
+        return f"{_plain_action(action)} in browser"
+    return next(
+        (
+            action
+            for chrome_tool_name, action in CHROME_ACTIONS
+            if chrome_tool_name == tool_name
+        ),
+        _plain_action(tool_name),
+    )
+
+
+def browser_result_content(
+    tool_response: records.ToolResponse | records.ToolResponseBlocks | str | None,
+) -> Content | None:
+    """Keep browser text. Do not copy binary image data into the feed."""
+    if not tool_response:
+        return None
+    if isinstance(tool_response, str):
+        return content(tool_response)
+    if isinstance(tool_response, records.ToolResponse):
+        native_result = tool_response.result or tool_response.content
+        if isinstance(native_result, str):
+            return content(native_result)
+        tool_response = native_result
+    if isinstance(tool_response, records.ToolResponseBlocks):
+        parts = []
+        for part in tool_response.root:
+            if isinstance(part, str):
+                parts.append(part)
+            elif part.type == "image":
+                parts.append("[image]")
+            elif part.text:
+                parts.append(part.text)
+        text = "\n".join(part for part in parts if part).strip()
+        return content(text) if text else None
+    return None
 
 
 def structured_patch(
@@ -495,6 +587,9 @@ class ToolCallSemantics:
         shell_id: ShellId,
     ) -> None:
         key = raw_event.session_id, task_id
+        existing = self.monitors.get(key)
+        if existing is not None and existing.shell_id == shell_id:
+            return
         self.monitors[key] = MonitorState(
             raw_event.session_id,
             task_id,
@@ -728,7 +823,13 @@ class ToolCallSemantics:
             if failed
             else Outcome.SUCCEEDED
         )
-        answered = result if result is not None else result_content(call.tool_response)
+        answered = (
+            result
+            if result is not None
+            else browser_result_content(call.tool_response)
+            if kind == ToolKind.BROWSER
+            else result_content(call.tool_response)
+        )
         if (
             native_name == "WebSearch"
             and isinstance(call.tool_response, records.ToolResponse)
@@ -815,6 +916,13 @@ class ToolCallSemantics:
             url = arguments.url
             payload = WebFetched(str(url) if url else None, answered, outcome)
             return [event(raw_event, "web", call_id, "fetched", payload)]
+        if kind == ToolKind.BROWSER:
+            payload = BrowserInteracted(
+                browser_action(native_name, arguments),
+                answered,
+                outcome,
+            )
+            return [event(raw_event, "browser", call_id, "interacted", payload)]
         action: WorktreeAction = WorktreeAction.ENTERED if native_name == "EnterWorktree" else WorktreeAction.EXITED
         payload = WorktreeChanged(action, content(arguments) if arguments else None, outcome)
         return [event(raw_event, "worktree", call_id, "changed", payload)]

@@ -70,7 +70,7 @@ def _delegation_prompt(
     if harness == "codex":
         encoded_message = json.dumps(delegated_prompt).replace("$", "\\u0024")
         instruction = (
-            "Use multi_agent_v2__spawn_agent exactly once. "
+            "Use spawn_agent exactly once. "
             f"Set task_name to {name!r}. Decode WORK MESSAGE JSON as JSON and "
             "set message to the decoded string exactly. Do not do the work yourself. "
             "Do not use another tool. After the subagent starts, reply only "
@@ -110,7 +110,7 @@ def _parallel_delegation_prompt(
         raise AssertionError("parallel work names must have distinct native names")
     if harness == "codex":
         instruction = (
-            "Use multi_agent_v2__spawn_agent once for every work item below. "
+            "Use spawn_agent once for every work item below. "
             "Make all spawn calls in one response so the subagents run in parallel. "
             "For each call, set task_name to the stated worker name and set message "
             "to the exact text between WORK START and WORK END. Do not do the work "
@@ -151,7 +151,7 @@ def _delegation_with_followup_prompt(
         work_json = json.dumps(work_prompt).replace("$", "\\u0024")
         followup_json = json.dumps(followup).replace("$", "\\u0024")
         return (
-            "Use multi_agent_v2__spawn_agent exactly once. "
+            "Use spawn_agent exactly once. "
             f"Set task_name to {name!r}. Decode WORK MESSAGE JSON as JSON and "
             "set message to the decoded string exactly. After the subagent "
             "starts, use followup_task exactly once. Set target to "
@@ -435,7 +435,6 @@ class WorkDriver:
                 work_name=work_name,
                 prompt=child_prompt,
                 worker_kind=WorkerKind.SUBAGENT,
-                exact_prompt=child_prompt if spec.harness == "claude_code" else None,
             ),
         )
 

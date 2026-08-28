@@ -8,9 +8,8 @@ import shlex
 import subprocess
 from dataclasses import dataclass
 
-from domain.ids import AccountId, SessionId
-from harness.impl import installed
-from harness.models import LaunchRequest
+from domain.ids import HarnessName
+from harness.runtime import HarnessRuntimeConfigs
 from sdk.client import BaqylauClient, LaunchRef, SessionRef, wait_for
 from terminal.contract import TerminalPlugin
 from terminal.launch import launch_tab_request
@@ -49,6 +48,7 @@ class JourneyDriver:
         workspace: str,
         application_port: int,
         wait_policy: WaitPolicy,
+        harness_runtime_configs: HarnessRuntimeConfigs,
         launch_environment: tuple[tuple[str, str], ...] = (),
     ) -> None:
         self._client = client
@@ -56,9 +56,9 @@ class JourneyDriver:
         self._workspace = workspace
         self._application_port = application_port
         self._wait_policy = wait_policy
+        self._runtime_configs = harness_runtime_configs
         self._launch_environment = launch_environment
         self._resume = SessionResumeSupport(client, wait_policy)
-        self._plugins = {str(plugin.info.name): plugin for plugin in installed()}
         self._windows: set[WindowId] = set()
 
     def close(self) -> None:
@@ -354,31 +354,44 @@ class JourneyDriver:
         prompt: str,
         resume: SessionRef | None,
     ) -> WindowId:
-        try:
-            plugin = self._plugins[spec.harness]
-        except KeyError as error:
-            raise AssertionError(f"unknown harness {spec.harness!r}") from error
-        if plugin.launcher is None:
-            raise AssertionError(f"harness {spec.harness!r} cannot launch")
-        plan = plugin.launcher.prepare(
-            LaunchRequest(
-                working_directory=spec.workspace or self._workspace,
-                initial_text=prompt,
-                model=spec.model,
-                effort=spec.effort,
-                account_id=AccountId(spec.account_id) if spec.account_id else None,
-                resume_session_id=(SessionId(resume.session_id) if resume is not None else None),
-            )
-        )
+        harness = HarnessName(spec.harness)
+        runtime = self._runtime_configs.for_harness(harness)
+        if spec.account_id is not None:
+            raise AssertionError(f"{spec.harness} has no account switcher")
+        arguments: list[str] = []
+        if harness == HarnessName.CLAUDE_CODE:
+            if resume is not None:
+                arguments.extend(("--resume", resume.session_id))
+            if spec.model:
+                arguments.extend(("--model", spec.model))
+            if spec.effort:
+                arguments.extend(("--effort", spec.effort))
+        else:
+            if resume is not None:
+                arguments.extend(("resume", resume.session_id))
+            arguments.extend(("-C", spec.workspace or self._workspace))
+            if spec.model:
+                arguments.extend(("-m", spec.model))
+            if spec.effort:
+                arguments.extend(("-c", f"model_reasoning_effort={spec.effort}"))
+            arguments.extend(("-c", 'model_reasoning_summary="concise"'))
+        if prompt.strip():
+            arguments.append(prompt)
+        environment = dict(self._launch_environment)
+        environment["BAQYLAU_DASHBOARD_PORT"] = str(self._application_port)
+        if harness == HarnessName.CLAUDE_CODE:
+            environment["CLAUDE_CONFIG_DIR"] = str(runtime.configuration_directory)
+            if runtime.settings_file is not None:
+                environment["CLAUDE_CODE_MANAGED_SETTINGS_PATH"] = str(
+                    runtime.settings_file
+                )
+        else:
+            environment["CODEX_HOME"] = str(runtime.configuration_directory)
         request = launch_tab_request(
             spec.workspace or self._workspace,
-            self._reusable_shell_command((plan.command, *plan.arguments)),
-            title=plan.title,
-            environment=(
-                *plan.environment,
-                *self._launch_environment,
-                ("BAQYLAU_DASHBOARD_PORT", str(self._application_port)),
-            ),
+            self._reusable_shell_command((runtime.executable, *arguments)),
+            title="Claude Code" if harness == HarnessName.CLAUDE_CODE else "Codex",
+            environment=tuple(environment.items()),
         )
         opened = self._terminal.tabs.open_tab(request)
         if not opened.succeeded or opened.window_id is None:
@@ -395,7 +408,7 @@ class JourneyDriver:
         valid terminal-origin journey.
         """
         invocation = shlex.join(command)
-        return ("/bin/zsh", "-ilc", f"{invocation}; exec /bin/zsh -il")
+        return ("/bin/zsh", "-fc", f"{invocation}; exec /bin/zsh -fi")
 
     def _terminal_window(self, session: SessionRef) -> WindowId:
         def located() -> WindowId | None:

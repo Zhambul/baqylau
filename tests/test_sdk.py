@@ -282,14 +282,14 @@ class PaneTransport:
 
 class LaunchTransport:
     def __init__(self) -> None:
-        self.posts: list[tuple[str, object, set[int]]] = []
+        self.posts: list[tuple[str, object, set[int], float | None]] = []
 
     def get(self, path, _adapter):
         assert path == "/sessionData"
         return SessionDataListResponse(cursor=0, sessions=())
 
-    def post(self, path, document, adapter, accepted_statuses):
-        self.posts.append((path, document, accepted_statuses))
+    def post(self, path, document, adapter, accepted_statuses, *, timeout=None):
+        self.posts.append((path, document, accepted_statuses, timeout))
         return 202, adapter.validate_python({
             "status": "started",
             "window_id": "window-one",
@@ -310,10 +310,11 @@ def test_session_launch_sends_an_explicit_account_selection():
         account_id="account-one",
     )
 
-    path, document, statuses = transport.posts[0]
+    path, document, statuses, timeout = transport.posts[0]
     assert path == "/api/sessions"
     assert document.account_id == "account-one"
     assert statuses == {202, 409}
+    assert timeout == 35.0
 
 
 class PromptOwnerSessions(SessionsResource):

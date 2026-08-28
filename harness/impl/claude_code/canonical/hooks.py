@@ -68,7 +68,7 @@ def turn_finished(
     so the one Stop per turn is one fact; a Stop with no turn open — the daemon
     started mid-turn — falls back to the hook's own identity rather than
     colliding with the last one."""
-    turn_id = turn_semantics.close(raw_event)
+    turn_id = turn_semantics.finished_by_hook(raw_event)
     return event(
         raw_event,
         "turn",
@@ -103,11 +103,23 @@ def translate_hook(
         )]
     if hook_name == "Stop":
         return [
-            turn_finished(raw_event, turn_semantics, native_identity, Outcome.SUCCEEDED),
+            turn_finished(
+                raw_event,
+                turn_semantics,
+                native_identity,
+                Outcome.SUCCEEDED,
+            ),
             *effort_report(raw_event, hook, selection_semantics),
         ]
     if hook_name == "StopFailure":
-        events = [turn_finished(raw_event, turn_semantics, native_identity, Outcome.FAILED)]
+        events = [
+            turn_finished(
+                raw_event,
+                turn_semantics,
+                native_identity,
+                Outcome.FAILED,
+            )
+        ]
         if hook.error == "rate_limit":
             events.append(event(
                 raw_event,

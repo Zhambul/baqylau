@@ -1370,7 +1370,7 @@ def test_terminal_ownership_transfer_finishes_the_old_session():
         example_session(),
         plugin=example_plugin(TranslationResult((), "ignored_nonsemantic")),
         terminal_window_id=WindowId("window-one"),
-        harness_process_id=4242,
+        harness_process_id=os.getpid(),
     )
     window = WindowInfo(
         WindowId("window-one"),
@@ -1381,15 +1381,46 @@ def test_terminal_ownership_transfer_finishes_the_old_session():
         True,
         True,
         True,
-        processes=(WindowProcess(4242, ("/opt/codex",)),),
+        processes=(WindowProcess(os.getpid(), ("/opt/codex",)),),
     )
 
-    raw_event = SessionLivenessSource(session, ProcessProbe(), (window,)).read(None)[0]
+    probe = ProcessProbe()
+    source = SessionLivenessSource(session, probe, (window,))
+    assert source.read(None) == ()
+    raw_event = source.read(None)[0]
 
     assert raw_event.source_position == "displaced"
     translation = LivenessTranslator().translate(raw_event)
     assert len(translation.canonical_events) == 1
     assert translation.canonical_events[0].payload.reason == "terminal_reassigned"
+
+
+def test_a_transient_old_terminal_tag_does_not_finish_the_new_session():
+    session = replace(
+        example_session(),
+        plugin=example_plugin(TranslationResult((), "ignored_nonsemantic")),
+        terminal_window_id=WindowId("window-one"),
+        harness_process_id=os.getpid(),
+    )
+    old_tag = WindowInfo(
+        WindowId("window-one"),
+        TabId("tab-one"),
+        {SESSION_WINDOW_TAG: "old-session"},
+        120,
+        40,
+        True,
+        True,
+        True,
+        processes=(WindowProcess(os.getpid(), ("/opt/codex",)),),
+    )
+    current_tag = replace(
+        old_tag,
+        tags={SESSION_WINDOW_TAG: str(session.session_id)},
+    )
+    probe = ProcessProbe()
+
+    assert SessionLivenessSource(session, probe, (old_tag,)).read(None) == ()
+    assert SessionLivenessSource(session, probe, (current_tag,)).read(None) == ()
 
 
 def test_a_copied_terminal_id_does_not_displace_its_session():

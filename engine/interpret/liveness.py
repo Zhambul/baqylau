@@ -37,6 +37,7 @@ class ProcessProbe:
 
     def __init__(self) -> None:
         self._verified: set[str] = set()
+        self._terminal_owners: dict[str, str] = {}
 
     def alive(self, identity: str, process_id: int, process_name: str) -> bool:
         if identity in self._verified:
@@ -48,6 +49,16 @@ class ProcessProbe:
             return False
         self._verified.add(identity)
         return True
+
+    def terminal_reassigned(self, identity: str, owner: str | None) -> bool:
+        """Confirm one changed terminal owner on two consecutive scans."""
+        previous = self._terminal_owners.pop(identity, None)
+        if owner is None:
+            return False
+        if previous == owner:
+            return True
+        self._terminal_owners[identity] = owner
+        return False
 
 
 class SessionLivenessSource(HarnessRawEventSource):
@@ -88,7 +99,11 @@ class SessionLivenessSource(HarnessRawEventSource):
     def read(self, after_position: str | None) -> tuple[RawEvent, ...]:
         if after_position in {"exited", "displaced"}:
             return ()
-        if self._terminal_was_reassigned():
+        terminal_owner = self._terminal_owner()
+        if self.process_probe.terminal_reassigned(
+            self.source_identity,
+            terminal_owner,
+        ):
             return (self._finish_event(ProcessExitState.DISPLACED),)
         if self.process_probe.alive(
             self.source_identity,
@@ -98,21 +113,23 @@ class SessionLivenessSource(HarnessRawEventSource):
             return ()
         return (self._finish_event(ProcessExitState.EXITED),)
 
-    def _terminal_was_reassigned(self) -> bool:
+    def _terminal_owner(self) -> str | None:
         window_id = self.session.terminal_window_id
         if window_id is None:
-            return False
+            return None
         for window in self.terminal_windows:
             if str(window.window_id) != str(window_id):
                 continue
             owner = terminal_window_session(window)
             if not owner or owner == str(self.session.session_id):
-                return False
-            return any(
+                return None
+            if any(
                 process.process_id == self.harness_process_id
                 for process in window.processes
-            )
-        return False
+            ):
+                return owner
+            return None
+        return None
 
     def _finish_event(self, process_exit_state: ProcessExitState) -> RawEvent:
         return RawEvent(

@@ -5,8 +5,8 @@ lifecycle moment; a telemetry delivery is a side channel a harness exposes —
 OTLP metrics on a local port, rate limits on a status-line command's stdin —
 that carries facts no hook payload contains.
 
-Both are shipped to the daemon as EXACT BYTES by a thin client, and both are
-recorded daemon-side. Nothing outside the daemon writes the store.
+The client sends exact bytes to the daemon. Nothing outside the daemon writes
+the store.
 """
 
 from __future__ import annotations
@@ -17,13 +17,12 @@ from typing import Protocol
 from domain.ids import SessionId
 from harness.models.session import Session
 from harness.models.raw_events import RawEvent
-from harness.models.usage import AccountUsageSnapshot
 
 # The channel's own header vocabulary, read only by the endpoint and stamped
 # only by the clients that ship a delivery.
 TELEMETRY_KIND_HEADER = "X-Baqylau-Telemetry-Kind"
-# OTLP exports are batched metric documents; a status-line stdin is small. This
-# is generous enough for the former and far above the tiny control-plane cap.
+# OTLP exports are batched metric documents. This limit is above the small
+# control-plane limit.
 TELEMETRY_MAX = 4 * 1024 * 1024
 
 
@@ -37,12 +36,9 @@ class HarnessTelemetryRequest:
 
 @dataclass(frozen=True)
 class HarnessTelemetryResponse:
-    """What the delivery meant. Both halves are optional: a metrics export is
-    raw event, a rate-limit report is a usage snapshot, and an unrecognised
-    delivery is neither."""
+    """The raw events from one telemetry delivery."""
 
     raw_events: tuple[RawEvent, ...] = ()
-    usage: AccountUsageSnapshot | None = None
 
 
 class TelemetryContext(Protocol):

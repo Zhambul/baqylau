@@ -92,6 +92,7 @@ from harness.impl.claude_code.ids import (
     ClaudeCodeCallId,
     ClaudeCodeCompactionId,
     ClaudeCodeShellId,
+    ClaudeCodeTurnId,
 )
 from harness.models import TitleWriteOutcome, TranslationError
 from repository.contract.titles import NativeSessionTitleRepository
@@ -660,7 +661,10 @@ def parse_line(s: str) -> TranscriptRecord | None:
             if queued_attachment is None:
                 return None
             if queued_attachment.commandMode == "prompt":
-                return PromptTranscriptRecord(queued_attachment.prompt or "")
+                return PromptTranscriptRecord(
+                    queued_attachment.prompt or "",
+                    queued=True,
+                )
         return None
     if t == "queue-operation":
         queue_record = records.QueueOperationRecord.model_validate_json(s)
@@ -920,6 +924,57 @@ def assignment_call_before(
             f"Claude Code actor {actor_id!r} has multiple Agent assignments"
         )
     return candidates[0] if candidates else None
+
+
+def prompt_turn_before(
+    path: str,
+    before_position: str,
+    parent_uuid: str | None,
+) -> ClaudeCodeTurnId | None:
+    """Find the prompt ancestor of a response after an application restart."""
+    if parent_uuid is None:
+        return None
+    try:
+        end_position = int(before_position)
+    except ValueError:
+        return None
+    try:
+        source = open(path, "rb")
+    except OSError:
+        return None
+    parents: dict[str, str | None] = {}
+    prompts: set[str] = set()
+    with source:
+        while source.tell() < end_position:
+            line = source.readline()
+            if not line:
+                break
+            try:
+                document = records.TranscriptDocument.model_validate_json(line)
+            except ValidationError:
+                continue
+            identity = document.uuid
+            if identity is None:
+                continue
+            parents[identity] = document.parentUuid
+            try:
+                parsed = parse_line(line.decode())
+            except (UnicodeDecodeError, ValidationError):
+                continue
+            if isinstance(parsed, PromptTranscriptRecord) and not parsed.meta:
+                prompts.add(identity)
+
+    identity = parent_uuid
+    visited: set[str] = set()
+    while identity not in visited:
+        if identity in prompts:
+            return ClaudeCodeTurnId(identity)
+        visited.add(identity)
+        parent = parents.get(identity)
+        if parent is None:
+            return None
+        identity = parent
+    return None
 
 
 def tool_call_before(

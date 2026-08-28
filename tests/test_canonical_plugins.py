@@ -38,7 +38,6 @@ from harness.models import (
     Interrupt,
     LIVENESS_SOURCE_TYPE,
     LaunchRequest,
-    LaunchRejected,
     OUTPUT_LOCATION_SOURCE_TYPE,
     QueryContext,
     RawEvent,
@@ -161,22 +160,20 @@ from harness.impl.codex.controls import backtrack, composer
 from harness.impl.codex.controls import controller as codex_controller
 from harness.impl.codex.controls.controller import _rollout_abort_state
 from harness.impl.codex.model import BaseInstructionsSourceType, CodexEffort, CodexModel
-from harness.impl.codex.launcher import CodexLauncher
 from harness.impl.codex.resume import CodexResumeLocator
 from harness.impl.claude_code.otel import gateway as claude_telemetry
 from harness.models import HarnessTelemetryRequest
 from repository.impl.sqlite.databases import main_database
 from repository.impl.sqlite.raw_events import SqliteRawEventRepository
-from repository.impl.sqlite.usage import SqliteAccountUsageRepository
 from canonical_runtime import CanonicalRuntime
 from engine.interpret.translators import LivenessTranslator, ShellOutputTranslator
 from engine.interpret.loop import Interpreter
 from engine.interpret.reactions import (
     SessionUpsertCanonicalEventReaction,
 )
-from harness.services.launcher import HarnessLauncherService
 from harness.services.telemetry import TelemetryGatewayService
 from harness.registry import HarnessRegistry
+from harness.runtime import HarnessRuntimeConfig, HarnessRuntimeConfigs
 from domain.events import ShellOutputLocated
 
 
@@ -311,7 +308,9 @@ def test_claude_registers_no_automatic_account_migration_reactor():
     # run's `session.finished` would keep the session out of `watchable()`.
     reactors = ProviderGraph().registry.plugin("claude_code").reactors
 
-    assert [type(reactor).__name__ for reactor in reactors] == ["ClaudeOtelCanonicalEventReactor"]
+    assert [type(reactor).__name__ for reactor in reactors] == [
+        "ClaudeOtelCanonicalEventReactor",
+    ]
 
 
 def test_claude_stop_failure_rate_limit_yields_the_usage_limited_goal_fact():
@@ -365,7 +364,14 @@ def _silent_audit():
 def interpreting_runtime(database_path):
     """The real installed plugins wired to one database, with a silent terminal."""
     harnesses = HarnessRegistry()
-    for plugin in installed():
+    terminal = FakeTerminal()
+    for plugin in installed(
+        terminal_plugin=terminal.plugin(),
+        session_resume_recorder=SimpleNamespace(
+            resumed=lambda *_arguments: None
+        ),
+        audit_recorder=_silent_audit(),
+    ):
         harnesses.register(plugin)
     harnesses.validate()
     runtime = CanonicalRuntime(str(database_path), harnesses=harnesses)
@@ -488,7 +494,7 @@ def test_codex_title_source_reports_native_title_changes(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         "harness.impl.codex.canonical.sources.native_title.title_store_marker",
-        lambda _path: CodexTitleStoreMarker(
+        lambda _path, _configuration_directory: CodexTitleStoreMarker(
             "state.sqlite",
             (1, marker[0], 1),
             None,
@@ -534,7 +540,7 @@ def test_codex_title_repository_uses_the_home_that_owns_the_rollout(
             (session_id, "Initial title"),
         )
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "another-codex-home"))
-    repository = title.CodexThreadTitleRepository()
+    repository = title.CodexThreadTitleRepository(str(tmp_path / "another-codex-home"))
 
     assert repository.read_title(str(source_path)) == title.CodexNativeTitle(
         "Initial title",
@@ -565,7 +571,7 @@ def test_codex_title_repository_prefers_and_writes_the_native_name(tmp_path):
             "INSERT INTO threads(id, title, name) VALUES(?, ?, ?)",
             (session_id, "Generated title", "Native name"),
         )
-    repository = title.CodexThreadTitleRepository()
+    repository = title.CodexThreadTitleRepository(str(tmp_path))
 
     assert repository.read_title(str(source_path)) == title.CodexNativeTitle(
         "Native name", TitleOrigin.AUTOMATIC,
@@ -781,7 +787,7 @@ def test_claude_source_factory_includes_child_transcripts(tmp_path):
         working_directory=str(tmp_path),
     )
 
-    factory = ClaudeRawEventSources()
+    factory = ClaudeRawEventSources(str(tmp_path))
     sources = factory.for_session(session)
 
     assert len(sources) == 4
@@ -821,7 +827,7 @@ def test_claude_task_source_captures_full_updates_and_deletion(tmp_path, monkeyp
         "/work/session.jsonl",
         "/work",
     )
-    source = ClaudeTaskRawEventSource(session)
+    source = ClaudeTaskRawEventSource(session, str(tmp_path))
 
     raw_events = source.read(None)
     # the membership fact carries the resume position, so it is emitted last
@@ -1111,7 +1117,7 @@ def test_codex_source_factory_includes_native_subagent_rollouts(tmp_path, monkey
         working_directory="/work",
     )
 
-    sources = CodexRawEventSources().for_session(session)
+    sources = CodexRawEventSources(str(tmp_path)).for_session(session)
 
     assert len(sources) == 1
     assert sources[0].context.actor_id == ActorId("child-one")
@@ -1149,7 +1155,7 @@ def test_codex_rollout_catalog_rescans_only_a_changed_date_directory(tmp_path, m
         return real_scandir(directory)
 
     monkeypatch.setattr(codex_sources.os, "scandir", recording_scandir)
-    catalog = codex_sources.RolloutCatalog()
+    catalog = codex_sources.RolloutCatalog(str(tmp_path))
 
     assert catalog.paths() == (str(first),)
     assert catalog.paths() == (str(first),)
@@ -1188,7 +1194,7 @@ def test_codex_source_factory_reuses_sources_and_limits_catalog_refresh(tmp_path
         "/work",
     )
     now = [0.0]
-    factory = CodexRawEventSources(clock=lambda: now[0])
+    factory = CodexRawEventSources(str(tmp_path), clock=lambda: now[0])
     real_paths = factory._catalog.paths
     catalog_calls = 0
 
@@ -1258,7 +1264,7 @@ def test_codex_source_factory_rotates_native_subagent_rollouts(tmp_path, monkeyp
         str(tmp_path / "not-a-codex-session.jsonl"),
         "/work",
     )
-    factory = CodexRawEventSources()
+    factory = CodexRawEventSources(str(tmp_path))
 
     actors = [factory.for_session(session)[0].context.actor_id for _ in range(3)]
 
@@ -1459,7 +1465,7 @@ def test_codex_source_factory_waits_for_native_child_boundary(tmp_path, monkeypa
         "/work",
     )
 
-    assert CodexRawEventSources().for_session(session) == ()
+    assert CodexRawEventSources(str(tmp_path)).for_session(session) == ()
 
 
 def test_codex_source_factory_accepts_string_session_source(tmp_path, monkeypatch):
@@ -1483,7 +1489,7 @@ def test_codex_source_factory_accepts_string_session_source(tmp_path, monkeypatc
         "/work",
     )
 
-    assert CodexRawEventSources().for_session(session) == ()
+    assert CodexRawEventSources(str(tmp_path)).for_session(session) == ()
     assert codex_rollout.subagent_fork_epoch(str(rollout_path)) is None
 
 
@@ -3472,16 +3478,12 @@ class _NoSessions:
         del session_id
 
 
-def test_the_daemon_decides_what_a_statusline_delivery_meant(monkeypatch, tmp_path):
-    """The shim ships bytes; the WINDOWS are read here.
-
-    An old status-line process can still stamp account values. The daemon ignores
-    them and records the windows for the one default Claude profile.
-    """
+def test_the_daemon_ignores_old_statusline_usage_deliveries(monkeypatch):
+    """An old status-line process cannot add stale usage to the live row."""
     monkeypatch.setattr(
         claude_live_usage,
         "collect",
-        lambda: claude_live_usage.LiveUsageCollection(
+        lambda _runtime: claude_live_usage.LiveUsageCollection(
             None,
             None,
         ),
@@ -3498,32 +3500,26 @@ def test_the_daemon_decides_what_a_statusline_delivery_meant(monkeypatch, tmp_pa
         }
     ).encode()
 
-    usage = SqliteAccountUsageRepository(main_database(str(tmp_path / "main.db")))
     response = claude_telemetry.ClaudeTelemetryGateway().handle(
         HarnessTelemetryRequest("statusline", body), _NoSessions()
     )
-    assert response.usage is not None
-    usage.record(response.usage)
-    rows = claude_usage_reader.read(usage)
+    rows = claude_usage_reader.read()
 
+    assert response.raw_events == ()
     assert rows[0].account_id is None
     assert rows[0].display_name == "claude"
-    assert [window.label for window in rows[0].windows] == ["5h", "7d"]
+    assert rows[0].windows == ()
     assert rows[0].scheduling_score is None
     assert not rows[0].scheduling_allowed
 
 
-def _claude_profile_usage(
-    *,
-    fetched_at_ms: int,
-    model: str,
-    percent: int,
-) -> dict[str, object]:
-    return {
-        "oauthAccount": {"organizationType": "claude_max"},
-        "cachedUsageUtilization": {
-            "fetchedAtMs": fetched_at_ms,
-            "utilization": {
+def _claude_usage_response(
+    model: str = "Fable",
+    percent: int = 47,
+) -> claude_live_usage.GetUsageResponse:
+    return claude_live_usage.GetUsageResponse.model_validate(
+        {
+            "rate_limits": {
                 "five_hour": {"utilization": 12, "resets_at": None},
                 "seven_day": {
                     "utilization": 34,
@@ -3532,120 +3528,168 @@ def _claude_profile_usage(
                 "limits": [
                     {
                         "kind": "weekly_scoped",
-                        "group": "weekly",
                         "percent": percent,
-                        "severity": "normal",
                         "resets_at": "2026-08-27T00:00:00+00:00",
-                        "scope": {
-                            "model": {"id": None, "display_name": model},
-                            "surface": None,
-                        },
-                        "is_active": False,
+                        "scope": {"model": {"display_name": model}},
                     }
                 ],
+                "juniper_tide": {"utilization": 3, "new_field": True},
             },
-        },
-    }
-
-
-def test_claude_usage_accepts_null_behaviors_and_current_scoped_limits():
-    response = claude_live_usage.GetUsageResponse.model_validate(
-        {
-            "session": {
-                "total_cost_usd": 0,
-                "total_api_duration_ms": 0,
-                "total_duration_ms": 0,
-                "total_lines_added": 0,
-                "total_lines_removed": 0,
-                "model_usage": {},
-            },
-            "rate_limits": _claude_profile_usage(
-                fetched_at_ms=1,
-                model="Fable",
-                percent=47,
-            )["cachedUsageUtilization"]["utilization"],
             "rate_limits_available": True,
             "subscription_type": "max",
-            "behaviors": None,
+            "future_top_level_field": {"value": 1},
         }
     )
 
-    assert response.behaviors is None
+
+def test_claude_usage_ignores_new_provider_fields_and_reads_required_limits():
+    response = _claude_usage_response()
+
     samples = claude_live_usage.windows(response.rate_limits)
-    fable = next(sample for sample in samples if sample.key == "seven_day_fable")
-    assert fable.used_percent == Decimal("47")
-    assert fable.resets_at is not None
+    assert [sample.key for sample in samples] == [
+        "five_hour",
+        "seven_day",
+        "seven_day_fable",
+    ]
+    assert samples[-1].used_percent == Decimal("47")
+    assert samples[-1].resets_at is not None
 
 
-def test_claude_native_usage_is_isolated_for_each_account(tmp_path):
-    first = tmp_path / "first"
-    second = tmp_path / "second"
-    first.mkdir()
-    second.mkdir()
-    (first / ".claude.json").write_text(
-        json.dumps(
-            _claude_profile_usage(
-                fetched_at_ms=2_000_000,
-                model="Fable",
-                percent=21,
-            )
-        ),
-        encoding="utf-8",
+def test_claude_usage_probe_preserves_process_identity_and_sets_its_config(monkeypatch):
+    monkeypatch.setenv("HOME", "/Users/current-user")
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("USER", "current-user")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "wrong-account")
+    runtime = HarnessRuntimeConfig("/bin/claude", Path("/work/claude-home"))
+
+    environment = claude_live_usage.subprocess_environment(runtime)
+
+    assert environment["HOME"] == "/Users/current-user"
+    assert environment["PATH"] == "/usr/bin:/bin"
+    assert environment["USER"] == "current-user"
+    assert environment["CLAUDE_CONFIG_DIR"] == "/work/claude-home"
+    assert "ANTHROPIC_API_KEY" not in environment
+
+
+def test_claude_default_profile_keeps_keychain_authentication_available(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/work/wrong-profile")
+    runtime = HarnessRuntimeConfig(
+        "/bin/claude",
+        Path("/Users/current-user/.claude"),
+        use_vendor_default_configuration=True,
     )
-    (second / ".claude.json").write_text(
-        json.dumps(
-            _claude_profile_usage(
-                fetched_at_ms=3_000_000,
-                model="Opus",
-                percent=62,
-            )
-        ),
-        encoding="utf-8",
-    )
 
-    first_usage = claude_live_usage.native_usage(str(first)).usage
-    second_usage = claude_live_usage.native_usage(str(second)).usage
+    environment = claude_live_usage.subprocess_environment(runtime)
 
-    assert first_usage is not None
-    assert second_usage is not None
-    assert [sample.key for sample in first_usage.windows][-1] == "seven_day_fable"
-    assert [sample.key for sample in second_usage.windows][-1] == "seven_day_opus"
-    assert first_usage.windows[-1].used_percent == Decimal("21")
-    assert second_usage.windows[-1].used_percent == Decimal("62")
+    assert "CLAUDE_CONFIG_DIR" not in environment
 
 
-def test_claude_probe_failure_keeps_the_last_native_model_limit(
-    monkeypatch,
-    tmp_path,
-):
-    profile = tmp_path / "account"
-    profile.mkdir()
-    (profile / ".claude.json").write_text(
-        json.dumps(
-            _claude_profile_usage(
-                fetched_at_ms=1,
-                model="Fable",
-                percent=39,
-            )
-        ),
-        encoding="utf-8",
-    )
+def test_claude_usage_cache_is_isolated_for_each_config_directory(monkeypatch):
     claude_live_usage._cache.clear()
+    monkeypatch.setattr(claude_live_usage.time, "time", lambda: 100.0)
+    monkeypatch.setattr(
+        claude_live_usage,
+        "request_usage",
+        lambda runtime: claude_live_usage.ProbeResult(
+            _claude_usage_response(
+                "Fable" if runtime.configuration_directory.name == "first" else "Opus",
+                21 if runtime.configuration_directory.name == "first" else 62,
+            ),
+            None,
+        ),
+    )
+
+    first = claude_live_usage.collect(
+        HarnessRuntimeConfig("claude", Path("/work/first"))
+    )
+    second = claude_live_usage.collect(
+        HarnessRuntimeConfig("claude", Path("/work/second"))
+    )
+
+    assert first.usage is not None
+    assert second.usage is not None
+    assert first.usage.windows[-1].key == "seven_day_fable"
+    assert second.usage.windows[-1].key == "seven_day_opus"
+    assert first.usage.windows[-1].used_percent == Decimal("21")
+    assert second.usage.windows[-1].used_percent == Decimal("62")
+
+
+def test_claude_temporary_probe_failure_keeps_the_last_provider_result(monkeypatch):
+    claude_live_usage._cache.clear()
+    responses = iter(
+        (
+            claude_live_usage.ProbeResult(_claude_usage_response(percent=39), None),
+            claude_live_usage.ProbeResult(
+                None,
+                claude_live_usage.ProbeFailure("Claude usage probe timed out", True),
+            ),
+        )
+    )
+    now = iter((100.0, 221.0))
+    monkeypatch.setattr(claude_live_usage.time, "time", lambda: next(now))
+    monkeypatch.setattr(
+        claude_live_usage,
+        "request_usage",
+        lambda _config_directory: next(responses),
+    )
+
+    first = claude_live_usage.collect()
+    second = claude_live_usage.collect()
+
+    assert first.usage is not None
+    assert second.error is None
+    assert second.usage == first.usage
+
+
+def test_claude_permanent_probe_failure_clears_usage_and_reports_error(monkeypatch):
+    claude_live_usage._cache.clear()
+    responses = iter(
+        (
+            claude_live_usage.ProbeResult(_claude_usage_response(), None),
+            claude_live_usage.ProbeResult(
+                None,
+                claude_live_usage.ProbeFailure("Claude login was revoked", False),
+            ),
+        )
+    )
+    now = iter((100.0, 221.0))
+    monkeypatch.setattr(claude_live_usage.time, "time", lambda: next(now))
+    monkeypatch.setattr(
+        claude_live_usage,
+        "request_usage",
+        lambda _config_directory: next(responses),
+    )
+
+    assert claude_live_usage.collect().usage is not None
+    failed = claude_live_usage.collect()
+
+    assert failed.usage is None
+    assert failed.error == "Claude login was revoked"
+
+
+def test_claude_temporary_failure_does_not_keep_an_old_result(monkeypatch):
+    old_usage = claude_live_usage.LiveUsage(0.0, "max", ())
+    claude_live_usage._cache[:] = [
+        claude_live_usage.CacheEntry(
+            "",
+            99.0,
+            claude_live_usage.LiveUsageCollection(old_usage, None),
+            old_usage,
+        )
+    ]
+    monkeypatch.setattr(claude_live_usage.time, "time", lambda: 301.0)
     monkeypatch.setattr(
         claude_live_usage,
         "request_usage",
         lambda _config_directory: claude_live_usage.ProbeResult(
             None,
-            "usage probe authentication failed",
+            claude_live_usage.ProbeFailure("Claude usage probe timed out", True),
         ),
     )
 
-    collection = claude_live_usage.collect(str(profile))
+    collection = claude_live_usage.collect()
 
-    assert collection.error == "usage probe authentication failed"
-    assert collection.usage is not None
-    assert collection.usage.windows[-1].key == "seven_day_fable"
-    assert collection.usage.windows[-1].used_percent == Decimal("39")
+    assert collection == claude_live_usage.LiveUsageCollection(None, None)
 
 
 def test_claude_usage_row_maps_fable_and_collection_diagnostics_to_the_api(
@@ -3668,14 +3712,12 @@ def test_claude_usage_row_maps_fable_and_collection_diagnostics_to_the_api(
     monkeypatch.setattr(
         claude_live_usage,
         "collect",
-        lambda: claude_live_usage.LiveUsageCollection(
+        lambda _runtime: claude_live_usage.LiveUsageCollection(
             live_usage,
             "profile refresh unavailable",
         ),
     )
-    repository = SqliteAccountUsageRepository(main_database(str(tmp_path / "main.db")))
-
-    row = claude_usage_reader.read(repository)[0]
+    row = claude_usage_reader.read()[0]
     response = api_values.usage_row(row)
 
     assert response.windows[0].key == "seven_day_fable"
@@ -3723,20 +3765,45 @@ def test_codex_resume_locator_finds_direct_and_login_shell_commands():
     )
 
 
-def test_launchers_build_native_commands_and_share_terminal_launch_mechanics(tmp_path):
-    application = ProviderGraph()
-    terminal = FakeTerminal()
-    launcher = HarnessLauncherService(
-        application.registry,
-        TerminalAdapter(terminal.plugin(), FakeSessions()),
-        terminal,
-        SimpleNamespace(resumed=lambda *_arguments: None),
-        launch_environment=(("BAQYLAU_DASHBOARD_PORT", "49123"),),
+def test_launchers_build_native_commands_and_share_terminal_launch_mechanics(
+    monkeypatch,
+):
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR")
+    monkeypatch.delenv("CLAUDE_CODE_MANAGED_SETTINGS_PATH", raising=False)
+    runtime_configs = HarnessRuntimeConfigs(
+        (
+            (
+                HarnessName.CLAUDE_CODE,
+                HarnessRuntimeConfig("claude", Path("/work/claude-home")),
+            ),
+            (
+                HarnessName.CODEX,
+                HarnessRuntimeConfig("codex", Path("/work/codex-home")),
+            ),
+        )
     )
-    attachment = AttachmentReference("/work/context.md", "context.md", "text/markdown")
+    terminal = FakeTerminal(
+        windows=[window("window-two", tags={SESSION_WINDOW_TAG: "session-one"})]
+    )
+    plugins = {
+        str(plugin.info.name): plugin
+        for plugin in installed(
+            runtime_configs,
+            terminal.plugin(),
+            SimpleNamespace(resumed=lambda *_arguments: None),
+            _silent_audit(),
+            (("BAQYLAU_DASHBOARD_PORT", "49123"),),
+        )
+    }
+    claude_launcher = plugins["claude_code"].launcher
+    codex_launcher = plugins["codex"].launcher
+    assert claude_launcher is not None
+    assert codex_launcher is not None
+    attachment = AttachmentReference(
+        "/work/context.md", "context.md", "text/markdown"
+    )
 
-    claude_result = launcher.launch(
-        "claude_code",
+    claude_result = claude_launcher.launch(
         LaunchRequest(
             working_directory="/work",
             initial_text="hello",
@@ -3745,10 +3812,9 @@ def test_launchers_build_native_commands_and_share_terminal_launch_mechanics(tmp
             account_id=None,
             resume_session_id=None,
             attachments=(attachment,),
-        ),
+        )
     )
-    codex_result = launcher.launch(
-        "codex",
+    codex_result = codex_launcher.launch(
         LaunchRequest(
             working_directory="/work",
             initial_text="hello",
@@ -3757,23 +3823,20 @@ def test_launchers_build_native_commands_and_share_terminal_launch_mechanics(tmp
             account_id=None,
             resume_session_id=None,
             attachments=(attachment,),
-        ),
+        )
     )
 
     assert claude_result.status == codex_result.status == "started"
-    # launching is just running the CLI under a login shell — no wrapper
-    # program, no session id invention. The shell's first three words are the
-    # shared launch convention; everything after them is the harness's plan.
-    assert terminal.opened_tabs[0].command[1] == "-lic"
-    assert terminal.opened_tabs[0].command[3:] == (
+    assert terminal.opened_tabs[0].command == (
         "claude",
+        "--dangerously-skip-permissions",
         "--model",
         "fable",
         "--effort",
         "high",
         "hello @/work/context.md",
     )
-    assert terminal.opened_tabs[1].command[3:] == (
+    assert terminal.opened_tabs[1].command == (
         "codex",
         "-C",
         "/work",
@@ -3785,68 +3848,72 @@ def test_launchers_build_native_commands_and_share_terminal_launch_mechanics(tmp
         'model_reasoning_summary="concise"',
         "/work/context.md\nhello",
     )
-    # the selections also ride the CLI's environment, so the hook process can
-    # observe them — Claude Code's launch evidence (codex reports its own).
-    # They precede the command word inside the shell's own -c string, which is
-    # what keeps an aliased CLI resolving.
-    assert (
-        terminal.opened_tabs[0]
-        .command[2]
-        .startswith('BAQYLAU_DASHBOARD_PORT=49123 BAQYLAU_LAUNCH_MODEL=fable BAQYLAU_LAUNCH_EFFORT=high claude "$@"')
-    )
-    assert terminal.opened_tabs[1].command[2] == ('BAQYLAU_DASHBOARD_PORT=49123 codex "$@"')
-
-
-def test_terminal_launches_receive_the_configured_codex_home(monkeypatch):
-    monkeypatch.setenv("BAQYLAU_DASHBOARD_PORT", "49123")
-    monkeypatch.setenv("CODEX_HOME", "/work/codex-home")
-
-    assert app_providers.harness_launch_environment() == (
+    assert terminal.opened_tabs[0].environment == (
         ("BAQYLAU_DASHBOARD_PORT", "49123"),
+        ("CLAUDE_CONFIG_DIR", "/work/claude-home"),
+        ("BAQYLAU_LAUNCH_MODEL", "fable"),
+        ("BAQYLAU_LAUNCH_EFFORT", "high"),
     )
-    plan = CodexLauncher().prepare(
+    assert terminal.opened_tabs[1].environment == (
+        ("BAQYLAU_DASHBOARD_PORT", "49123"),
+        ("CODEX_HOME", "/work/codex-home"),
+    )
+
+
+def _test_launcher(harness: HarnessName, terminal: FakeTerminal):
+    runtime_configs = HarnessRuntimeConfigs(
+        (
+            (
+                HarnessName.CLAUDE_CODE,
+                HarnessRuntimeConfig(
+                    "claude",
+                    Path("/work/claude-home"),
+                    Path("/work/claude-home/managed-settings.json"),
+                ),
+            ),
+            (
+                HarnessName.CODEX,
+                HarnessRuntimeConfig("codex", Path("/work/codex-home")),
+            ),
+        )
+    )
+    plugin = next(
+        plugin
+        for plugin in installed(
+            runtime_configs,
+            terminal.plugin(),
+            SimpleNamespace(resumed=lambda *_arguments: None),
+            _silent_audit(),
+        )
+        if plugin.info.name == harness
+    )
+    assert plugin.launcher is not None
+    return plugin.launcher
+
+
+def test_claude_rejects_legacy_account_selection():
+    terminal = FakeTerminal()
+    result = _test_launcher(HarnessName.CLAUDE_CODE, terminal).launch(
         LaunchRequest(
             working_directory="/work",
             initial_text="hello",
             model=None,
             effort=None,
-            account_id=None,
+            account_id=AccountId("legacy-account"),
             resume_session_id=None,
         )
     )
-    assert plan.environment == (("CODEX_HOME", "/work/codex-home"),)
+
+    assert result.status == "rejected"
+    assert "does not support account selection" in (result.reason or "")
+    assert terminal.opened_tabs == []
 
 
-def test_claude_rejects_legacy_account_selection():
-    launcher = ProviderGraph().registry.plugin("claude_code").launcher
-
-    with pytest.raises(LaunchRejected, match="does not support account selection"):
-        launcher.prepare(
-            LaunchRequest(
-                working_directory="/work",
-                initial_text="hello",
-                model=None,
-                effort=None,
-                account_id=AccountId("legacy-account"),
-                resume_session_id=None,
-            )
-        )
-
-
-def test_a_harness_that_announces_at_its_first_turn_refuses_an_empty_launch(tmp_path):
-    """codex's session_start hook fires WITH the first prompt, so a promptless
-    launch runs in the terminal and is never observed here — the launcher declines
-    it (HarnessInfo.requires_initial_message) instead of leaving the dashboard
-    waiting for a session that cannot arrive. Claude Code announces itself at
-    startup and so still launches empty."""
-    application = ProviderGraph()
-    terminal = FakeTerminal()
-    launcher = HarnessLauncherService(
-        application.registry,
-        TerminalAdapter(terminal.plugin(), FakeSessions()),
-        terminal,
-        SimpleNamespace(resumed=lambda *_arguments: None),
+def test_a_harness_that_announces_at_its_first_turn_refuses_an_empty_launch():
+    terminal = FakeTerminal(
+        windows=[window("window-two", tags={SESSION_WINDOW_TAG: "session-one"})]
     )
+    codex = _test_launcher(HarnessName.CODEX, terminal)
     empty = LaunchRequest(
         working_directory="/work",
         initial_text="   ",
@@ -3856,40 +3923,128 @@ def test_a_harness_that_announces_at_its_first_turn_refuses_an_empty_launch(tmp_
         resume_session_id=None,
     )
 
-    rejected = launcher.launch("codex", empty)
+    rejected = codex.launch(empty)
     assert rejected.status == "rejected"
     assert "needs a first message" in (rejected.reason or "")
     assert terminal.opened_tabs == []
 
-    # attachments ARE a first message: they ride the argv as the prompt, which is
-    # a turn as far as the CLI is concerned — and so an announcement.
-    attached = launcher.launch(
-        "codex",
+    attached = codex.launch(
         replace(
             empty,
             initial_text=None,
             attachments=(AttachmentReference("/work/context.md", "context.md"),),
-        ),
+        )
     )
     assert attached.status == "started"
 
-    assert launcher.launch("claude_code", empty).status == "started"
+
+class _StartupTerminal(FakeTerminal):
+    def __init__(self, screens):
+        super().__init__(windows=[window("window-two")], screen_text=screens[0])
+        self.screens = list(screens)
+
+    def send_key(self, request):
+        result = super().send_key(request)
+        self.screens.pop(0)
+        if self.screens:
+            self.screen_text = self.screens[0]
+        else:
+            self.windows_on_screen = [
+                window("window-two", tags={SESSION_WINDOW_TAG: "session-one"})
+            ]
+            self.screen_text = ""
+        return result
 
 
-def test_login_shell_command_carries_environment_before_the_command_word(monkeypatch):
-    from terminal.launch import login_shell_command
-
-    monkeypatch.setenv("SHELL", "/bin/zsh")
-    shell, flag, script, *argv = login_shell_command(
-        ("harness-cli", "--model", "fable"),
-        (("BAQYLAU_LAUNCH_MODEL", "fable"), ("BAQYLAU_LAUNCH_EFFORT", "high")),
+def test_claude_approves_managed_settings_and_workspace_trust():
+    terminal = _StartupTerminal(
+        (
+            "Managed settings require approval\nYes, I trust these settings",
+            "Do you trust the files in this folder?",
+        )
     )
-    assert (shell, flag) == ("/bin/zsh", "-lic")
-    # assignments precede the command word so the alias still resolves
-    assert script == 'BAQYLAU_LAUNCH_MODEL=fable BAQYLAU_LAUNCH_EFFORT=high harness-cli "$@"'
-    assert argv == ["harness-cli", "--model", "fable"]
+    launcher = _test_launcher(HarnessName.CLAUDE_CODE, terminal)
+
+    result = launcher.launch(
+        LaunchRequest("/work", "hello", None, None, None, None)
+    )
+
+    assert result.status == "started"
+    assert terminal.keys == [("window-two", "enter"), ("window-two", "enter")]
+
+
+@pytest.mark.parametrize(
+    ("screen", "reason"),
+    [
+        (
+            "Choose the text style that looks best with your terminal\n"
+            "To change this later, run /theme",
+            "needs onboarding",
+        ),
+        ("Select login method:", "needs you to sign in"),
+    ],
+)
+def test_claude_reports_onboarding_and_login_as_launch_errors(screen, reason):
+    terminal = FakeTerminal(windows=[window("window-two")], screen_text=screen)
+    launcher = _test_launcher(HarnessName.CLAUDE_CODE, terminal)
+
+    result = launcher.launch(
+        LaunchRequest("/work", "hello", None, None, None, None)
+    )
+
+    assert result.status == "rejected"
+    assert reason in (result.reason or "")
+    assert result.window_id == "window-two"
+
+
+def test_codex_approves_workspace_trust():
+    terminal = _StartupTerminal(("Do you trust this directory?",))
+    launcher = _test_launcher(HarnessName.CODEX, terminal)
+
+    result = launcher.launch(
+        LaunchRequest("/work", "hello", None, None, None, None)
+    )
+
+    assert result.status == "started"
+    assert terminal.keys == [("window-two", "enter")]
+
+
+def test_codex_reports_login_as_a_launch_error():
+    terminal = FakeTerminal(
+        windows=[window("window-two")],
+        screen_text=(
+            "Welcome to Codex, OpenAI's command-line coding agent\n"
+            "Sign in with ChatGPT"
+        ),
+    )
+    launcher = _test_launcher(HarnessName.CODEX, terminal)
+
+    result = launcher.launch(
+        LaunchRequest("/work", "hello", None, None, None, None)
+    )
+
+    assert result.status == "rejected"
+    assert "needs you to sign in" in (result.reason or "")
+    assert result.window_id == "window-two"
+
+
+def test_terminal_launches_receive_the_configured_harness_homes(monkeypatch):
+    monkeypatch.setenv("BAQYLAU_DASHBOARD_PORT", "49123")
+
+    assert app_providers.harness_launch_environment() == (
+        ("BAQYLAU_DASHBOARD_PORT", "49123"),
+    )
+
+
+def test_direct_terminal_launch_rejects_invalid_environment_names():
+    from terminal.launch import launch_tab_request
+
     with pytest.raises(ValueError):
-        login_shell_command(("harness-cli",), (("bad name", "x"),))
+        launch_tab_request(
+            "/work",
+            ("harness-cli",),
+            environment=(("bad name", "x"),),
+        )
 
 
 def test_claude_terminal_probe_owns_input_box_grammar(tmp_path):
@@ -4111,7 +4266,12 @@ def test_claude_active_send_retries_until_the_native_queue_accepts_it(
     ]
 
 
-def test_codex_active_send_uses_the_harness_queue(monkeypatch, tmp_path):
+def test_codex_active_send_uses_the_running_harness_executable(
+    monkeypatch,
+    tmp_path,
+):
+    from harness.impl.codex.plugin import build_plugin
+
     commands = []
 
     def run(command, **options):
@@ -4119,11 +4279,18 @@ def test_codex_active_send_uses_the_harness_queue(monkeypatch, tmp_path):
         return SimpleNamespace(returncode=0, stdout="queued\n", stderr="")
 
     monkeypatch.setattr(codex_controller.subprocess, "run", run)
+    monkeypatch.setattr(
+        codex_controller,
+        "process_executable",
+        lambda _process_id: "/configured/bin/codex",
+    )
+    monkeypatch.setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
     session = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
         str(tmp_path / "rollout.jsonl"),
         str(tmp_path),
+        harness_process_id=417,
     )
     request = SendText(
         session_id=session.session_id,
@@ -4131,7 +4298,11 @@ def test_codex_active_send_uses_the_harness_queue(monkeypatch, tmp_path):
         text="queued Codex prompt",
     )
 
-    outcome = ProviderGraph().registry.plugin("codex").controller.execute(
+    plugin = build_plugin(
+        HarnessRuntimeConfig("codex", tmp_path / "configured-codex-home")
+    )
+    assert plugin.controller is not None
+    outcome = plugin.controller.execute(
         request,
         control_context(session, FakeTerminal().plugin(), lead_active=True),
     )
@@ -4139,13 +4310,16 @@ def test_codex_active_send_uses_the_harness_queue(monkeypatch, tmp_path):
     assert isinstance(outcome, MessageDeliveryResult)
     assert outcome.status == "queued"
     assert commands[0][0] == [
-        "codex",
+        "/configured/bin/codex",
         "queue",
         "--thread",
         "session-one",
         "--message",
         "queued Codex prompt",
     ]
+    assert commands[0][1]["env"]["CODEX_HOME"] == str(
+        tmp_path / "configured-codex-home"
+    )
 
 
 def test_claude_active_send_is_not_called_queued_without_native_confirmation(
@@ -4834,20 +5008,34 @@ class _RecordingTitles:
 
 
 @pytest.mark.parametrize(
-    ("harness", "native_writer"),
+    "harness",
     [
-        ("claude_code", "harness.impl.claude_code.controls.controller.transcript.titles"),
-        ("codex", "harness.impl.codex.controls.controller.title.titles"),
+        "claude_code",
+        "codex",
     ],
 )
 def test_parked_rename_uses_only_the_owning_harness_title_store(
     monkeypatch,
     tmp_path,
     harness,
-    native_writer,
 ):
     calls = []
-    monkeypatch.setattr(native_writer, _RecordingTitles(calls))
+    if harness == "claude_code":
+        monkeypatch.setattr(
+            "harness.impl.claude_code.controls.controller.transcript.titles",
+            _RecordingTitles(calls),
+        )
+    else:
+        monkeypatch.setattr(
+            "harness.impl.codex.canonical.title.CodexThreadTitleRepository.renameable",
+            lambda _self, _source_reference: True,
+        )
+        monkeypatch.setattr(
+            "harness.impl.codex.canonical.title.CodexThreadTitleRepository.set_title",
+            lambda _self, source_reference, value: (
+                calls.append((source_reference, value)) or "renamed"
+            ),
+        )
     application = ProviderGraph()
     session = Session(
         SessionId("session-one"),
@@ -4870,8 +5058,10 @@ def test_parked_rename_uses_only_the_owning_harness_title_store(
 def test_live_codex_rename_also_updates_the_native_title_store(monkeypatch):
     calls = []
     monkeypatch.setattr(
-        "harness.impl.codex.controls.controller.title.titles",
-        _RecordingTitles(calls),
+        "harness.impl.codex.canonical.title.CodexThreadTitleRepository.set_title",
+        lambda _self, source_reference, value: (
+            calls.append((source_reference, value)) or "renamed"
+        ),
     )
     application = ProviderGraph()
     session = Session(
@@ -4935,6 +5125,35 @@ def test_claude_child_prompt_is_authored_by_the_parent_agent():
     messages = payloads(ClaudeCanonicalTranslator().translate(child_prompt), MessageCreated)
 
     assert messages[0].payload.role == "parent"
+
+
+def test_claude_child_final_answer_is_addressed_to_its_parent_agent():
+    child_answer = replace(
+        raw_event(
+            {
+                "type": "assistant",
+                "uuid": "child-answer",
+                "message": {
+                    "content": [{"type": "text", "text": "finished"}],
+                    "stop_reason": "end_turn",
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="child-answer",
+        ),
+        actor_id=ActorId("child-one"),
+        parent_actor_id=ActorId("session-one:lead"),
+    )
+
+    message = payloads(
+        ClaudeCanonicalTranslator().translate(child_answer),
+        MessageCreated,
+    )[0]
+
+    assert message.payload.role == "assistant"
+    assert message.payload.phase == "end_turn"
+    assert message.payload.recipient_actor_id == ActorId("session-one:lead")
 
 
 def test_claude_child_message_maps_team_lead_alias_to_its_parent_actor():
@@ -5296,6 +5515,82 @@ def test_claude_foreground_shell_completion_survives_translator_restart(tmp_path
     assert payloads(finished, ShellFinished)[0].payload.shell_id == shell_id
 
 
+def test_claude_turn_completion_survives_translator_restart(tmp_path):
+    documents = (
+        {
+            "type": "user",
+            "uuid": "prompt-before-restart",
+            "message": {"role": "user", "content": "Run one command"},
+        },
+        {
+            "type": "assistant",
+            "uuid": "call-before-restart",
+            "parentUuid": "prompt-before-restart",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "shell-before-restart",
+                        "name": "Bash",
+                        "input": {"command": "python -c 'pass'"},
+                    }
+                ],
+                "stop_reason": "tool_use",
+            },
+        },
+        {
+            "type": "user",
+            "uuid": "result-after-restart",
+            "parentUuid": "call-before-restart",
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "shell-before-restart",
+                        "content": "",
+                    }
+                ],
+            },
+        },
+        {
+            "type": "assistant",
+            "uuid": "answer-after-restart",
+            "parentUuid": "result-after-restart",
+            "message": {
+                "id": "answer-after-restart",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "done"}],
+                "stop_reason": "end_turn",
+            },
+        },
+    )
+    lines = tuple(json.dumps(document) + "\n" for document in documents)
+    source = tmp_path / "claude-turn-restart.jsonl"
+    source.write_text("".join(lines), encoding="utf-8")
+    final_position = sum(len(line.encode()) for line in lines[:-1])
+
+    finished = ClaudeCanonicalTranslator().translate(
+        replace(
+            raw_event(
+                documents[-1],
+                harness=HarnessName.CLAUDE_CODE,
+                source_type="transcript",
+                raw_event_id="claude-answer-after-restart",
+                source_position=str(final_position),
+            ),
+            source_name=str(source),
+        )
+    )
+
+    final_message = payloads(finished, MessageCreated)[0]
+    completed_turn = payloads(finished, TurnFinished)[0]
+    assert final_message.turn_id == TurnId("prompt-before-restart")
+    assert completed_turn.turn_id == TurnId("prompt-before-restart")
+    assert completed_turn.payload.final_message_id == final_message.payload.message_id
+
+
 def test_claude_background_completion_is_an_output_finish_not_an_agent_finish():
     """Background Bash completions ride the SAME <task-notification> channel as
     agent completions; treating them as assignment finishes painted phantom
@@ -5570,6 +5865,32 @@ def test_claude_monitor_events_are_progress_on_the_monitor_not_agent_finishes():
     assert all(entry.payload.stream == "status" for entry in progressed)
     assert [entry.payload.ordinal for entry in progressed] == [0, 1, 2]
     assert len({entry.event_id for entry in progressed}) == 3
+
+
+def test_claude_repeated_monitor_arm_keeps_the_event_ordinal():
+    translator = ClaudeCanonicalTranslator()
+    _armed_monitor(translator)
+    first = translator.translate(
+        _monitor_notification(
+            "tick-before-repeated-arm",
+            '<task-id>bmfwjr03l</task-id><summary>Monitor event: "ticks"</summary>'
+            "<event>tick-1</event>",
+        )
+    )
+    _armed_monitor(translator)
+    second = translator.translate(
+        _monitor_notification(
+            "tick-after-repeated-arm",
+            '<task-id>bmfwjr03l</task-id><summary>Monitor event: "ticks"</summary>'
+            "<event>tick-2</event>",
+        )
+    )
+
+    first_event = payloads(first, ShellProgressed)[0]
+    second_event = payloads(second, ShellProgressed)[0]
+    assert first_event.payload.ordinal == 0
+    assert second_event.payload.ordinal == 1
+    assert first_event.event_id != second_event.event_id
 
 
 def test_claude_monitor_event_for_an_unknown_task_is_dropped_not_invented():
@@ -5890,6 +6211,10 @@ def test_codex_exec_that_outlives_its_yield_is_announced_as_background_once():
         (
             'text(r.output || `session_id:${r.session_id}`);',
             "Script completed\nOutput:\nsession_id:22816",
+        ),
+        (
+            'text(r.output); if (r.session_id) text(`SESSION_ID:${r.session_id}`);',
+            "Script completed\nOutput:\nSESSION_ID:22816",
         ),
     ),
 )
@@ -7137,7 +7462,7 @@ def test_claude_background_result_reader_is_known_duplicate_plumbing():
     assert translation.decision == "ignored_nonsemantic"
 
 
-def test_claude_browser_mcp_result_is_a_readable_web_fact():
+def test_claude_browser_mcp_result_is_a_named_browser_fact():
     translator = ClaudeCanonicalTranslator()
     translator.translate(
         raw_event(
@@ -7159,7 +7484,31 @@ def test_claude_browser_mcp_result_is_a_readable_web_fact():
             raw_event_id="browser-navigate-call",
         )
     )
-    translated = translator.translate(
+    hook_result = translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PostToolUse",
+                "tool_use_id": "browser-navigate",
+                "tool_name": "mcp__claude-in-chrome__navigate",
+                "tool_input": {"url": "https://example.com"},
+                "tool_response": [
+                    {"type": "text", "text": "Example Domain loaded"},
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/jpeg",
+                            "data": "binary-image-data",
+                        },
+                    },
+                ],
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="browser-navigate-hook-result",
+        )
+    )
+    transcript_result = translator.translate(
         raw_event(
             {
                 "type": "user",
@@ -7168,7 +7517,20 @@ def test_claude_browser_mcp_result_is_a_readable_web_fact():
                         {
                             "type": "tool_result",
                             "tool_use_id": "browser-navigate",
-                            "content": "Example Domain loaded",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "Example Domain loaded",
+                                },
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": "image/jpeg",
+                                        "data": "binary-image-data",
+                                    },
+                                },
+                            ],
                         }
                     ]
                 },
@@ -7179,9 +7541,192 @@ def test_claude_browser_mcp_result_is_a_readable_web_fact():
         )
     )
 
-    fetched = payloads(translated, WebFetched)[0].payload
-    assert fetched.url == "https://example.com"
-    assert fetched.result == TextContent("Example Domain loaded")
+    hook_event = payloads(hook_result, BrowserInteracted)[0]
+    transcript_event = payloads(transcript_result, BrowserInteracted)[0]
+    assert hook_event.event_id == transcript_event.event_id
+    assert hook_event.payload == transcript_event.payload
+    assert hook_event.payload.action == "Navigate to https://example.com"
+    assert hook_event.payload.result == TextContent("Example Domain loaded\n[image]")
+    assert "binary-image-data" not in hook_event.payload.result.text
+
+
+def test_claude_future_chrome_verb_stays_a_browser_fact():
+    translator = ClaudeCanonicalTranslator()
+    translator.translate(
+        raw_event(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "browser-future",
+                            "name": (
+                                "mcp__claude-in-chrome__"
+                                "inspect_accessibility_tree"
+                            ),
+                            "input": {},
+                        }
+                    ]
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="browser-future-call",
+        )
+    )
+    translated = translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "browser-future",
+                            "content": "Accessible page",
+                        }
+                    ]
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="browser-future-result",
+        )
+    )
+
+    interacted = payloads(translated, BrowserInteracted)[0].payload
+    assert interacted.action == "Inspect accessibility tree"
+    assert interacted.result == TextContent("Accessible page")
+
+
+def test_claude_accepts_browser_mcp_attribution_fields():
+    translated = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "The browser action finished.",
+                        }
+                    ]
+                },
+                "attributionMcpServer": "claude-in-chrome",
+                "attributionMcpTool": "navigate",
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="browser-attribution",
+        )
+    )
+
+    assert translated.decision == "translated"
+
+
+def test_claude_chrome_permission_returns_a_session_allow_decision():
+    session_update = {
+        "type": "addRules",
+        "rules": [
+            {
+                "toolName": "ClaudeInChromeDomain",
+                "ruleContent": "example.com",
+            }
+        ],
+        "behavior": "allow",
+        "destination": "session",
+    }
+    payload = json.dumps(
+        {
+            "session_id": "claude-session",
+            "transcript_path": "/work/claude.jsonl",
+            "cwd": "/work",
+            "hook_event_name": "PermissionRequest",
+            "tool_name": "mcp__claude-in-chrome__navigate",
+            "tool_input": {"url": "https://example.com"},
+            "permission_suggestions": [
+                session_update,
+                {
+                    **session_update,
+                    "destination": "localSettings",
+                },
+            ],
+        }
+    ).encode()
+
+    response = claude_hooks.ClaudeHookGateway().handle(hook_request(payload))
+
+    assert json.loads(response.reply) == {
+        "hookSpecificOutput": {
+            "hookEventName": "PermissionRequest",
+            "decision": {
+                "behavior": "allow",
+                "updatedPermissions": [session_update],
+            },
+        }
+    }
+    assert response.raw_events[0].payload == payload
+
+
+def test_claude_chrome_permission_does_not_persist_a_native_allow_rule():
+    payload = json.dumps(
+        {
+            "session_id": "claude-session",
+            "transcript_path": "/work/claude.jsonl",
+            "cwd": "/work",
+            "hook_event_name": "PermissionRequest",
+            "tool_name": "mcp__claude-in-chrome__computer",
+            "tool_input": {"action": "screenshot"},
+            "permission_suggestions": [
+                {
+                    "type": "addRules",
+                    "rules": [{"toolName": "ClaudeInChromeDomain"}],
+                    "behavior": "allow",
+                    "destination": "localSettings",
+                }
+            ],
+        }
+    ).encode()
+
+    response = claude_hooks.ClaudeHookGateway().handle(hook_request(payload))
+
+    assert json.loads(response.reply) == {
+        "hookSpecificOutput": {
+            "hookEventName": "PermissionRequest",
+            "decision": {"behavior": "allow"},
+        }
+    }
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        {
+            "hook_event_name": "PermissionRequest",
+            "tool_name": "Bash",
+        },
+        {
+            "hook_event_name": "Notification",
+            "notification_type": "permission_prompt",
+        },
+    ],
+)
+def test_claude_does_not_approve_a_non_chrome_or_notification_permission(
+    document,
+):
+    payload = json.dumps(
+        {
+            "session_id": "claude-session",
+            "transcript_path": "/work/claude.jsonl",
+            "cwd": "/work",
+            **document,
+        }
+    ).encode()
+
+    response = claude_hooks.ClaudeHookGateway().handle(hook_request(payload))
+
+    assert response.reply == b""
 
 
 def test_claude_child_actor_uses_the_task_description_from_its_sidecar(tmp_path):
@@ -7578,20 +8123,100 @@ def test_codex_current_app_server_rate_limits_are_strictly_typed_and_normalized(
 
 
 def test_codex_usage_retries_a_transient_app_server_miss(monkeypatch):
-    expected = codex_usage.NormalizedRateLimits(plan="available", windows=())
-    responses = iter((None, object()))
+    response = codex_usage.AccountRateLimitsResponse(
+        rateLimits=codex_usage.RateLimitsResult(
+            primary=codex_usage.RateLimitWindowResult(
+                usedPercent=12,
+                windowDurationMins=300,
+                resetsAt=200,
+            ),
+            planType="available",
+        )
+    )
+    responses = iter(
+        (
+            codex_usage.ProbeResult(
+                None,
+                codex_usage.ProbeFailure("Codex usage request timed out", True),
+            ),
+            codex_usage.ProbeResult(response, None),
+        )
+    )
     now = iter((100.0, 103.0))
     monkeypatch.setattr(codex_usage, "_cached_rate_limits", None)
-    monkeypatch.setattr(codex_usage, "request_rate_limits", lambda: next(responses))
     monkeypatch.setattr(
         codex_usage,
-        "normalize_rate_limits",
-        lambda response: None if response is None else expected,
+        "request_rate_limits",
+        lambda _runtime: next(responses),
     )
     monkeypatch.setattr(codex_usage.time, "time", lambda: next(now))
 
-    assert codex_usage.read_rate_limits() is None
-    assert codex_usage.read_rate_limits() == expected
+    assert codex_usage.collect_rate_limits().usage is None
+    refreshed = codex_usage.collect_rate_limits().usage
+    assert refreshed is not None
+    assert refreshed.plan == "available"
+    assert refreshed.windows[0].used_percent == 12
+
+
+def test_codex_temporary_failure_keeps_the_last_provider_result(monkeypatch):
+    expected = codex_usage.NormalizedRateLimits(plan="pro", windows=())
+    monkeypatch.setattr(
+        codex_usage,
+        "_cached_rate_limits",
+        codex_usage.CacheEntry(
+            "codex\0/work/codex-home",
+            99.0,
+            codex_usage.RateLimitsCollection(expected, None),
+            expected,
+            90.0,
+        ),
+    )
+    monkeypatch.setattr(codex_usage.time, "time", lambda: 100.0)
+    monkeypatch.setattr(
+        codex_usage,
+        "request_rate_limits",
+        lambda _runtime: codex_usage.ProbeResult(
+            None,
+            codex_usage.ProbeFailure("Codex app server ended early", True),
+        ),
+    )
+
+    collection = codex_usage.collect_rate_limits(
+        HarnessRuntimeConfig("codex", Path("/work/codex-home"))
+    )
+
+    assert collection.usage == expected
+    assert collection.error is None
+
+
+def test_codex_temporary_failure_does_not_keep_an_old_result(monkeypatch):
+    expected = codex_usage.NormalizedRateLimits(plan="pro", windows=())
+    monkeypatch.setattr(
+        codex_usage,
+        "_cached_rate_limits",
+        codex_usage.CacheEntry(
+            "codex\0/work/codex-home",
+            99.0,
+            codex_usage.RateLimitsCollection(expected, None),
+            expected,
+            0.0,
+        ),
+    )
+    monkeypatch.setattr(codex_usage.time, "time", lambda: 301.0)
+    monkeypatch.setattr(
+        codex_usage,
+        "request_rate_limits",
+        lambda _runtime: codex_usage.ProbeResult(
+            None,
+            codex_usage.ProbeFailure("Codex app server ended early", True),
+        ),
+    )
+
+    collection = codex_usage.collect_rate_limits(
+        HarnessRuntimeConfig("codex", Path("/work/codex-home"))
+    )
+
+    assert collection == codex_usage.RateLimitsCollection(None, None)
 
 
 def test_codex_usage_keeps_a_visible_row_when_the_native_probe_fails(
@@ -7600,15 +8225,22 @@ def test_codex_usage_keeps_a_visible_row_when_the_native_probe_fails(
 ):
     from harness.impl.codex.usage_rows import CodexUsage
 
-    monkeypatch.setattr(codex_usage, "read_rate_limits", lambda: None)
-    repository = SqliteAccountUsageRepository(main_database(str(tmp_path / "main.db")))
-
-    rows = CodexUsage().read(repository)
+    monkeypatch.setattr(
+        codex_usage,
+        "collect_rate_limits",
+        lambda _runtime: codex_usage.RateLimitsCollection(
+            None,
+            "Codex login was revoked",
+        ),
+    )
+    rows = CodexUsage(
+        HarnessRuntimeConfig("codex", Path("/work/codex-home"))
+    ).read()
 
     assert len(rows) == 1
     assert rows[0].harness == HarnessName.CODEX
     assert rows[0].windows == ()
-    assert rows[0].collection_error == "Codex usage probe is unavailable"
+    assert rows[0].collection_error == "Codex login was revoked"
 
 
 def test_claude_unmapped_tool_stays_ignored_not_failed():
@@ -7898,7 +8530,6 @@ def test_claude_otel_delivery_records_raw_and_canonical_audit(tmp_path):
         runtime.sessions.harness_registry,
         runtime.recorder,
         runtime.sessions,
-        SqliteAccountUsageRepository(runtime.database),
     )
     delivery = HarnessTelemetryRequest("otlp", raw_body)
     assert telemetry.record("claude_code", delivery) == 1
@@ -9436,48 +10067,6 @@ def test_codex_web_time_lookup_is_known_search_activity():
     assert performed.result == TextContent("21:30")
 
 
-def test_codex_browser_context_tool_keeps_its_result():
-    translator = CodexCanonicalTranslator()
-    translator.translate(
-        raw_event(
-            {
-                "type": "response_item",
-                "payload": {
-                    "type": "custom_tool_call",
-                    "name": "exec",
-                    "call_id": "browser-context",
-                    "input": (
-                        "const value = await tools.chrome_extension__getTabContext("
-                        "{tabId:42});text(value);"
-                    ),
-                },
-            },
-            harness=HarnessName.CODEX,
-            source_type="rollout",
-            raw_event_id="browser-context-call",
-        )
-    )
-    answered = translator.translate(
-        raw_event(
-            {
-                "type": "response_item",
-                "payload": {
-                    "type": "custom_tool_call_output",
-                    "call_id": "browser-context",
-                    "output": "Current tab: Example Domain",
-                },
-            },
-            harness=HarnessName.CODEX,
-            source_type="rollout",
-            raw_event_id="browser-context-result",
-        )
-    )
-
-    fetched = payloads(answered, WebFetched)[0].payload
-    assert fetched.url is None
-    assert fetched.result == TextContent("Current tab: Example Domain")
-
-
 def test_codex_web_extension_item_is_the_covered_copy_of_the_custom_tool_result():
     translated = CodexCanonicalTranslator().translate(
         raw_event(
@@ -10137,6 +10726,77 @@ def test_codex_abort_cancels_its_unfinished_exec():
     finished = payloads(aborted, ShellFinished)[0].payload
     assert finished.shell_id == started_shell
     assert finished.outcome == Outcome.CANCELLED
+
+
+def test_codex_abort_cancels_an_exec_that_yielded_before_the_abort():
+    translator = CodexCanonicalTranslator()
+    started = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "exec",
+                    "call_id": "sleep-one",
+                    "input": (
+                        'tools.exec_command({cmd:"sleep 60",yield_time_ms:1000})'
+                    ),
+                    "internal_chat_message_metadata_passthrough": {
+                        "turn_id": "turn-one",
+                    },
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="sleep-started",
+            source_position="10",
+        )
+    )
+    yielded = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "sleep-one",
+                    "output": "",
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="sleep-yielded",
+            source_position="11",
+        )
+    )
+    aborted = translator.translate(
+        raw_event(
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "turn_aborted",
+                    "turn_id": "turn-one",
+                    "reason": "interrupted",
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="turn-aborted",
+            source_position="12",
+        )
+    )
+
+    started_shell = payloads(started, ShellStarted)[0].payload.shell_id
+    assert payloads(yielded, ShellBackgrounded)[0].payload.shell_id == started_shell
+    assert payloads(aborted, ShellFinished)[0].payload == ShellFinished(
+        started_shell,
+        Outcome.CANCELLED,
+        None,
+        None,
+    )
+    assert payloads(aborted, ShellOutputFinished)[0].payload == ShellOutputFinished(
+        started_shell,
+        Outcome.CANCELLED,
+    )
 
 
 def test_codex_abort_cancels_its_unfinished_skill_load():
@@ -10860,7 +11520,293 @@ def test_claude_queued_prompt_after_interrupt_starts_a_new_turn():
     assert payloads(marker, TurnAborted) == []
     assert all(event.turn_id == first_turn for event in marker.canonical_events)
     assert payloads(answer, MessageCreated)[0].turn_id == queued_turn
+    assert payloads(answer, TurnFinished)[0].turn_id == queued_turn
     assert payloads(stopped, TurnFinished)[0].turn_id == queued_turn
+
+
+def test_claude_queued_attachment_starts_a_turn_before_the_stop_hook():
+    translator = ClaudeCanonicalTranslator()
+    first = translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "first-prompt",
+                "message": {"role": "user", "content": "Run a command"},
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="first-prompt",
+        )
+    )
+    queued = translator.translate(
+        raw_event(
+            {
+                "type": "attachment",
+                "uuid": "queued-prompt",
+                "attachment": {
+                    "type": "queued_command",
+                    "prompt": "Reply after the command",
+                    "commandMode": "prompt",
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="queued-prompt",
+        )
+    )
+    stopped = translator.translate(
+        raw_event(
+            {"hook_event_name": "Stop", "hook_event_id": "queued-stop"},
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="queued-stop",
+        )
+    )
+    answer = translator.translate(
+        raw_event(
+            {
+                "type": "assistant",
+                "uuid": "queued-answer",
+                "message": {
+                    "id": "queued-response",
+                    "content": [{"type": "text", "text": "done"}],
+                    "stop_reason": "end_turn",
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="queued-answer",
+        )
+    )
+
+    first_turn = payloads(first, TurnStarted)[0].turn_id
+    queued_turn = payloads(queued, TurnStarted)[0].turn_id
+    assert queued_turn is not None and queued_turn != first_turn
+    assert payloads(queued, TurnAborted)[0].turn_id == first_turn
+    assert payloads(queued, MessageCreated)[0].turn_id == queued_turn
+    assert payloads(stopped, TurnFinished)[0].turn_id == queued_turn
+    assert payloads(answer, MessageCreated)[0].turn_id == queued_turn
+    assert payloads(answer, TurnFinished)[0].turn_id == queued_turn
+
+
+def test_claude_interrupt_stop_before_answer_keeps_the_queued_turn():
+    translator = ClaudeCanonicalTranslator()
+    first = translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "first-prompt",
+                "message": {"role": "user", "content": "Run a long command"},
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="first-prompt",
+        )
+    )
+    queued = translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "queued-prompt",
+                "promptSource": "queued",
+                "message": {"role": "user", "content": "Reply after interrupt"},
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="queued-prompt",
+        )
+    )
+    translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "interrupt-marker",
+                "interruptedMessageId": "first-response",
+                "message": {
+                    "role": "user",
+                    "content": [{
+                        "type": "text",
+                        "text": "[Request interrupted by user for tool use]",
+                    }],
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="interrupt-marker",
+        )
+    )
+    stopped = translator.translate(
+        raw_event(
+            {"hook_event_name": "Stop", "hook_event_id": "queued-stop"},
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="queued-stop",
+        )
+    )
+    answer = translator.translate(
+        raw_event(
+            {
+                "type": "assistant",
+                "uuid": "queued-answer",
+                "message": {
+                    "id": "queued-response",
+                    "content": [{"type": "text", "text": "continued"}],
+                    "stop_reason": "end_turn",
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="queued-answer",
+        )
+    )
+
+    first_turn = payloads(first, TurnStarted)[0].turn_id
+    queued_turn = payloads(queued, TurnStarted)[0].turn_id
+    assert queued_turn is not None and queued_turn != first_turn
+    assert payloads(stopped, TurnFinished)[0].turn_id == queued_turn
+    assert payloads(answer, MessageCreated)[0].turn_id == queued_turn
+    assert payloads(answer, TurnFinished)[0].turn_id == queued_turn
+
+
+def test_claude_text_block_prompt_with_an_image_opens_its_own_turn():
+    translator = ClaudeCanonicalTranslator()
+    first = translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "first-prompt",
+                "message": {"role": "user", "content": "Reply first"},
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="first-prompt",
+        )
+    )
+    translator.translate(
+        raw_event(
+            {"hook_event_name": "Stop", "hook_event_id": "first-stop"},
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="first-stop",
+        )
+    )
+    translator.translate(
+        raw_event(
+            {
+                "type": "assistant",
+                "uuid": "first-answer",
+                "message": {
+                    "id": "first-response",
+                    "content": [{"type": "text", "text": "ready"}],
+                    "stop_reason": "end_turn",
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="first-answer",
+        )
+    )
+    image_prompt = translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "image-prompt",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Inspect the image"}],
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="image-prompt",
+        )
+    )
+    translator.translate(
+        raw_event(
+            {"hook_event_name": "Stop", "hook_event_id": "image-stop"},
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="image-stop",
+        )
+    )
+    answer = translator.translate(
+        raw_event(
+            {
+                "type": "assistant",
+                "uuid": "image-answer",
+                "message": {
+                    "id": "image-response",
+                    "content": [{"type": "text", "text": "123"}],
+                    "stop_reason": "end_turn",
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="image-answer",
+        )
+    )
+
+    first_turn = payloads(first, TurnStarted)[0].turn_id
+    image_turn = payloads(image_prompt, TurnStarted)[0].turn_id
+    prompt_message = payloads(image_prompt, MessageCreated)[0]
+    assert image_turn is not None and image_turn != first_turn
+    assert prompt_message.turn_id == image_turn
+    assert payloads(image_prompt, TurnStarted)[0].payload.prompt_message_id == (
+        prompt_message.payload.message_id
+    )
+    assert payloads(answer, MessageCreated)[0].turn_id == image_turn
+    assert payloads(answer, TurnFinished)[0].turn_id == image_turn
+
+
+def test_claude_response_closes_a_turn_when_the_stop_hook_arrives_first():
+    """A busy daemon can translate the pushed Stop hook before it reads the
+    prompt and answer from the transcript. The answer must still close the turn."""
+    translator = ClaudeCanonicalTranslator()
+    early_stop = translator.translate(
+        raw_event(
+            {"hook_event_name": "Stop", "hook_event_id": "early-stop"},
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="early-stop",
+        )
+    )
+    prompt = translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "late-prompt",
+                "message": {"role": "user", "content": "reply now"},
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="late-prompt",
+        )
+    )
+    answer = translator.translate(
+        raw_event(
+            {
+                "type": "assistant",
+                "uuid": "late-answer",
+                "message": {
+                    "id": "late-answer",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "done"}],
+                    "stop_reason": "end_turn",
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="late-answer",
+        )
+    )
+
+    turn_id = payloads(prompt, TurnStarted)[0].turn_id
+    final_message = payloads(answer, MessageCreated)[0]
+    finished = payloads(answer, TurnFinished)[0]
+    assert payloads(early_stop, TurnFinished)[0].turn_id is None
+    assert final_message.turn_id == turn_id
+    assert finished.turn_id == turn_id
+    assert finished.payload.final_message_id == final_message.payload.message_id
 
 
 def test_claude_file_facts_converge_from_either_evidence_stream():
@@ -11942,6 +12888,43 @@ def test_claude_rename_is_only_the_separate_title_change(arguments):
 
     assert translation.canonical_events == ()
     assert translation.decision == "ignored_nonsemantic"
+
+
+def test_claude_clear_does_not_hold_the_next_prompt_in_its_turn():
+    translator = ClaudeCanonicalTranslator()
+    cleared = translator.translate(
+        raw_event(
+            {
+                "type": "system",
+                "subtype": "local_command",
+                "uuid": "clear",
+                "content": (
+                    "<command-name>/clear</command-name>"
+                    "<command-message>clear</command-message>"
+                    "<command-args></command-args>"
+                ),
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="slash-clear",
+        )
+    )
+    prompt = translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "prompt-after-clear",
+                "message": {"content": "answer after clear"},
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="prompt-after-clear",
+        )
+    )
+
+    assert cleared.canonical_events == ()
+    assert payloads(prompt, TurnStarted)[0].turn_id == TurnId("prompt-after-clear")
+    assert payloads(prompt, MessageCreated)[0].turn_id == TurnId("prompt-after-clear")
 
 
 def test_claude_prompt_quoting_a_command_envelope_stays_a_prompt():

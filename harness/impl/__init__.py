@@ -14,17 +14,41 @@ from __future__ import annotations
 import importlib
 from pathlib import Path
 
-from harness.contract import HarnessPlugin
+from audit.recorder import AuditRecorder
+from domain.ids import HarnessName
+from harness.contract import HarnessPlugin, SessionResumeRecorder
+from harness.runtime import HarnessRuntimeConfigs, default_harness_runtime_configs
+from terminal.contract import TerminalPlugin
 
 
-def installed() -> tuple[HarnessPlugin, ...]:
+def installed(
+    harness_runtime_configs: HarnessRuntimeConfigs | None = None,
+    terminal_plugin: TerminalPlugin | None = None,
+    session_resume_recorder: SessionResumeRecorder | None = None,
+    audit_recorder: AuditRecorder | None = None,
+    launch_environment: tuple[tuple[str, str], ...] = (),
+) -> tuple[HarnessPlugin, ...]:
     """Every harness installed here, in directory order."""
+    runtime_configs = harness_runtime_configs or default_harness_runtime_configs()
     descriptors = []
     for descriptor_path in sorted(Path(__file__).resolve().parent.glob("*/plugin.py")):
         package_name = descriptor_path.parent.name
         module = importlib.import_module(f"harness.impl.{package_name}.plugin")
-        descriptor = getattr(module, "plugin", None)
+        factory = getattr(module, "build_plugin", None)
+        descriptor = (
+            factory(
+                runtime_configs.for_harness(HarnessName(package_name)),
+                terminal_plugin,
+                session_resume_recorder,
+                audit_recorder,
+                launch_environment,
+            )
+            if callable(factory)
+            else None
+        )
         if not isinstance(descriptor, HarnessPlugin):
-            raise TypeError(f"{module.__name__}.plugin must be a HarnessPlugin")
+            raise TypeError(
+                f"{module.__name__}.build_plugin must return a HarnessPlugin"
+            )
         descriptors.append(descriptor)
     return tuple(descriptors)

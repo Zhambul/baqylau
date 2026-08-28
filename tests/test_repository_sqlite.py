@@ -10,7 +10,6 @@ from __future__ import annotations
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from decimal import Decimal
 from threading import Barrier
 
 import pytest
@@ -76,7 +75,7 @@ from domain.values import (
     TextContent,
 )
 from domain.workspace import AnswerSelection, ComposerDraft, DialogDraft, QueuedMessage
-from harness.models import AccountUsageSnapshot, RawEvent, Session, TranslationResult, UsageWindowSample
+from harness.models import RawEvent, Session, TranslationResult
 from repository.errors import EventIdentityConflict, SchemaVersionMismatch
 from repository.mapper import documents
 from repository.mapper.documents import decode_document, encode_document
@@ -111,7 +110,6 @@ from repository.impl.sqlite.terminal import (
     SqlitePaneWidthRepository,
 )
 from repository.impl.sqlite.uploads import SqliteUploadRepository
-from repository.impl.sqlite.usage import SqliteAccountUsageRepository
 from repository.impl.sqlite.workspace import SqliteSessionWorkspaceRepository
 
 SESSION = SessionId("session-one")
@@ -1853,41 +1851,6 @@ def test_a_pane_width_is_absent_until_remembered(main):
 # file views the mirror has expanded is the PANE's own state now: it holds every
 # byte it draws, so expanding one needs nothing from the daemon and the daemon
 # has no business remembering it.
-
-
-# --- usage --------------------------------------------------------------------
-
-
-def test_a_usage_snapshot_replaces_its_windows(main):
-    usage = SqliteAccountUsageRepository(main)
-    usage.record(
-        AccountUsageSnapshot(
-            HARNESS,
-            "account-one",
-            "One",
-            10.0,
-            (UsageWindowSample("five_hour", Decimal("12.5"), 99.0),),
-        )
-    )
-    usage.record(
-        AccountUsageSnapshot(
-            HARNESS,
-            "account-one",
-            "One",
-            20.0,
-            (UsageWindowSample("seven_day", Decimal("3"), None),),
-        )
-    )
-    snapshots = usage.snapshots()
-    assert len(snapshots) == 1
-    assert [window.key for window in snapshots[0].windows] == ["seven_day"]
-    assert snapshots[0].captured_at == 20.0
-
-
-def test_an_account_less_snapshot_round_trips_as_none(main):
-    usage = SqliteAccountUsageRepository(main)
-    usage.record(AccountUsageSnapshot(HARNESS, None, "default", 1.0, ()))
-    assert usage.snapshots()[0].account_id is None
 
 
 # --- uploads ------------------------------------------------------------------

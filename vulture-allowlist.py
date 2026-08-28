@@ -330,6 +330,7 @@ background_tasks                    # HookPayload
 session_crons                       # HookPayload
 final                               # HookPayload
 notification_type                   # HookPayload
+permission_suggestions              # HookPayload
 custom_instructions                 # HookPayload
 compact_summary                     # HookPayload
 load_reason                         # HookPayload
@@ -430,12 +431,18 @@ server_tool_use                    # MessageUsage
 cache_creation                     # MessageUsage / UsageIteration
 inference_geo                      # MessageUsage
 speed                              # MessageUsage
+screen_error                       # TerminalWindowDiagnosticResponse
+toolName                          # Claude PermissionRule foreign field
+ruleContent                       # Claude PermissionRule foreign field
+attributionMcpServer              # Claude AssistantRecord foreign field
+attributionMcpTool                # Claude AssistantRecord foreign field
 
 # Pydantic serializes these Python-side names through their camelCase aliases;
 # the receiver reads the JSON names, so no Python attribute read exists here.
 permission_decision                 # HookSpecificOutput.permissionDecision
 updated_input                       # HookSpecificOutput.updatedInput
 hook_specific_output                # HookReply.hookSpecificOutput
+updated_permissions                 # ChromePermissionDecision.updatedPermissions
 
 # --- StrEnum members reached only by validation/serialization -------------------
 # A closed vocabulary's member is a complete listing of what a stored value or a

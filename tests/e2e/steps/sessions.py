@@ -334,6 +334,20 @@ def turn_has_final_answer(client: BaqylauClient, turns: Turns, name: str, text: 
     )
 
 
+@then(parsers.parse('turn "{name}" has one final answer containing \'{text}\''))
+def turn_has_one_final_answer_containing(
+    client: BaqylauClient,
+    turns: Turns,
+    name: str,
+    text: str,
+) -> None:
+    answers = turn_checks.final_answer_texts(client, turns.get(name))
+    assert len(answers) == 1 and text in answers[0], (
+        f"turn {name!r} does not have one final answer containing {text!r}; "
+        f"actual final answers: {answers}"
+    )
+
+
 @then(parsers.parse(
     'turn "{later_name}" starts after turn "{earlier_name}" completes'
 ))

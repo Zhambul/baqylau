@@ -6,7 +6,7 @@ Feature: background work reaches the session feed
       """
       Use the Bash tool with run_in_background set to true. Run this exact command:
 
-      python3 -c 'import time; print("redirect-one", flush=True); time.sleep(2); print("redirect-two", flush=True)' > /tmp/baqylau-e2e-background-redirect.log 2>&1; echo "exit=$?" >> /tmp/baqylau-e2e-background-redirect.log; printf 'pipe-output\n' | tee /tmp/baqylau-e2e-background-pipe.log >/dev/null
+      python3 -c 'import time; print("redirect-one", flush=True); time.sleep(2); print("redirect-two", flush=True)' > baqylau-e2e-background-redirect.log 2>&1; echo "exit=$?" >> baqylau-e2e-background-redirect.log; printf 'pipe-output\n' | tee baqylau-e2e-background-pipe.log >/dev/null
 
       Do not read either file and do not start another tool. Reply only with the
       exact marker REDIRECT_STARTED.

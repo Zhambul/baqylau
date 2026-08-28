@@ -9,6 +9,7 @@ export default defineConfig({
   },
   forbidOnly: Boolean(process.env.CI),
   fullyParallel: true,
+  globalSetup: './tests/global-setup.ts',
   reporter: process.env.CI ? 'github' : 'list',
   retries: 0,
   testDir: './tests',

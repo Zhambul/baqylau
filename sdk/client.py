@@ -69,7 +69,11 @@ from api.controls.models.select_model_request import SelectModelRequest
 from api.controls.models.send_text_request import SendTextRequest
 from api.controls.models.control_outcome_response import ControlOutcomeResponse
 from api.controls.models.launch_response import LaunchResponse
-from api.diagnostics.models import DiagnosticsCheckpointResponse, DiagnosticsReportResponse
+from api.diagnostics.models import (
+    DiagnosticsCheckpointResponse,
+    DiagnosticsReportResponse,
+    TerminalDiagnosticsResponse,
+)
 from api.sessiondata.models.entry import EntryPageResponse, EntryResponse, MessageBodyResponse
 from api.sessiondata.models.session_data import (
     SessionDataListResponse,
@@ -105,12 +109,14 @@ UPLOAD = TypeAdapter(UploadResponse)
 SAVED = TypeAdapter(SavedResponse)
 DIAGNOSTICS_CHECKPOINT = TypeAdapter(DiagnosticsCheckpointResponse)
 DIAGNOSTICS_REPORT = TypeAdapter(DiagnosticsReportResponse)
+TERMINAL_DIAGNOSTICS = TypeAdapter(TerminalDiagnosticsResponse)
 ERROR_FRAME = TypeAdapter(ErrorFrame)
 SESSION_STREAM = TypeAdapter(SessionStreamFrame)
 GLOBAL_STREAM = TypeAdapter(GlobalStreamFrame)
 PANE_COMMAND = TypeAdapter(PaneCommandResponse)
 AUTOMATIC_NAME_TIMEOUT_SECONDS = 120.0
 CONTROL_TIMEOUT_SECONDS = 60.0
+LAUNCH_TIMEOUT_SECONDS = 35.0
 
 
 @dataclass(frozen=True)
@@ -270,6 +276,7 @@ class SessionsResource:
             ),
             LAUNCH,
             {202, 409},
+            timeout=LAUNCH_TIMEOUT_SECONDS,
         )
         if status != 202 or answer.window_id is None:
             raise ApiFailure(f"session launch was rejected: {answer.reason or answer.status}")
@@ -974,6 +981,9 @@ class DiagnosticsResource:
 
     def checkpoint(self) -> DiagnosticsCheckpointResponse:
         return self.transport.get("/api/diagnostics/checkpoint", DIAGNOSTICS_CHECKPOINT)
+
+    def terminal(self) -> TerminalDiagnosticsResponse:
+        return self.transport.get("/api/diagnostics/terminal", TERMINAL_DIAGNOSTICS)
 
     def report(
         self,

@@ -712,6 +712,33 @@ test('keeps the new-session and resume-preview modal boundaries', async ({
   expect(failures).toEqual([]);
 });
 
+test('expands the new-session prompt without an input scrollbar', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: '+ session' }).click();
+
+  const prompt = page
+    .getByRole('dialog', { name: 'new session' })
+    .getByPlaceholder(/what should .* start on\?/);
+  await prompt.fill(
+    Array.from(
+      { length: 40 },
+      (_, index) => `Initial prompt line ${String(index + 1)}.`,
+    ).join('\n'),
+  );
+
+  const size = await prompt.evaluate((textarea) => ({
+    clientHeight: textarea.clientHeight,
+    overflowY: getComputedStyle(textarea).overflowY,
+    scrollHeight: textarea.scrollHeight,
+    viewportHeight: innerHeight,
+  }));
+  expect(size.clientHeight).toBeGreaterThan(size.viewportHeight * 0.4);
+  expect(size.clientHeight).toBeGreaterThanOrEqual(size.scrollHeight);
+  expect(size.overflowY).toBe('hidden');
+});
+
 test('keeps the active resume row visible during keyboard navigation', async ({
   page,
 }) => {

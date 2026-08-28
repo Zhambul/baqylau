@@ -15,7 +15,7 @@ from typing import TypeAlias
 
 from pydantic import BaseModel, ConfigDict, RootModel
 
-from domain.ids import ActorId, HarnessName, SessionId, TaskId
+from domain.ids import ActorId, HarnessName, SessionId, TaskId, WindowId
 
 
 class AuditDocument(BaseModel):
@@ -56,6 +56,15 @@ class HarnessInputAudit(AuditDocument):
     error: str
     kind: str | None = None
     payload_bytes: int | None = None
+
+
+class HarnessStartupAudit(AuditDocument):
+    harness: HarnessName
+    window_id: WindowId
+    screen_kind: str | None = None
+    outcome: str
+    message: str
+    screen: str | None = None
 
 
 class SpawnArguments(RootModel[tuple[str, ...]]):

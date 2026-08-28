@@ -1,54 +1,15 @@
 #!/usr/bin/env python3
-"""Capture Claude Code's rate-limit windows, then run the real status line.
+"""Run the configured Claude status line.
 
-Claude Code exposes profile rate limits (`rate_limits.<window>.
-{used_percentage,resets_at}`) to ONE place: the status-line command's stdin JSON,
-after each API response. Not in any hook payload, not in the transcript, not in
-OTEL — so the only way to read it is to BE the status-line command. Claude Code
-allows a single one and the user already runs a HUD, so this shim wraps it: read
-the stdin once, ship it to the daemon, then hand the SAME bytes to the real
-command (argv[1:]) and let its output and exit code be what Claude Code sees.
-
-HARD rule: the shim must NEVER break the status line. The capture is silent on
-every failure and the delegate runs regardless.
+Existing Claude settings name this stable file. Usage now comes from Claude's
+structured usage request, so this file only passes the input to the configured
+status-line command.
 """
 
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
-
-sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # my own directory
-
-import _daemon                                                   # noqa: E402
-import _http                                                     # noqa: E402
-
-HARNESS = "claude_code"
-# The status line must never be held up: a wedged daemon costs this pause per
-# render, and no more.
-DELIVERY_TIMEOUT_SECONDS = 1.0
-STATUSLINE_HEADERS = {_http.TELEMETRY_KIND_HEADER: "statusline"}
-
-
-def capture(raw: bytes) -> None:
-    """Ship the stdin bytes to the daemon as a `statusline` telemetry delivery.
-
-    The read time is stamped on the way past. What the rate-limit windows mean
-    is decided daemon-side
-    (`harness/impl/claude_code/otel/gateway.py`).
-    """
-    try:
-        if not raw:
-            return
-        _daemon.post(
-            _http.TELEMETRY_PATH % HARNESS,
-            raw,
-            STATUSLINE_HEADERS,
-            timeout=DELIVERY_TIMEOUT_SECONDS,
-        )
-    except Exception:
-        pass                                    # never break the status line
 
 
 def delegate(argv: list[str], stdin_bytes: bytes) -> int:
@@ -65,7 +26,6 @@ def delegate(argv: list[str], stdin_bytes: bytes) -> int:
 
 def main() -> None:
     raw = sys.stdin.buffer.read()
-    capture(raw)
     sys.exit(delegate(sys.argv[1:], raw))
 
 

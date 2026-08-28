@@ -23,8 +23,6 @@ application owns and reads back:
                               one preference repository each
     pane_widths
                               the terminal repositories
-    account_usage_snapshots + account_usage_windows
-                              the usage repository
     uploads                   the upload repository
 
 `audit.db` holds what the MACHINERY did, and is separate because audit writes

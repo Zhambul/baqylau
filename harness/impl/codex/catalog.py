@@ -8,6 +8,9 @@ from harness.impl.codex import commands
 
 
 class CodexCatalog(HarnessCatalog):
+    def __init__(self, configuration_directory: str) -> None:
+        self.configuration_directory = configuration_directory
+
     def read(self, query_context: QueryContext) -> HarnessCatalogSnapshot:
         return HarnessCatalogSnapshot(
             commands=tuple(
@@ -16,6 +19,9 @@ class CodexCatalog(HarnessCatalog):
                     description=row.description,
                     minimum_prompt_count=0,
                 )
-                for row in commands.slash_commands(query_context.working_directory or "")
+                for row in commands.slash_commands(
+                    query_context.working_directory or "",
+                    self.configuration_directory,
+                )
             ),
         )

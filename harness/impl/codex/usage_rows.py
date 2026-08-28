@@ -8,9 +8,9 @@ from decimal import Decimal
 from domain.ids import HarnessName
 from harness.contract import HarnessUsage
 from harness.impl.codex import usage as native_usage
-from repository.contract.usage import AccountUsageRepository
 from harness.models import UsageRow, UsageWindow
 from harness.models.usage import UsageWindowScope
+from harness.runtime import HarnessRuntimeConfig, default_harness_runtime_configs
 
 HARNESS = HarnessName.CODEX
 WINDOW_LABELS: Mapping[int, str] = {300: "5h", 10080: "7d"}
@@ -21,9 +21,12 @@ def _window_label(duration_minutes: int) -> str:
 
 
 class CodexUsage(HarnessUsage):
-    def read(self, account_usage_repository: AccountUsageRepository) -> tuple[UsageRow, ...]:
-        del account_usage_repository  # codex asks its own CLI live; nothing is cached
-        rate_limits = native_usage.read_rate_limits()
+    def __init__(self, harness_runtime_config: HarnessRuntimeConfig) -> None:
+        self.runtime = harness_runtime_config
+
+    def read(self) -> tuple[UsageRow, ...]:
+        collection = native_usage.collect_rate_limits(self.runtime)
+        rate_limits = collection.usage
         plan = rate_limits.plan if rate_limits is not None else None
         windows = tuple(
             UsageWindow(
@@ -49,10 +52,10 @@ class CodexUsage(HarnessUsage):
             scheduling_allowed=False,
             limit=None,
             authentication_error=None,
-            collection_error=(
-                None if rate_limits is not None else "Codex usage probe is unavailable"
-            ),
+            collection_error=collection.error,
         ),)
 
 
-usage_reader = CodexUsage()
+usage_reader = CodexUsage(
+    default_harness_runtime_configs().for_harness(HARNESS)
+)

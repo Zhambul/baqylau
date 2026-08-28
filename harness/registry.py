@@ -31,14 +31,6 @@ class HarnessRegistry:
                 f"harness {name!r} uses canonical version {harness_plugin.info.canonical_version}, "
                 f"expected {SCHEMA_VERSION}"
             )
-        if harness_plugin.info.supports_attachments and harness_plugin.launcher is None:
-            raise HarnessRegistryError(
-                f"harness {name!r} advertises attachments without a launcher"
-            )
-        if harness_plugin.info.default_for_launch and harness_plugin.launcher is None:
-            raise HarnessRegistryError(
-                f"harness {name!r} is the launch default but has no launcher"
-            )
         if harness_plugin.info.default_for_launch and any(
             registered.info.default_for_launch for registered in self._plugins.values()
         ):

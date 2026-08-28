@@ -95,16 +95,14 @@ class DirectorySnapshot:
 class RolloutCatalog:
     """Find new rollout files without reading every date directory each tick."""
 
-    def __init__(self) -> None:
+    def __init__(self, configuration_directory: str) -> None:
+        self.configuration_directory = configuration_directory
         self._root = ""
         self._directories: dict[str, DirectorySnapshot] = {}
         self._rollouts: dict[str, DirectorySnapshot] = {}
 
     def paths(self) -> tuple[str, ...]:
-        root = os.path.join(
-            os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex"),
-            "sessions",
-        )
+        root = os.path.join(self.configuration_directory, "sessions")
         if root != self._root:
             self._root = root
             self._directories.clear()
@@ -244,8 +242,13 @@ class CodexRolloutRawEventSource(HarnessRawEventSource):
 class CodexTitleRawEventSource(HarnessRawEventSource):
     """Observe the native Codex index, which has no title event stream."""
 
-    def __init__(self, raw_event_source_context: RawEventSourceContext) -> None:
+    def __init__(
+        self,
+        raw_event_source_context: RawEventSourceContext,
+        title_repository: native_title.CodexThreadTitleRepository = native_title.titles,
+    ) -> None:
         self.context = raw_event_source_context
+        self.title_repository = title_repository
         self._checked_store = False
         self._store_marker: native_title.CodexTitleStoreMarker | None = None
         source_hash = hashlib.sha256(
@@ -254,16 +257,20 @@ class CodexTitleRawEventSource(HarnessRawEventSource):
         self.source_identity = f"codex:title:{source_hash}"
 
     def read(self, after_position: str | None) -> tuple[RawEvent, ...]:
-        store_marker = native_title.title_store_marker(self.context.source_reference)
+        store_marker = native_title.title_store_marker(
+            self.context.source_reference,
+            self.title_repository.configuration_directory,
+        )
         if (
             store_marker is not None
             and self._checked_store
             and store_marker == self._store_marker
         ):
             return ()
-        observed_title = native_title.titles.read_title(self.context.source_reference)
+        observed_title = self.title_repository.read_title(self.context.source_reference)
         self._store_marker = native_title.title_store_marker(
-            self.context.source_reference
+            self.context.source_reference,
+            self.title_repository.configuration_directory,
         )
         self._checked_store = True
         if observed_title is None:
@@ -357,8 +364,17 @@ class CodexSessionSources:
 
 
 class CodexRawEventSources(HarnessRawEventSources):
-    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
-        self._catalog = RolloutCatalog()
+    def __init__(
+        self,
+        configuration_directory: str,
+        title_repository: native_title.CodexThreadTitleRepository | None = None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._catalog = RolloutCatalog(configuration_directory)
+        self._titles = (
+            title_repository
+            or native_title.CodexThreadTitleRepository(configuration_directory)
+        )
         self._clock = clock
         self._catalog_refreshed_at: float | None = None
         self._known_rollout_paths: frozenset[str] = frozenset()
@@ -456,7 +472,7 @@ class CodexRawEventSources(HarnessRawEventSources):
             lead_sources: tuple[HarnessRawEventSource, ...] = (
                 (
                     CodexRolloutRawEventSource(session.source_context),
-                    CodexTitleRawEventSource(session.source_context),
+                    CodexTitleRawEventSource(session.source_context, self._titles),
                 )
                 if owns_lead_session
                 else ()

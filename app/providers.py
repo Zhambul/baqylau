@@ -84,10 +84,10 @@ from harness.models import (
     InterruptRegistry,
 )
 from harness.registry import HarnessRegistry
+from harness.runtime import HarnessRuntimeConfigs, default_harness_runtime_configs
 from harness.services.catalog import HarnessCatalogService
 from harness.services.control_effects import ControlEffectRecorder
 from harness.services.controls import HarnessControlService
-from harness.services.launcher import HarnessLauncherService
 from harness.services.launch_effects import SessionLaunchEffectRecorder
 from harness.services.probe import TerminalInputService
 from harness.services.telemetry import TelemetryGatewayService
@@ -121,7 +121,6 @@ from repository.contract.preferences import (
 from repository.contract.sessions import SessionRepository
 from repository.contract.terminal import PaneWidthRepository
 from repository.contract.uploads import UploadRepository
-from repository.contract.usage import AccountUsageRepository
 from repository.contract.workspace import SessionWorkspaceRepository
 from repository.contract.diagnostics import DiagnosticsRepository
 from repository.impl.sqlite.canonical_events import SqliteCanonicalEventRepository
@@ -150,7 +149,6 @@ from repository.impl.sqlite.terminal import (
     SqlitePaneWidthRepository,
 )
 from repository.impl.sqlite.uploads import SqliteUploadRepository
-from repository.impl.sqlite.usage import SqliteAccountUsageRepository
 from repository.impl.sqlite.workspace import SqliteSessionWorkspaceRepository
 from terminal.adapter import TerminalAdapter
 from terminal.contract import TerminalPlugin
@@ -204,15 +202,14 @@ Diagnostics = Annotated[DiagnosticsRepository, Depends(diagnostics)]
 
 
 @singleton
-def registry() -> HarnessRegistry:
-    harnesses = HarnessRegistry()
-    for plugin in installed():
-        harnesses.register(plugin)
-    harnesses.validate()
-    return harnesses
+def harness_runtime_configs() -> HarnessRuntimeConfigs:
+    return default_harness_runtime_configs()
 
 
-Registry = Annotated[HarnessRegistry, Depends(registry)]
+RuntimeConfigs = Annotated[
+    HarnessRuntimeConfigs,
+    Depends(harness_runtime_configs),
+]
 
 
 @singleton
@@ -342,14 +339,6 @@ PaneWidthStorage = Annotated[PaneWidthRepository, Depends(pane_width_storage)]
 
 
 @singleton
-def account_usage(database: MainDb) -> AccountUsageRepository:
-    return SqliteAccountUsageRepository(database)
-
-
-AccountUsage = Annotated[AccountUsageRepository, Depends(account_usage)]
-
-
-@singleton
 def naming_jobs(database: MainDb) -> NamingJobRepository:
     return SqliteNamingJobRepository(database)
 
@@ -389,6 +378,59 @@ def audit_reads(database: AuditReaderDb) -> AuditReadRepository:
 
 
 AuditReads = Annotated[AuditReadRepository, Depends(audit_reads)]
+
+
+def harness_launch_environment() -> tuple[tuple[str, str], ...]:
+    """Values that every terminal-launched harness must receive."""
+    return (
+        (
+            "BAQYLAU_DASHBOARD_PORT",
+            os.environ.get("BAQYLAU_DASHBOARD_PORT", "8377"),
+        ),
+    )
+
+
+@singleton
+def launch_sessions(database: MainDb) -> SessionRepository:
+    """Session facts needed while the harness registry is being built."""
+    return SqliteSessionRepository(database)
+
+
+LaunchSessions = Annotated[SessionRepository, Depends(launch_sessions)]
+
+
+@singleton
+def launch_effects(
+    raw: RawEvents,
+    session_storage: LaunchSessions,
+) -> SessionLaunchEffectRecorder:
+    return SessionLaunchEffectRecorder(raw, session_storage)
+
+
+LaunchEffects = Annotated[SessionLaunchEffectRecorder, Depends(launch_effects)]
+
+
+@singleton
+def registry(
+    runtime_configs: RuntimeConfigs,
+    terminal: InstalledTerminal,
+    effects: LaunchEffects,
+    audit: Recorder,
+) -> HarnessRegistry:
+    harnesses = HarnessRegistry()
+    for plugin in installed(
+        runtime_configs,
+        terminal,
+        effects,
+        audit,
+        harness_launch_environment(),
+    ):
+        harnesses.register(plugin)
+    harnesses.validate()
+    return harnesses
+
+
+Registry = Annotated[HarnessRegistry, Depends(registry)]
 
 
 @singleton
@@ -464,11 +506,10 @@ ApplicationUpdates = Annotated[ApplicationUpdateState, Depends(application_updat
 @singleton
 def usage_state(
     harnesses: Registry,
-    usage: AccountUsage,
     updates: ApplicationUpdates,
 ) -> ApplicationUsageState:
     return ApplicationUsageState.configured(
-        HarnessUsageService(harnesses, usage),
+        HarnessUsageService(harnesses),
         updates.publish,
     )
 
@@ -490,8 +531,9 @@ def model_factory(
     terminal: ModelTerminal,
     usage: UsageState,
     audit: Recorder,
+    runtime_configs: RuntimeConfigs,
 ) -> ModelFactory:
-    return DefaultModelFactory(terminal, usage, audit)
+    return DefaultModelFactory(terminal, usage, audit, runtime_configs)
 
 
 InferenceModels = Annotated[ModelFactory, Depends(model_factory)]
@@ -587,9 +629,9 @@ HookGateway = Annotated[HookGatewayService, Depends(hook_gateway)]
 
 @singleton
 def telemetry_gateway(
-    harnesses: Registry, raw: RawEvents, session_storage: Sessions, usage: AccountUsage
+    harnesses: Registry, raw: RawEvents, session_storage: Sessions
 ) -> TelemetryGatewayService:
-    return TelemetryGatewayService(harnesses, raw, session_storage, usage)
+    return TelemetryGatewayService(harnesses, raw, session_storage)
 
 
 TelemetryGateway = Annotated[TelemetryGatewayService, Depends(telemetry_gateway)]
@@ -651,51 +693,6 @@ def session_application(
 
 
 SessionApplication = Annotated[SessionApplicationService, Depends(session_application)]
-
-
-@singleton
-def launch_effects(
-    raw: RawEvents,
-    session_storage: Sessions,
-) -> SessionLaunchEffectRecorder:
-    return SessionLaunchEffectRecorder(raw, session_storage)
-
-
-LaunchEffects = Annotated[SessionLaunchEffectRecorder, Depends(launch_effects)]
-
-
-def harness_launch_environment() -> tuple[tuple[str, str], ...]:
-    """Values that a terminal-launched harness must get from Baqylau.
-
-    A terminal application is a separate process. It does not inherit changes
-    from the daemon environment. Pass only the values that define the harness
-    runtime and the callback endpoint.
-    """
-    return (
-        (
-            "BAQYLAU_DASHBOARD_PORT",
-            os.environ.get("BAQYLAU_DASHBOARD_PORT", "8377"),
-        ),
-    )
-
-
-@singleton
-def launcher(
-    harnesses: Registry,
-    adapter: Terminal,
-    plugin: InstalledTerminal,
-    effects: LaunchEffects,
-) -> HarnessLauncherService:
-    return HarnessLauncherService(
-        harnesses,
-        adapter,
-        plugin.tabs,
-        effects,
-        launch_environment=harness_launch_environment(),
-    )
-
-
-Launcher = Annotated[HarnessLauncherService, Depends(launcher)]
 
 
 @singleton

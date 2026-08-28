@@ -46,6 +46,7 @@ from terminal.models import (
 )
 from domain.events import QuestionAsked
 from domain.ids import WindowId
+from core.process import process_executable
 
 # The terminal's own window id: `terminal/` may depend on nothing outside
 # itself, so this module — the harness boundary that talks to a live
@@ -57,6 +58,8 @@ from harness.impl.codex.canonical.records import PromptRecord, RolloutRecord, Ta
 from harness.impl.codex.continuity import RewindContinuity
 from harness.impl.codex.controls import backtrack, composer, dialog, modeldialog, plandialog
 from harness.impl.codex.controls.dialog import Driver
+from harness.runtime import HarnessRuntimeConfig, default_harness_runtime_configs
+from domain.ids import HarnessName
 
 
 class _TerminalDriver(Driver):
@@ -108,9 +111,24 @@ def _message(send_text: SendText) -> str:
     return attachments + ("\n" if attachments and send_text.text else "") + send_text.text
 
 
-def _queue(send_text: SendText) -> ControlResult | MessageDeliveryResult:
+def _queue(
+    send_text: SendText,
+    harness_process_id: int | None,
+    harness_runtime_config: HarnessRuntimeConfig,
+) -> ControlResult | MessageDeliveryResult:
+    executable = (
+        process_executable(harness_process_id)
+        if harness_process_id is not None
+        else None
+    )
+    if executable is None:
+        return ControlResult(
+            send_text.request_id,
+            ControlAcknowledgement.REJECTED,
+            "Codex process executable is unavailable",
+        )
     command = [
-        "codex",
+        executable,
         "queue",
         "--thread",
         str(send_text.session_id),
@@ -119,6 +137,12 @@ def _queue(send_text: SendText) -> ControlResult | MessageDeliveryResult:
     ]
     for attachment in send_text.attachments:
         command.extend(("--image", attachment.local_path))
+    # The daemon can control a profile that is not its own default profile.
+    # Give this Codex child the same configured home as the terminal session.
+    environment = os.environ.copy()
+    environment["CODEX_HOME"] = str(
+        harness_runtime_config.configuration_directory
+    )
     try:
         completed = subprocess.run(
             command,
@@ -126,6 +150,7 @@ def _queue(send_text: SendText) -> ControlResult | MessageDeliveryResult:
             text=True,
             timeout=10,
             check=False,
+            env=environment,
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         return ControlResult(
@@ -144,6 +169,9 @@ def _queue(send_text: SendText) -> ControlResult | MessageDeliveryResult:
 
 
 class SendTextHandler(ControlHandler):
+    def __init__(self, harness_runtime_config: HarnessRuntimeConfig) -> None:
+        self.runtime = harness_runtime_config
+
     def __call__(
         self,
         request: ControlRequest,
@@ -155,7 +183,11 @@ class SendTextHandler(ControlHandler):
         if window_id is None:
             return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
         if control_context.lead_active:
-            return _queue(request)
+            return _queue(
+                request,
+                control_context.session.harness_process_id,
+                self.runtime,
+            )
         if request.replace_terminal_draft:
             try:
                 composer.clear(_TerminalDriver(control_context.terminal), window_id)
@@ -266,12 +298,15 @@ class CloseSessionHandler(ControlHandler):
 
 
 class RenameSessionHandler(ControlHandler):
+    def __init__(self, titles: title.CodexThreadTitleRepository) -> None:
+        self.titles = titles
+
     def __call__(self, request: ControlRequest, control_context: ControlContext) -> ControlResult:
         session = control_context.session
         if not isinstance(request, RenameSession):
             raise TypeError("rename_session handler requires RenameSession")
         if control_context.terminal_window_id is None:
-            outcome = title.titles.set_title(session.source_reference, request.name)
+            outcome = self.titles.set_title(session.source_reference, request.name)
             if outcome == "unsupported":
                 return ControlResult(
                     request.request_id, ControlAcknowledgement.REJECTED, "session source is not renameable"
@@ -286,7 +321,7 @@ class RenameSessionHandler(ControlHandler):
             )
         result = _submit(request, control_context, f"/rename {request.name}")
         if result.status == ControlAcknowledgement.ACKNOWLEDGED:
-            durable = title.titles.set_title(session.source_reference, request.name)
+            durable = self.titles.set_title(session.source_reference, request.name)
             if durable == "unavailable":
                 return ControlResult(
                     request.request_id,
@@ -515,12 +550,15 @@ class DecidePlanHandler(ControlHandler):
 
 
 rewind_continuity = RewindContinuity()
+DEFAULT_RUNTIME_CONFIG = default_harness_runtime_configs().for_harness(
+    HarnessName.CODEX
+)
 
 HANDLERS: Mapping[ControlName, ControlHandler] = {
-    ControlName.SEND_TEXT: SendTextHandler(),
+    ControlName.SEND_TEXT: SendTextHandler(DEFAULT_RUNTIME_CONFIG),
     ControlName.INTERRUPT: InterruptHandler(),
     ControlName.CLOSE_SESSION: CloseSessionHandler(),
-    ControlName.RENAME_SESSION: RenameSessionHandler(),
+    ControlName.RENAME_SESSION: RenameSessionHandler(title.titles),
     ControlName.COMPACT: CompactHandler(),
     ControlName.APPLY_REWIND: ApplyRewindHandler(rewind_continuity),
     ControlName.SELECT_MODEL: SelectModelHandler(),
@@ -529,5 +567,18 @@ HANDLERS: Mapping[ControlName, ControlHandler] = {
     ControlName.READ_PLAN_CHOICES: ReadPlanChoicesHandler(),
     ControlName.DECIDE_PLAN: DecidePlanHandler(),
 }
+
+
+def build_controller(
+    title_repository: title.CodexThreadTitleRepository,
+    harness_runtime_config: HarnessRuntimeConfig,
+) -> HarnessController:
+    handlers: Mapping[ControlName, ControlHandler] = {
+        **HANDLERS,
+        ControlName.SEND_TEXT: SendTextHandler(harness_runtime_config),
+        ControlName.RENAME_SESSION: RenameSessionHandler(title_repository),
+    }
+    return HarnessController(handlers)
+
 
 controller = HarnessController(HANDLERS)

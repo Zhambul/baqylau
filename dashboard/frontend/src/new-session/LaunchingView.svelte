@@ -1,27 +1,7 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
-
   import type { AppState } from '../app/app-state.svelte';
 
   let { appState }: { appState: AppState } = $props();
-
-  let now = $state(Date.now());
-  let timer: ReturnType<typeof setInterval> | null = null;
-
-  $effect(() => {
-    if (appState.pendingLaunch !== null) {
-      timer ??= setInterval(() => {
-        now = Date.now();
-      }, 500);
-    } else if (timer !== null) {
-      clearInterval(timer);
-      timer = null;
-    }
-  });
-
-  onDestroy(() => {
-    if (timer !== null) clearInterval(timer);
-  });
 </script>
 
 {#if appState.pendingLaunch !== null}
@@ -42,15 +22,6 @@
     {#if launch.display.prompt.length > 0}
       <div class="pendprompt">{launch.display.prompt}</div>
     {/if}
-    <div class="pendhint">
-      {#if now - launch.startedAt > 8_000}
-        still waiting… ({Math.round((now - launch.startedAt) / 1_000)}s) — check
-        the terminal tab if this goes on
-      {:else}
-        {launch.display.toolLabel} is booting in a new terminal tab — usually a couple
-        of seconds
-      {/if}
-    </div>
   </div>
 {:else if appState.launchFailure !== null}
   <div class="pendcard fail">

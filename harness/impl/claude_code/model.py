@@ -57,21 +57,14 @@ class ClaudeCodeEffort(StrEnum):
     MAX = "max"
 
 
-def config_dir() -> str:
-    """The USER-level Claude config dir: $CLAUDE_CONFIG_DIR when set (Claude's own
-    override — settings/agents live THERE, not in ~/.claude, when it's in effect),
-    else ~/.claude. The one place this default is encoded."""
-    return os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
-
-
 def claude_dirs(
+    config: str,
     start: str | None = None,
     nearest_only: bool = False,
     env_pin: bool = True,
-    config: str | None = None,
 ) -> list[str]:
     """Every `.claude` directory to consult for project-level config (agents, settings),
-    NEAREST-FIRST, always ending with the user config dir (config_dir()). Used instead
+    NEAREST-FIRST, always ending with the configured user directory. Used instead
     of a bare os.getcwd() lookup, because a subagent/teammate frequently runs in a
     SUBDIRECTORY (a task's `.zhambyl/tasks/<t>/db`, or a git worktree under
     `.zhambyl/parallel/<wt>`) where `<cwd>/.claude` lacks the def/field we need.
@@ -97,10 +90,8 @@ def claude_dirs(
     OTHER sessions' cwds) must not have every lookup pinned to whatever project
     happened to spawn the calling process.
 
-    `config` overrides the trailing user config dir for the same reason: an
-    out-of-process reader resolving ANOTHER session's config must end at THAT
-    session's account config dir (account.config_dir_for on its stashed
-    slug), not the calling process's $CLAUDE_CONFIG_DIR."""
+    `config` is the trailing user directory. An out-of-process reader must use
+    the directory from application startup, not the calling process environment."""
     dirs = []
     env = (os.environ.get("CLAUDE_PROJECT_DIR") or "").strip() if env_pin else ""
     if env:
@@ -120,7 +111,7 @@ def claude_dirs(
             if parent == d:
                 break
             d = parent
-    home_claude = config or config_dir()
+    home_claude = config
     if home_claude not in dirs:
         dirs.append(home_claude)
     return dirs

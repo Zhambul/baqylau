@@ -8,8 +8,32 @@ import socket
 import pytest
 
 from api.runtime import ApplicationConfig
+from dashboard import cli as dashboard_cli
+from domain.ids import HarnessName
 from sdk.client import BaqylauClient
 from tests.e2e.testkit.process import ApplicationProcess
+
+
+def test_dashboard_flags_build_one_runtime_config_for_each_harness(tmp_path):
+    executable = tmp_path / "provider"
+    configuration_directory = tmp_path / "profile"
+    arguments = [
+        "--harness-executable",
+        f"{HarnessName.CLAUDE_CODE}={executable}",
+        "--harness-config-dir",
+        f"{HarnessName.CLAUDE_CODE}={configuration_directory}",
+    ]
+
+    _variables, _log, runtime_configs, forwarded = dashboard_cli._options(
+        arguments
+    )
+    runtime = runtime_configs.for_harness(HarnessName.CLAUDE_CODE)
+
+    assert runtime.executable == str(executable)
+    assert runtime.configuration_directory == configuration_directory
+    assert dashboard_cli._forwarded(arguments) == [
+        item for pair in forwarded for item in pair
+    ]
 
 
 def test_the_application_process_reports_an_automatic_endpoint_and_stops(tmp_path):

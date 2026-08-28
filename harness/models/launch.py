@@ -37,17 +37,3 @@ class LaunchResult:
     status: LaunchStatus
     window_id: WindowId | None = None
     reason: str | None = None
-
-
-@dataclass(frozen=True)
-class HarnessLaunchPlan:
-    command: str
-    arguments: tuple[str, ...]
-    title: str
-    # Environment the launched CLI (and so its hook processes) must carry —
-    # launch-time facts travel with the process to be observed as raw events.
-    environment: tuple[tuple[str, str], ...] = ()
-
-
-class LaunchRejected(ValueError):
-    pass

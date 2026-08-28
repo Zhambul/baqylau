@@ -966,8 +966,7 @@ body.in-session #accounts { display: none; }
   border-radius: 3px; color: var(--exec);
 }
 .cinput {
-  flex: 1; resize: none; overflow-y: auto;
-  max-height: 40vh; max-height: 40dvh;  /* == GROW_CAP; dvh: keyboard-aware */
+  flex: 1; resize: none; overflow-y: hidden;
   background: color-mix(in srgb, var(--bg) 88%, black);
   color: var(--text); border: none; box-shadow: inset 0 0 0 1px var(--hair);
   border-radius: var(--r); padding: 8px 10px;
@@ -1148,9 +1147,8 @@ body.modal-open { overflow: hidden; }
 }
 .nsinput:focus { outline: none; box-shadow: inset 0 0 0 1px var(--hair2); }
 .nsinput::placeholder { color: var(--dim2); }
-.nsprompt {                       /* auto-grows with content (autoGrow) */
-  resize: none; overflow-y: auto; min-height: 56px;
-  max-height: 40vh; max-height: 40dvh;  /* == GROW_CAP; dvh: keyboard-aware */
+.nsprompt {
+  resize: none; overflow-y: hidden; min-height: 56px;
 }
 .nssplit { display: flex; gap: 10px; }
 .nssplit .nsfield { flex: 1; min-width: 0; }
@@ -1835,6 +1833,7 @@ body.modal-open { overflow: hidden; }
 .md > :first-child { margin-top: 0; }
 .md > :last-child { margin-bottom: 0; }
 .md p { margin: 6px 0; }
+.md p.plain-text { white-space: pre-wrap; }
 .md h1, .md h2, .md h3, .md h4 {
   margin: 11px 0 5px; font-family: var(--sans); font-weight: 650;
   line-height: 1.3; color: var(--text);

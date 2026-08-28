@@ -55,10 +55,12 @@ Feature: a real terminal owns one composable session surface
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I start journey session "primary" from the terminal as turn "before pane restart" with prompt
       """
-      Remember the marker pane-restart-284. Reply only with BEFORE_PANE_RESTART.
+      This is a software dashboard continuity test. Remember the marker
+      pane-restart-284 for the next test step. Do not use tools. Reply only
+      with BEFORE_PANE_RESTART.
       """
     Then turn "before pane restart" completes
-    And turn "before pane restart" has final answer 'BEFORE_PANE_RESTART'
+    And turn "before pane restart" has one final answer containing 'BEFORE_PANE_RESTART'
     And journey session "primary" has its exact terminal pane set
     When I restart Baqylau as application restart "pane restart"
     Then application restart "pane restart" replaces the server process
@@ -70,10 +72,12 @@ Feature: a real terminal owns one composable session surface
     Then journey session "primary" has its exact terminal pane set
     When I continue journey session "primary" from the dashboard as turn "after pane restart" with prompt
       """
-      If you remember pane-restart-284, reply only with AFTER_PANE_RESTART.
+      Continue the software dashboard continuity test. If you remember
+      pane-restart-284, do not use tools and reply only with
+      AFTER_PANE_RESTART.
       """
     Then turn "after pane restart" completes
-    And turn "after pane restart" has final answer 'AFTER_PANE_RESTART'
+    And turn "after pane restart" has one final answer containing 'AFTER_PANE_RESTART'
 
     Examples:
       | harness     | model        |

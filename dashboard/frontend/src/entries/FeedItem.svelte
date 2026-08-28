@@ -262,6 +262,9 @@
               >{/if}</span
           >
         {:else}
+          <span class="anmark" aria-label={presentation.state ?? 'running'}
+            >⏺</span
+          >
           <span
             class={['chip', 'operation-label', presentation.header.chipKind]}
             >{presentation.header.label}</span

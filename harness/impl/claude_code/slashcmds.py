@@ -16,7 +16,7 @@
 import os
 from dataclasses import dataclass
 
-from harness.impl.claude_code.model import claude_dirs, config_dir
+from harness.impl.claude_code.model import claude_dirs
 
 # Curated snapshot of the CLI's built-in slash commands. The composer's menu
 # is a convenience layer over the TUI's own palette, so an entry the CLI
@@ -98,11 +98,14 @@ def describe(path: str) -> str:
     return ""
 
 
-def _dir_label(cdir: str) -> str:
-    return "user" if cdir == config_dir() else "project"
+def _dir_label(cdir: str, configuration_directory: str) -> str:
+    return "user" if cdir == configuration_directory else "project"
 
 
-def slash_commands(cwd: str | None) -> list[SlashCommand]:
+def slash_commands(
+    cwd: str | None,
+    configuration_directory: str,
+) -> list[SlashCommand]:
     """[{name, desc, src}, …] for a session rooted at `cwd`, sorted by name and
     name-deduped: built-ins first (the TUI resolves those names to itself no
     matter what a same-named custom file claims), then discovered entries in
@@ -120,9 +123,13 @@ def slash_commands(cwd: str | None) -> list[SlashCommand]:
 
     for name, desc in BUILTINS:
         add(name, desc, "built-in")
-    dirs = claude_dirs(start=cwd, env_pin=False) if cwd else [config_dir()]
+    dirs = (
+        claude_dirs(start=cwd, env_pin=False, config=configuration_directory)
+        if cwd
+        else [configuration_directory]
+    )
     for cdir in dirs:
-        lbl = _dir_label(cdir)
+        lbl = _dir_label(cdir, configuration_directory)
         croot = os.path.join(cdir, "commands")
         for root, _dirs, files in os.walk(croot):
             for f in sorted(files):

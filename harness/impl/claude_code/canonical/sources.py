@@ -287,12 +287,15 @@ class ClaudeTaskRawEventSource(HarnessRawEventSource):
     membership fact names the survivors and the projection prunes the rest.
     """
 
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, configuration_directory: str) -> None:
         self.session = session
-        config_directory = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
         native_session_id = claude_code_session_id_from_domain(session.session_id)
         session_prefix = str(native_session_id).split("-", 1)[0]
-        self.task_directory = os.path.join(config_directory, "tasks", f"session-{session_prefix}")
+        self.task_directory = os.path.join(
+            configuration_directory,
+            "tasks",
+            f"session-{session_prefix}",
+        )
         self.source_identity = f"claude_code:tasks:{session.session_id}"
 
     def read(self, after_position: str | None) -> tuple[RawEvent, ...]:
@@ -366,7 +369,8 @@ class ClaudeSessionSources:
 
 
 class ClaudeRawEventSources(HarnessRawEventSources):
-    def __init__(self) -> None:
+    def __init__(self, configuration_directory: str) -> None:
+        self.configuration_directory = configuration_directory
         self._sessions: list[ClaudeSessionSources] = []
 
     def release_session(self, session_id: SessionId) -> None:
@@ -378,7 +382,7 @@ class ClaudeRawEventSources(HarnessRawEventSources):
     def for_session(self, session: Session) -> tuple[HarnessRawEventSource, ...]:
         if not transcript.owns(session.source_reference):
             return ()
-        config_directory = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+        config_directory = self.configuration_directory
         transcript_base = (
             session.source_reference[:-len(".jsonl")]
             if session.source_reference.endswith(".jsonl")
@@ -404,7 +408,7 @@ class ClaudeRawEventSources(HarnessRawEventSources):
         sources: list[HarnessRawEventSource] = [
             ClaudeTranscriptRawEventSource(session.source_context),
             ClaudeTeammateIdleRawEventSource(session.source_context),
-            ClaudeTaskRawEventSource(session),
+            ClaudeTaskRawEventSource(session, config_directory),
         ]
         child_pattern = os.path.join(child_directory, "agent-*.jsonl")
         for child_path in sorted(glob.glob(child_pattern)):

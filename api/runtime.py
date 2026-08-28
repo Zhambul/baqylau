@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from audit.models import PortAudit
+from harness.runtime import HarnessRuntimeConfigs, default_harness_runtime_configs
 
 
 @dataclass(frozen=True)
@@ -21,14 +22,22 @@ class ApplicationConfig:
     terminal: str | None = None
     notify_telegram: bool = True
     notify_webpush: bool = True
+    harness_runtime_configs: HarnessRuntimeConfigs = field(
+        default_factory=default_harness_runtime_configs,
+        repr=False,
+        compare=False,
+    )
     environment_removals: tuple[str, ...] = ()
     base_environment: Mapping[str, str] = field(
         default_factory=lambda: dict(os.environ), repr=False, compare=False
     )
 
     @classmethod
-    def from_environment(cls) -> ApplicationConfig:
-        environment = os.environ
+    def from_environment(
+        cls,
+        harness_runtime_configs: HarnessRuntimeConfigs | None = None,
+    ) -> ApplicationConfig:
+        environment = dict(os.environ)
         configured_directory = (
             environment.get("BAQYLAU_DATA_DIR")
             or environment.get("BAQYLAU_DATA_DIRECTORY")
@@ -44,6 +53,9 @@ class ApplicationConfig:
             terminal=environment.get("BAQYLAU_TERMINAL"),
             notify_telegram=environment.get("BAQYLAU_DASHBOARD_NOTIFY_TELEGRAM", "1") != "0",
             notify_webpush=environment.get("BAQYLAU_DASHBOARD_NOTIFY_WEBPUSH", "1") != "0",
+            harness_runtime_configs=(
+                harness_runtime_configs or default_harness_runtime_configs()
+            ),
             base_environment=environment,
         )
 
@@ -93,8 +105,9 @@ class DashboardApplication:
         self,
         endpoint_ready: Callable[[ApplicationEndpoint], None] | None = None,
     ) -> ApplicationExitReport:
+        process_environment = self.application_config.process_environment()
         os.environ.clear()
-        os.environ.update(self.application_config.process_environment())
+        os.environ.update(process_environment)
         configured_endpoint = ApplicationEndpoint(
             host=self.application_config.host,
             port=self.application_config.port,
@@ -105,9 +118,14 @@ class DashboardApplication:
             )
         except OSError:
             from app import providers  # noqa: PLC0415
-            from app.injection import registry, resolve  # noqa: PLC0415
+            from app.injection import registry, resolve, seed  # noqa: PLC0415
 
             instances = registry()
+            seed(
+                instances,
+                providers.harness_runtime_configs,
+                self.application_config.harness_runtime_configs,
+            )
             audit = resolve(instances, providers.recorder)
             audit.error(
                 "",
@@ -123,9 +141,15 @@ class DashboardApplication:
         # built. For an automatic bind, the actual port is known only now.
         os.environ["BAQYLAU_DASHBOARD_PORT"] = str(endpoint.port)
         from api import dependencies, server  # noqa: PLC0415
-        from app.injection import registry, resolve  # noqa: PLC0415
+        from app import providers  # noqa: PLC0415
+        from app.injection import registry, resolve, seed  # noqa: PLC0415
 
         instances = registry()
+        seed(
+            instances,
+            providers.harness_runtime_configs,
+            self.application_config.harness_runtime_configs,
+        )
         policy = resolve(instances, dependencies.policy)
         bound_socket.listen(policy.request_queue_size)
         if endpoint_ready is not None:

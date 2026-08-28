@@ -82,8 +82,6 @@ from harness.models.telemetry import (
 from harness.models.info import HarnessInfo
 from harness.models.interrupts import InterruptRegistry
 from harness.models.launch import (
-    HarnessLaunchPlan,
-    LaunchRejected,
     LaunchRequest,
     LaunchResult,
     LaunchStatus,
@@ -91,7 +89,6 @@ from harness.models.launch import (
 from harness.models.probe import TerminalInputState, TerminalSessionState
 from harness.models.session import Session
 from harness.models.usage import (
-    AccountUsageSnapshot,
     UsageBlock,
     UsageRow,
     UsageWindow,
@@ -100,7 +97,6 @@ from harness.models.usage import (
 )
 
 __all__ = [
-    "AccountUsageSnapshot",
     "AnswerDecision",
     "AnswerQuestion",
     "ApplyRewind",
@@ -133,14 +129,12 @@ __all__ = [
     "InterruptRegistry",
     "HarnessTelemetryRequest",
     "HarnessTelemetryResponse",
-    "HarnessLaunchPlan",
     "INTERRUPT_SOURCE_TYPE",
     "Background",
     "Interrupt",
     "LIVENESS_SOURCE_TYPE",
     "TELEMETRY_KIND_HEADER",
     "TELEMETRY_MAX",
-    "LaunchRejected",
     "LaunchRequest",
     "LaunchResult",
     "LaunchStatus",

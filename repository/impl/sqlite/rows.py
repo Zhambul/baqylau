@@ -27,7 +27,6 @@ from repository.model.preferences import (
     SessionViewModeRow,
 )
 from repository.model.uploads import UploadRow
-from repository.model.usage import AccountUsageSnapshotRow, AccountUsageWindowRow
 from repository.model.workspace import (
     ComposerQueueItemRow,
     DialogAnswerRow,
@@ -194,25 +193,6 @@ def push_signing_key(row: sqlite3.Row) -> PushSigningKeyRow:
         id=row["id"],
         private_key_pem=row["private_key_pem"],
         public_key=row["public_key"],
-    )
-
-
-def account_usage_snapshot(row: sqlite3.Row) -> AccountUsageSnapshotRow:
-    return AccountUsageSnapshotRow(
-        harness=row["harness"],
-        account_id=row["account_id"],
-        display_name=row["display_name"],
-        captured_at=row["captured_at"],
-    )
-
-
-def account_usage_window(row: sqlite3.Row) -> AccountUsageWindowRow:
-    return AccountUsageWindowRow(
-        harness=row["harness"],
-        account_id=row["account_id"],
-        window_key=row["window_key"],
-        used_percent=row["used_percent"],
-        resets_at=row["resets_at"],
     )
 
 

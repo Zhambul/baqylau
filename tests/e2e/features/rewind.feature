@@ -98,7 +98,7 @@ Feature: rewind restores a named prompt for revision
     And session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "kept conversation" with prompt
       """
-      Remember the marker conversation-kept-194. Do not modify any file.
+      Remember the marker conversation-kept-194. In this turn only, do not modify any file.
       Reply only with KEPT_CONVERSATION_READY.
       """
     Then turn "kept conversation" completes

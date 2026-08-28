@@ -32,6 +32,7 @@ from domain.ids import ActorId, CanonicalEventId, HarnessName, MessageId, RawEve
 from domain.records import RecordedTranslationDecision
 from domain.values import MessagePhase, MessageRole, TextContent
 from repository.impl.sqlite.raw_event_audits import SqliteRawEventAuditRepository
+from fake_terminal import FakeTerminal, window
 
 SESSION_ID = SessionId("session-one")
 ACTOR_ID = ActorId("actor-one")
@@ -166,6 +167,30 @@ def _get(server, path: str):
     body = response.read()
     connection.close()
     return response.status, response.getheader("Content-Type"), body
+
+
+def test_terminal_diagnostics_show_the_visible_screen() -> None:
+    terminal = FakeTerminal(
+        windows=(window("window-one"),),
+        screen_text="Choose the text style that looks best",
+    )
+    server, thread = _server(
+        _application(),
+        {providers.terminal_plugin: terminal.plugin()},
+    )
+    try:
+        status, _content_type, body = _get(server, "/api/diagnostics/terminal")
+        document = json.loads(body)
+
+        assert status == 200
+        assert document["windows"][0]["window_id"] == "window-one"
+        assert document["windows"][0]["screen"] == (
+            "Choose the text style that looks best"
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
 
 
 def _get_response(server, path: str, read_body: bool = True):

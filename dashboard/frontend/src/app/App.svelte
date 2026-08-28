@@ -49,6 +49,7 @@
   let fullscreenIsAvailable = $state(fullscreenAvailable());
   let fullscreenIsActive = $state(fullscreenActive());
   let newSessionOpen = $state(false);
+  let pendingNewSessionDirectory = $state<string | null>(null);
   let newSessionSeed = $state<NewSessionSeed | null>(null);
   let newSessionDirectory = $state('');
   let handledNewSessionRequest = $state(0);
@@ -83,6 +84,13 @@
   }
 
   function openNewSession(workingDirectory = ''): void {
+    if (
+      appState.applicationState !== 'ready' ||
+      appState.harnessState !== 'ready'
+    ) {
+      pendingNewSessionDirectory = workingDirectory;
+      return;
+    }
     newSessionDirectory = workingDirectory;
     newSessionSeed = null;
     newSessionOpen = true;
@@ -136,6 +144,18 @@
       wakeLock.destroy();
       appState.destroy();
     };
+  });
+
+  $effect(() => {
+    if (
+      pendingNewSessionDirectory !== null &&
+      appState.applicationState === 'ready' &&
+      appState.harnessState === 'ready'
+    ) {
+      const workingDirectory = pendingNewSessionDirectory;
+      pendingNewSessionDirectory = null;
+      openNewSession(workingDirectory);
+    }
   });
 
   $effect(() => {
@@ -342,6 +362,8 @@
       id="newbtn"
       class="ghost"
       type="button"
+      disabled={appState.applicationState !== 'ready' ||
+        appState.harnessState !== 'ready'}
       onclick={() => {
         openNewSession();
       }}>+ session</button

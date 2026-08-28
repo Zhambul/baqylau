@@ -13,7 +13,6 @@ from domain.ids import HarnessName
 from harness.models import UsageRow, UsageWindow, UsageWindowScope
 from inference import DefaultModelFactory, ModelPromptRequest, ModelUnavailableError
 from inference.default import (
-    CODEX_EXECUTABLE_VARIABLE,
     INTERNAL_MODEL_VARIABLE,
     _ExecutableUnavailable,
     _ModelUnavailableAudit,
@@ -159,8 +158,7 @@ def test_configured_executable_does_not_depend_on_the_daemon_path() -> None:
     launch = terminal.opened_tabs[0]
     assert launch.command[0] == "/private/model-bin/codex"
     assert launch.environment[0] == (INTERNAL_MODEL_VARIABLE, "1")
-    assert launch.environment[1][0] == "PATH"
-    assert launch.environment[1][1].startswith("/private/model-bin:")
+    assert launch.environment[1][0] == "CODEX_HOME"
 
 
 def test_capacity_uses_the_most_exhausted_known_window() -> None:
@@ -327,5 +325,7 @@ def test_missing_executables_report_the_configuration_names() -> None:
     assert context.providers[0] == _ExecutableUnavailable(
         provider=HarnessName.CODEX,
         status="executable unavailable",
-        configuration=CODEX_EXECUTABLE_VARIABLE,
+        configuration=model_factory.runtime_configs.for_harness(
+            HarnessName.CODEX
+        ).executable,
     )

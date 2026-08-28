@@ -82,6 +82,7 @@ export class AppState {
     OptimisticActionTracker
   >();
   private harnessRequest: Promise<void> | null = null;
+  private applicationStreamSequence = 0;
   private launchTimer: ReturnType<typeof setTimeout> | null = null;
   private launchGeneration = 0;
   private toastSequence = 0;
@@ -185,12 +186,15 @@ export class AppState {
   }
 
   async loadApplication(signal?: AbortSignal): Promise<void> {
+    const streamSequence = this.applicationStreamSequence;
     this.applicationState = 'loading';
     try {
       const application = await readGlobalApplication(signal);
+      if (streamSequence !== this.applicationStreamSequence) return;
       this.applyApplication(application);
       this.applicationState = 'ready';
     } catch {
+      if (streamSequence !== this.applicationStreamSequence) return;
       this.applicationState = 'failed';
     }
   }
@@ -318,6 +322,7 @@ export class AppState {
         this.applyGlobalDelta(frame);
       },
       application: (application) => {
+        this.applicationStreamSequence += 1;
         this.applyApplication(application);
         this.applicationState = 'ready';
       },

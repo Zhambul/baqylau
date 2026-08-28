@@ -21,7 +21,6 @@ from pydantic import TypeAdapter, ValidationError
 
 from harness.models import UsageRow
 from harness.registry import HarnessRegistry
-from repository.contract.usage import AccountUsageRepository
 
 USAGE_REFRESH_SECONDS = 5.0
 USAGE_INITIAL_DELAY_VARIABLE = "BAQYLAU_USAGE_INITIAL_DELAY_SECONDS"
@@ -104,9 +103,8 @@ class SharedUsageCache:
 
 
 class HarnessUsageService(UsageSource):
-    def __init__(self, harness_registry: HarnessRegistry, account_usage_repository: AccountUsageRepository) -> None:
+    def __init__(self, harness_registry: HarnessRegistry) -> None:
         self.registry = harness_registry
-        self.usage = account_usage_repository
         shared_path = os.environ.get(USAGE_SHARED_CACHE_VARIABLE)
         self.shared_cache = (
             SharedUsageCache(
@@ -122,25 +120,23 @@ class HarnessUsageService(UsageSource):
 
     def read(self) -> tuple[UsageRow, ...]:
         if self.shared_cache is not None:
-            return self.shared_cache.read(_HarnessUsageReader(self.registry, self.usage))
-        return _HarnessUsageReader(self.registry, self.usage).read()
+            return self.shared_cache.read(_HarnessUsageReader(self.registry))
+        return _HarnessUsageReader(self.registry).read()
 
 
 class _HarnessUsageReader(UsageSource):
     def __init__(
         self,
         harness_registry: HarnessRegistry,
-        account_usage_repository: AccountUsageRepository,
     ) -> None:
         self.registry = harness_registry
-        self.usage = account_usage_repository
 
     def read(self) -> tuple[UsageRow, ...]:
         rows: list[UsageRow] = []
         for plugin in self.registry.plugins():
             if plugin.usage is None:
                 continue
-            plugin_rows = plugin.usage.read(self.usage)
+            plugin_rows = plugin.usage.read()
             if any(row.harness != plugin.info.name for row in plugin_rows):
                 raise ValueError("usage row harness does not match its plugin")
             rows.extend(plugin_rows)

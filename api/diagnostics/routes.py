@@ -7,8 +7,12 @@ from api.diagnostics.models import (
     DiagnosticsCheckpointResponse,
     DiagnosticsReportResponse,
     InterpretationProblemResponse,
+    TerminalDiagnosticsResponse,
+    TerminalProcessDiagnosticResponse,
+    TerminalWindowDiagnosticResponse,
 )
-from app.providers import Diagnostics
+from app.providers import Diagnostics, InstalledTerminal
+from terminal.models import ScreenReadRequest
 
 router = APIRouter(prefix="/api/diagnostics")
 
@@ -64,3 +68,30 @@ def report(
             for problem in found.audit_problems
         ),
     )
+
+
+@router.get("/terminal")
+def terminal_diagnostics(
+    terminal_plugin: InstalledTerminal,
+) -> TerminalDiagnosticsResponse:
+    """Return bounded visible terminal state for failure diagnosis."""
+    windows = []
+    for window in terminal_plugin.metadata.windows():
+        screen = terminal_plugin.viewport.read_screen(
+            ScreenReadRequest(window.window_id)
+        )
+        windows.append(
+            TerminalWindowDiagnosticResponse(
+                window_id=str(window.window_id),
+                processes=tuple(
+                    TerminalProcessDiagnosticResponse(
+                        process_id=process.process_id,
+                        command=process.command,
+                    )
+                    for process in window.processes
+                ),
+                screen=screen.text if screen.succeeded else None,
+                screen_error=None if screen.succeeded else screen.reason,
+            )
+        )
+    return TerminalDiagnosticsResponse(windows=tuple(windows))

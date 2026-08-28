@@ -16,13 +16,13 @@
   import DictationButton from '../../dictation/DictationButton.svelte';
   import type { Entry } from '../../entries/model';
   import type { LaunchDisplay, LaunchInput } from '../../new-session/model';
+  import { autoGrow } from '../../shared/browser/auto-grow';
   import { isIPad } from '../../shared/browser/device';
-  import { reportClientFailure } from '../../shared/browser/optimistic-action';
   import { newRequestId } from '../../shared/browser/identity';
+  import { reportClientFailure } from '../../shared/browser/optimistic-action';
   import type { SessionViewState } from '../session-view-state.svelte';
 
   const DRAFT_DELAY_MS = 350;
-  const GROW_FRACTION = 0.4;
   let { view }: { view: SessionViewState } = $props();
 
   const appState = getAppState();
@@ -88,7 +88,6 @@
     const saved = application.composer.draft;
     if (!edited && saved !== null) draft = saved.text;
     seeded = true;
-    requestAnimationFrame(resize);
   });
 
   $effect(() => {
@@ -98,7 +97,6 @@
     draft = override.text;
     view.consumeComposerOverride(override.sequence);
     requestAnimationFrame(() => {
-      resize();
       textarea?.focus();
     });
   });
@@ -109,12 +107,6 @@
     flushDraft();
     attachmentTray.clear();
   });
-
-  function resize(): void {
-    if (!mounted || textarea == null) return;
-    textarea.style.height = 'auto';
-    textarea.style.height = `${String(Math.min(textarea.scrollHeight, Math.round(innerHeight * GROW_FRACTION)))}px`;
-  }
 
   function dispatchDraft(text: string): void {
     void saveComposerDraft(
@@ -150,7 +142,6 @@
     edited = true;
     failure = null;
     historyIndex = null;
-    resize();
     scheduleDraft();
   }
 
@@ -213,7 +204,6 @@
       }
       draft = '';
       attachmentTray.clear();
-      resize();
     } catch (error) {
       view.settlePendingPrompt(requestId, 'dropped', 'send-failed');
       reportClientFailure(view.sessionId, 'send', error, text.length);
@@ -401,7 +391,6 @@
       auditIndex = next;
     }
     requestAnimationFrame(() => {
-      resize();
       inputElement.setSelectionRange(draft.length, draft.length);
     });
     view.recordBrowserEvent('composer.recall', {
@@ -453,6 +442,7 @@
   <textarea
     bind:this={textarea}
     bind:value={draft}
+    use:autoGrow={draft}
     class:hasghost={suggestion.length > 0 && draft.length === 0}
     class="cinput"
     rows="1"

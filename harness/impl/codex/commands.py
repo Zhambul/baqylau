@@ -78,15 +78,10 @@ BUILTINS = (
 )
 
 
-def _prompts_dir() -> str:
-    """codex's user-prompts directory — $CODEX_HOME/prompts, else ~/.codex/
-    prompts. The codex analog of a user-level .claude/commands dir."""
-    home = os.environ.get("CODEX_HOME") or os.path.join(
-        os.path.expanduser("~"), ".codex")
-    return os.path.join(home, "prompts")
-
-
-def slash_commands(working_directory: str) -> list[SlashCommand]:
+def slash_commands(
+    working_directory: str,
+    configuration_directory: str,
+) -> list[SlashCommand]:
     """[{name, desc, src}, …] for a codex session, sorted by name and
     name-deduped: built-ins first (the TUI resolves those names to itself no
     matter what a same-named custom prompt claims), then codex's user prompts
@@ -106,7 +101,7 @@ def slash_commands(working_directory: str) -> list[SlashCommand]:
 
     for command_name, description in BUILTINS:
         add(command_name, description, "built-in")
-    prompts_directory = _prompts_dir()
+    prompts_directory = os.path.join(configuration_directory, "prompts")
     try:
         files = sorted(os.listdir(prompts_directory))
     except OSError:

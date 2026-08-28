@@ -63,6 +63,16 @@ def registry() -> Instances:
     return instances
 
 
+def seed(
+    instances: Instances,
+    provider: Callable[..., T],
+    value: T,
+) -> None:
+    """Set one startup value before the graph resolves its consumers."""
+    build = getattr(provider, "build", provider)
+    instances[build] = value
+
+
 def singleton(build: Callable[P, T]) -> Callable[Concatenate[Request, P], T]:
     """One instance per application, built on first use, memoised on the app.
 

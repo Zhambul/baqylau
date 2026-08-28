@@ -1292,6 +1292,7 @@ class CommandCompletedRecord:
     output: str
     exit: int | None
     item_id: str
+    turn: CodexTurnId | None = None
 
 
 @dataclass(frozen=True, kw_only=True)

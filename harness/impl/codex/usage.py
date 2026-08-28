@@ -1,10 +1,11 @@
-"""Read Codex account rate limits from its app server."""
+"""Read Codex plan limits through the Codex app server."""
 
 from __future__ import annotations
 
 import os
 import select
 import subprocess
+import threading
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -12,42 +13,34 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from domain.ids import HarnessName
+from harness.runtime import HarnessRuntimeConfig, default_harness_runtime_configs
+
 REQUEST_TIMEOUT_SECONDS = 6.0
 CACHE_SECONDS = 120.0
-FAILED_CACHE_SECONDS = 2.0
-BINARY_DIRECTORIES = (
-    "~/.hermes/node/bin",
-    "/opt/homebrew/bin",
-    "/usr/local/bin",
-    "~/.local/bin",
-)
-
-# The app-server's JSON-RPC response to `account/rateLimits/read` — a
-# DIFFERENT foreign source from the rollout file (canonical/records.py owns
-# that one): a live subprocess reply, not a stored document, so a shape
-# mismatch here degrades to "no usage row" (read_rate_limits returns None)
-# rather than a stored `translation_failed` — there is nothing recorded to
-# fail. `extra="forbid"` still applies: an unrecognised field is exactly as
-# much a sign the app-server's contract moved as a rollout field would be.
-_RATE_LIMITS_FOREIGN = ConfigDict(extra="forbid", frozen=True)
+RETRY_SECONDS = 2.0
+STALE_SECONDS = 300.0
+PERMANENT_FAILURE_SECONDS = 60.0
+_OWNED = ConfigDict(extra="forbid", frozen=True)
+_FOREIGN = ConfigDict(extra="ignore", frozen=True)
 
 
 class RateLimitWindowResult(BaseModel):
-    model_config = _RATE_LIMITS_FOREIGN
+    model_config = _FOREIGN
     usedPercent: float | int | None = None
     windowDurationMins: float | int | None = None
     resetsAt: float | int | None = None
 
 
 class RateLimitCredits(BaseModel):
-    model_config = _RATE_LIMITS_FOREIGN
+    model_config = _FOREIGN
     hasCredits: bool
     unlimited: bool
     balance: str
 
 
 class RateLimitsResult(BaseModel):
-    model_config = _RATE_LIMITS_FOREIGN
+    model_config = _FOREIGN
     limitId: str | None = None
     limitName: str | None = None
     primary: RateLimitWindowResult | None = None
@@ -59,49 +52,28 @@ class RateLimitsResult(BaseModel):
     rateLimitReachedType: str | None = None
 
 
-class RateLimitResetCredit(BaseModel):
-    model_config = _RATE_LIMITS_FOREIGN
-    id: str
-    resetType: str
-    status: str
-    grantedAt: float | int
-    expiresAt: float | int
-    title: str
-    description: str
-
-
-class RateLimitResetCredits(BaseModel):
-    model_config = _RATE_LIMITS_FOREIGN
-    availableCount: int
-    credits: tuple[RateLimitResetCredit, ...]
-
-
 class AccountRateLimitsResponse(BaseModel):
-    model_config = _RATE_LIMITS_FOREIGN
+    model_config = _FOREIGN
     rateLimits: RateLimitsResult | None = None
-    # Limit ids are runtime/vendor-defined (the base `codex` bucket plus
-    # model-specific buckets), so this is genuinely a dynamic keyed mapping.
-    rateLimitsByLimitId: Mapping[str, RateLimitsResult]
-    rateLimitResetCredits: RateLimitResetCredits | None = None
 
 
 class ClientInfo(BaseModel):
-    model_config = _RATE_LIMITS_FOREIGN
+    model_config = _OWNED
     name: str
     version: str
 
 
 class InitializeParams(BaseModel):
-    model_config = _RATE_LIMITS_FOREIGN
+    model_config = _OWNED
     clientInfo: ClientInfo
 
 
 class EmptyParams(BaseModel):
-    model_config = _RATE_LIMITS_FOREIGN
+    model_config = _OWNED
 
 
 class InitializeRequest(BaseModel):
-    model_config = _RATE_LIMITS_FOREIGN
+    model_config = _OWNED
     jsonrpc: Literal["2.0"] = "2.0"
     id: Literal[1] = 1
     method: Literal["initialize"] = "initialize"
@@ -109,7 +81,7 @@ class InitializeRequest(BaseModel):
 
 
 class RateLimitsRequest(BaseModel):
-    model_config = _RATE_LIMITS_FOREIGN
+    model_config = _OWNED
     jsonrpc: Literal["2.0"] = "2.0"
     id: Literal[2] = 2
     method: Literal["account/rateLimits/read"] = "account/rateLimits/read"
@@ -117,15 +89,28 @@ class RateLimitsRequest(BaseModel):
 
 
 class RpcResponseHeader(BaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
+    model_config = _FOREIGN
     id: int | None = None
 
 
 class RateLimitsRpcResponse(BaseModel):
-    model_config = _RATE_LIMITS_FOREIGN
+    model_config = _FOREIGN
     jsonrpc: Literal["2.0"] = "2.0"
     id: Literal[2]
     result: AccountRateLimitsResponse
+
+
+class RpcErrorBody(BaseModel):
+    model_config = _FOREIGN
+    code: int
+    message: str
+
+
+class RateLimitsRpcError(BaseModel):
+    model_config = _FOREIGN
+    jsonrpc: Literal["2.0"] = "2.0"
+    id: Literal[2]
+    error: RpcErrorBody
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -141,40 +126,137 @@ class NormalizedRateLimits:
     windows: tuple[NormalizedRateLimitWindow, ...]
 
 
-_cached_rate_limits: tuple[float, NormalizedRateLimits | None] | None = None
+@dataclass(frozen=True)
+class ProbeFailure:
+    message: str
+    recoverable: bool
 
 
-def subprocess_environment() -> Mapping[str, str]:
+@dataclass(frozen=True)
+class ProbeResult:
+    response: AccountRateLimitsResponse | None
+    failure: ProbeFailure | None
+
+
+@dataclass(frozen=True)
+class RateLimitsCollection:
+    usage: NormalizedRateLimits | None
+    error: str | None
+
+
+@dataclass(frozen=True)
+class CacheEntry:
+    runtime_key: str
+    expires_at: float
+    collection: RateLimitsCollection
+    last_good: NormalizedRateLimits | None
+    last_good_at: float | None
+
+
+_cached_rate_limits: CacheEntry | None = None
+_cache_lock = threading.Lock()
+
+
+def _default_runtime_config() -> HarnessRuntimeConfig:
+    return default_harness_runtime_configs().for_harness(HarnessName.CODEX)
+
+
+def subprocess_environment(
+    harness_runtime_config: HarnessRuntimeConfig,
+) -> Mapping[str, str]:
     environment = os.environ.copy()
-    directories = []
-    configured_directory = environment.get("CODEX_BIN_DIR")
-    if configured_directory and os.path.isdir(configured_directory):
-        directories.append(configured_directory)
-    for candidate in BINARY_DIRECTORIES:
-        directory = os.path.expanduser(candidate)
-        if os.path.isdir(directory) and directory not in directories:
-            directories.append(directory)
-    if directories:
-        directories.append(environment.get("PATH", ""))
-        environment["PATH"] = os.pathsep.join(directories)
+    environment["CODEX_HOME"] = str(
+        harness_runtime_config.configuration_directory
+    )
     return environment
 
 
-def request_rate_limits() -> AccountRateLimitsResponse | None:
+def _permanent_rpc_error(message: str) -> bool:
+    normalized = message.lower()
+    return any(
+        marker in normalized
+        for marker in (
+            "auth",
+            "forbidden",
+            "login",
+            "revoked",
+            "token expired",
+            "token reused",
+            "unauthorized",
+        )
+    )
+
+
+def _response(process: subprocess.Popen[str], deadline: float) -> ProbeResult:
+    if process.stdout is None:
+        return ProbeResult(None, ProbeFailure("Codex app server has no output", True))
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return ProbeResult(None, ProbeFailure("Codex usage request timed out", True))
+        readable, _, _ = select.select((process.stdout,), (), (), remaining)
+        if not readable:
+            return ProbeResult(None, ProbeFailure("Codex usage request timed out", True))
+        line = process.stdout.readline()
+        if not line:
+            return ProbeResult(None, ProbeFailure("Codex app server ended early", True))
+        try:
+            header = RpcResponseHeader.model_validate_json(line)
+        except ValidationError:
+            continue
+        if header.id != 2:
+            continue
+        try:
+            response = RateLimitsRpcResponse.model_validate_json(line)
+        except ValidationError as success_error:
+            try:
+                error = RateLimitsRpcError.model_validate_json(line).error
+            except ValidationError:
+                location = ".".join(
+                    str(part) for part in success_error.errors()[0]["loc"]
+                )
+                return ProbeResult(
+                    None,
+                    ProbeFailure(
+                        f"Codex usage response is incompatible at {location}",
+                        False,
+                    ),
+                )
+            return ProbeResult(
+                None,
+                ProbeFailure(error.message, not _permanent_rpc_error(error.message)),
+            )
+        return ProbeResult(response.result, None)
+
+
+def _stop(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=1.0)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=1.0)
+
+
+def request_rate_limits(harness_runtime_config: HarnessRuntimeConfig) -> ProbeResult:
     try:
         process = subprocess.Popen(
-            ["codex", "app-server"],
+            [harness_runtime_config.executable, "app-server"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
-            env=subprocess_environment(),
+            env=subprocess_environment(harness_runtime_config),
         )
+    except FileNotFoundError:
+        return ProbeResult(None, ProbeFailure("Codex is not installed", False))
     except OSError:
-        return None
+        return ProbeResult(None, ProbeFailure("Codex app server could not start", True))
     try:
-        if process.stdin is None or process.stdout is None:
-            return None
+        if process.stdin is None:
+            return ProbeResult(None, ProbeFailure("Codex app server has no input", True))
         initialize = InitializeRequest(
             params=InitializeParams(clientInfo=ClientInfo(name="baqylau", version="1"))
         )
@@ -182,37 +264,25 @@ def request_rate_limits() -> AccountRateLimitsResponse | None:
         process.stdin.write(initialize.model_dump_json() + "\n")
         process.stdin.write(request.model_dump_json() + "\n")
         process.stdin.flush()
-        deadline = time.monotonic() + REQUEST_TIMEOUT_SECONDS
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return None
-            readable, _, _ = select.select((process.stdout,), (), (), remaining)
-            if not readable:
-                return None
-            line = process.stdout.readline()
-            if not line:
-                return None
-            try:
-                header = RpcResponseHeader.model_validate_json(line)
-            except ValidationError:
-                continue
-            if header.id == 2:
-                try:
-                    return RateLimitsRpcResponse.model_validate_json(line).result
-                except ValidationError:
-                    return None
+        return _response(process, time.monotonic() + REQUEST_TIMEOUT_SECONDS)
+    except OSError:
+        return ProbeResult(None, ProbeFailure("Codex usage request failed", True))
     finally:
         if process.stdin is not None:
-            process.stdin.close()
-        process.terminate()
+            try:
+                process.stdin.close()
+            except OSError:
+                pass
+        _stop(process)
 
 
 def normalize_rate_limits(
     account_rate_limits_response: AccountRateLimitsResponse | None,
 ) -> NormalizedRateLimits | None:
     rate_limits = (
-        account_rate_limits_response.rateLimits if account_rate_limits_response is not None else None
+        account_rate_limits_response.rateLimits
+        if account_rate_limits_response is not None
+        else None
     )
     if rate_limits is None:
         return None
@@ -224,22 +294,91 @@ def normalize_rate_limits(
         duration_minutes = window.windowDurationMins
         if used_percent is None or duration_minutes is None:
             continue
-        windows.append(NormalizedRateLimitWindow(
-            used_percent=used_percent,
-            duration_minutes=int(duration_minutes),
-            resets_at=window.resetsAt,
-        ))
+        windows.append(
+            NormalizedRateLimitWindow(
+                used_percent=used_percent,
+                duration_minutes=int(duration_minutes),
+                resets_at=window.resetsAt,
+            )
+        )
     if not windows:
         return None
-    return NormalizedRateLimits(plan=rate_limits.planType or "", windows=tuple(windows))
+    return NormalizedRateLimits(
+        plan=rate_limits.planType or "",
+        windows=tuple(windows),
+    )
 
 
-def read_rate_limits() -> NormalizedRateLimits | None:
+def collect_rate_limits(
+    harness_runtime_config: HarnessRuntimeConfig | None = None,
+) -> RateLimitsCollection:
+    """Return fresh limits, or the last good result during a recoverable retry."""
+    runtime_config = harness_runtime_config or _default_runtime_config()
+    with _cache_lock:
+        return _collect_rate_limits(runtime_config)
+
+
+def _collect_rate_limits(
+    harness_runtime_config: HarnessRuntimeConfig,
+) -> RateLimitsCollection:
     global _cached_rate_limits
     now = time.time()
-    if _cached_rate_limits is not None and _cached_rate_limits[0] > now:
-        return _cached_rate_limits[1]
-    result = normalize_rate_limits(request_rate_limits())
-    cache_seconds = CACHE_SECONDS if result is not None else FAILED_CACHE_SECONDS
-    _cached_rate_limits = (now + cache_seconds, result)
-    return result
+    runtime_key = (
+        f"{harness_runtime_config.executable}\0"
+        f"{harness_runtime_config.configuration_directory}"
+    )
+    if (
+        _cached_rate_limits is not None
+        and _cached_rate_limits.runtime_key == runtime_key
+        and _cached_rate_limits.expires_at > now
+    ):
+        return _cached_rate_limits.collection
+
+    last_good = (
+        _cached_rate_limits.last_good
+        if _cached_rate_limits is not None
+        and _cached_rate_limits.runtime_key == runtime_key
+        else None
+    )
+    last_good_at = (
+        _cached_rate_limits.last_good_at
+        if _cached_rate_limits is not None
+        and _cached_rate_limits.runtime_key == runtime_key
+        else None
+    )
+    probe = request_rate_limits(harness_runtime_config)
+    usage = normalize_rate_limits(probe.response)
+    if usage is not None:
+        collection = RateLimitsCollection(usage, None)
+        last_good = usage
+        last_good_at = now
+        ttl = CACHE_SECONDS
+    elif probe.response is not None:
+        collection = RateLimitsCollection(
+            None,
+            "Codex usage response contains no limit windows",
+        )
+        last_good = None
+        last_good_at = None
+        ttl = PERMANENT_FAILURE_SECONDS
+    elif probe.failure is not None and probe.failure.recoverable:
+        if last_good_at is None or now - last_good_at > STALE_SECONDS:
+            last_good = None
+            last_good_at = None
+        collection = RateLimitsCollection(last_good, None)
+        ttl = RETRY_SECONDS
+    else:
+        message = probe.failure.message if probe.failure is not None else "Codex usage failed"
+        collection = RateLimitsCollection(None, message)
+        last_good = None
+        last_good_at = None
+        ttl = PERMANENT_FAILURE_SECONDS
+
+    _cached_rate_limits = CacheEntry(
+        runtime_key,
+        now + ttl,
+        collection,
+        last_good,
+        last_good_at,
+    )
+    return collection

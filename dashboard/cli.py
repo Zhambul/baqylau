@@ -1,4 +1,4 @@
-"""baqylau-dashboard.py [serve|start|stop|status|open] [--port N] [--data-dir DIR] [--log FILE]
+"""baqylau-dashboard.py [serve|start|stop|status|open] [options]
 
 The web dashboard's CLI lifecycle. The implementation behind the thin
 bin/baqylau-dashboard.py entry (that filename is operational audit
@@ -23,6 +23,9 @@ the default, and nothing that worked before stops working.
   --port N        the port to bind (or to ask, for stop/status)
   --data-dir DIR  the whole data directory: main.db, audit.db, uploads
   --log FILE      send this daemon's own output there (serve, and start's child)
+  --harness-executable HARNESS=FILE
+  --harness-config-dir HARNESS=DIR
+  --harness-settings-file HARNESS=FILE
 
 Every command takes the first two, not just the launching ones: `stop` and
 `status` find the daemon BY ITS PORT, so a second daemon on a second port is
@@ -40,13 +43,18 @@ import subprocess
 import sys
 import time
 from collections.abc import Mapping
+from pathlib import Path
 from types import ModuleType
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict
 
 from audit import record
 from audit.models import PathAudit
 from core.process import process_is_alive
+
+if TYPE_CHECKING:
+    from harness.runtime import HarnessRuntimeConfigs
 
 HEALTH_PATH = "/api/health"
 HEALTH_TIMEOUT_SECONDS = 1.0
@@ -63,6 +71,11 @@ LAUNCH_VARIABLES = {
     "--data-dir": "BAQYLAU_DATA_DIR",
 }
 LOG_FLAG = "--log"
+HARNESS_FLAGS = (
+    "--harness-executable",
+    "--harness-config-dir",
+    "--harness-settings-file",
+)
 
 
 class UsageError(Exception):
@@ -75,7 +88,14 @@ class HealthProcess(BaseModel):
     process_id: int
 
 
-def _options(arguments: list[str]) -> tuple[Mapping[str, str], str | None]:
+def _options(
+    arguments: list[str],
+) -> tuple[
+    Mapping[str, str],
+    str | None,
+    "HarnessRuntimeConfigs",
+    tuple[tuple[str, str], ...],
+]:
     """The launch flags, as (variables to set, log path).
 
     Accepts `--flag value` and `--flag=value`, because a person types the first
@@ -83,11 +103,16 @@ def _options(arguments: list[str]) -> tuple[Mapping[str, str], str | None]:
     """
     variables: dict[str, str] = {}
     log_path: str | None = None
+    harness_flags: list[tuple[str, str]] = []
     remaining = list(arguments)
     while remaining:
         argument = remaining.pop(0)
         name, _, inline = argument.partition("=")
-        if name not in LAUNCH_VARIABLES and name != LOG_FLAG:
+        if (
+            name not in LAUNCH_VARIABLES
+            and name != LOG_FLAG
+            and name not in HARNESS_FLAGS
+        ):
             raise UsageError("unknown option: %s" % argument)
         value = inline if inline else (remaining.pop(0) if remaining else "")
         if not value:
@@ -95,23 +120,70 @@ def _options(arguments: list[str]) -> tuple[Mapping[str, str], str | None]:
         if name == LOG_FLAG:
             log_path = os.path.abspath(os.path.expanduser(value))
             continue
+        if name in HARNESS_FLAGS:
+            harness_name, separator, harness_value = value.partition("=")
+            if not separator or not harness_name or not harness_value:
+                raise UsageError(f"{name} needs HARNESS=VALUE")
+            harness_flags.append(
+                (
+                    name,
+                    f"{harness_name}="
+                    f"{os.path.abspath(os.path.expanduser(harness_value))}",
+                )
+            )
+            continue
         if name == "--port" and not value.isdigit():
             raise UsageError("--port needs a number, not %r" % value)
         variables[LAUNCH_VARIABLES[name]] = (
             os.path.abspath(os.path.expanduser(value)) if name == "--data-dir" else value
         )
-    return variables, log_path
+    from dataclasses import replace  # noqa: PLC0415
+
+    from domain.ids import HarnessName  # noqa: PLC0415
+    from harness.runtime import default_harness_runtime_configs  # noqa: PLC0415
+
+    configs = default_harness_runtime_configs()
+    for name, value in harness_flags:
+        harness_value, configured_value = value.split("=", 1)
+        try:
+            harness = HarnessName(harness_value)
+        except ValueError as error:
+            raise UsageError(f"unknown harness: {harness_value}") from error
+        runtime = configs.for_harness(harness)
+        if name == "--harness-executable":
+            runtime = replace(runtime, executable=configured_value)
+        elif name == "--harness-config-dir":
+            configuration_directory = Path(configured_value)
+            runtime = replace(
+                runtime,
+                configuration_directory=configuration_directory,
+                use_vendor_default_configuration=(
+                    runtime.use_vendor_default_configuration
+                    and configuration_directory == runtime.configuration_directory
+                ),
+            )
+        elif name == "--harness-settings-file":
+            runtime = replace(runtime, settings_file=Path(configured_value))
+        configs = configs.updated(harness, runtime)
+    return (
+        variables,
+        log_path,
+        configs,
+        tuple(harness_flags),
+    )
 
 
 def _forwarded(arguments: list[str]) -> list[str]:
     """The same flags, as a child's command line: what `start` hands `serve`."""
-    variables, log_path = _options(arguments)
+    variables, log_path, _harnesses, harness_flags = _options(arguments)
     flags = []
     for flag, variable in LAUNCH_VARIABLES.items():
         if variable in variables:
             flags.extend([flag, variables[variable]])
     if log_path is not None:
         flags.extend([LOG_FLAG, log_path])
+    for flag, value in harness_flags:
+        flags.extend([flag, value])
     return flags
 
 
@@ -131,7 +203,7 @@ def _redirect(log_path: str) -> None:
         os.close(handle)
 
 
-def _serve() -> int:
+def _serve(harness_runtime_configs: "HarnessRuntimeConfigs") -> int:
     from dashboard.frontend_build import (  # noqa: PLC0415 — startup validation stays lazy
         FrontendBuildError,
         validate_frontend_build,
@@ -144,7 +216,9 @@ def _serve() -> int:
         return 1
     from api.runtime import ApplicationConfig, DashboardApplication  # noqa: PLC0415 — configuration precedes imports
 
-    return DashboardApplication(ApplicationConfig.from_environment()).run().exit_code
+    return DashboardApplication(
+        ApplicationConfig.from_environment(harness_runtime_configs)
+    ).run().exit_code
 
 
 def holder() -> int:
@@ -305,7 +379,7 @@ def rebuild() -> int:
 def main(argv: list[str]) -> int:
     cmd = argv[1] if len(argv) > 1 else "open"
     try:
-        variables, log_path = _options(argv[2:])
+        variables, log_path, harness_runtime_configs, _harness_flags = _options(argv[2:])
     except UsageError as error:
         print("%s\n%s" % (error, __doc__ or ""), file=sys.stderr)
         return 2
@@ -316,7 +390,7 @@ def main(argv: list[str]) -> int:
     if cmd == "serve":
         if log_path is not None:
             _redirect(log_path)
-        return _serve()
+        return _serve(harness_runtime_configs)
     if cmd == "start":
         return start(_forwarded(argv[2:]))
     if cmd == "stop":

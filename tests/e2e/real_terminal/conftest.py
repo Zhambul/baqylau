@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import os
+import shutil
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from api.runtime import ApplicationConfig
+from domain.ids import HarnessName
+from harness.runtime import HarnessRuntimeConfig, HarnessRuntimeConfigs
 from sdk.client import BaqylauClient
 from terminal.impl.kitty.plugin import kitty_plugin
 from terminal.impl.kitty.remote import resolve_listen_on
@@ -46,21 +49,35 @@ def application_process(
     del claude_workspace_trust
     if resolve_listen_on() is None:
         pytest.skip("no Kitty remote-control socket is available")
+    codex_executable = shutil.which("codex")
+    claude_executable = shutil.which("claude")
+    if codex_executable is None or claude_executable is None:
+        raise pytest.UsageError("Codex and Claude executables are required")
+    runtime_configs = HarnessRuntimeConfigs(
+        (
+            (
+                HarnessName.CLAUDE_CODE,
+                HarnessRuntimeConfig(
+                    claude_executable,
+                    isolated_claude_home,
+                    isolated_claude_home / "managed-settings.json",
+                ),
+            ),
+            (
+                HarnessName.CODEX,
+                HarnessRuntimeConfig(codex_executable, isolated_codex_home),
+            ),
+        )
+    )
     process = ApplicationProcess.start(ApplicationConfig(
         data_directory=Path(tmp_path_factory.mktemp("baqylau-kitty-data")),
         port=0,
         terminal="kitty",
         notify_telegram=False,
         notify_webpush=False,
+        harness_runtime_configs=runtime_configs,
         environment_removals=HARNESS_PARENT_ENVIRONMENT_VARIABLES,
-        base_environment={
-            **os.environ,
-            "CODEX_HOME": str(isolated_codex_home),
-            "CLAUDE_CONFIG_DIR": str(isolated_claude_home),
-            "CLAUDE_CODE_MANAGED_SETTINGS_PATH": str(
-                isolated_claude_home / "managed-settings.json"
-            ),
-        },
+        base_environment=dict(os.environ),
     ))
     try:
         yield process
@@ -100,6 +117,7 @@ def journey_driver(
         workspace,
         application_process.endpoint.port,
         wait_policy,
+        application_process.config.harness_runtime_configs,
         launch_environment=(
             ("CODEX_HOME", str(isolated_codex_home)),
             ("CLAUDE_CONFIG_DIR", str(isolated_claude_home)),

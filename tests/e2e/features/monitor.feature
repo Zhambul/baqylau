@@ -17,7 +17,7 @@ Feature: an armed monitor reports its events
     And monitor "tick monitor" ends
     And command "tick monitor" has state succeeded
     And session "primary" has no running work
-    And work "arm ticks" has final answer 'armed'
+    And work "arm ticks" has first final answer 'armed'
 
     Examples:
       | harness     | model | worker |

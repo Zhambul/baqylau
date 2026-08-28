@@ -6,17 +6,26 @@ import os
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
+import threading
+import time
 import tomllib
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from pathlib import Path
 
 import pytest
 
 from api.runtime import ApplicationConfig
-from harness.impl.claude_code.usage.rows import usage_reader as claude_usage_reader
-from harness.impl.codex.usage_rows import usage_reader as codex_usage_reader
-from harness.models import AccountUsageSnapshot, UsageRow
+from domain.ids import HarnessName
+from harness.impl.claude_code.usage.rows import ClaudeCodeUsage
+from harness.impl.codex.usage_rows import CodexUsage
+from harness.models import UsageRow
+from harness.runtime import (
+    HarnessRuntimeConfig,
+    HarnessRuntimeConfigs,
+    default_harness_runtime_configs,
+)
 from harness.services.usage import SharedUsageCache
 from sdk.client import BaqylauClient
 from tests.e2e.testkit.policy import WaitPolicy
@@ -26,6 +35,12 @@ from tests.e2e.testkit.process import (
     HARNESS_PARENT_ENVIRONMENT_VARIABLES,
     ApplicationProcess,
     assert_clean_diagnostics,
+)
+from tests.e2e.testkit.failure_diagnostics import (
+    e2e_failure_diagnostics,
+    e2e_progress_marker,
+    save_e2e_failure_diagnostics,
+    e2e_stall_diagnostics,
 )
 from tests.e2e.testkit.repository import ClaudeCodeProjectTrust, RepositoryWorkspace
 from tests.e2e.testkit.references import (
@@ -76,29 +91,102 @@ FILE_RENAME_SOURCE = "baqylau-e2e-rename-source.txt"
 FILE_RENAME_TARGET = "baqylau-e2e-rename-target.txt"
 MISSING_FILE_FIXTURE = "baqylau-e2e-missing-file-963.txt"
 REWIND_FILE_FIXTURE = "baqylau-e2e-rewind.txt"
+BACKGROUND_OUTPUT_FIXTURES = (
+    "baqylau-e2e-background-redirect.log",
+    "baqylau-e2e-background-pipe.log",
+)
 
 
-class _EmptyUsageRepository:
-    def record(self, account_usage_snapshot: AccountUsageSnapshot) -> None:
-        del account_usage_snapshot
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(
+    item: pytest.Item,
+    call: pytest.CallInfo[None],
+) -> Generator[None, pytest.TestReport, pytest.TestReport]:
+    del call
+    report = yield
+    if report.when not in ("call", "teardown") or not report.failed:
+        return report
+    if not isinstance(item, pytest.Function):
+        return report
+    application = item.funcargs.get("application_process")
+    if not isinstance(application, ApplicationProcess):
+        return report
+    try:
+        diagnostics = e2e_failure_diagnostics(application)
+        report_path = save_e2e_failure_diagnostics(
+            application,
+            item.nodeid,
+            diagnostics,
+        )
+        diagnostics = f"test={item.nodeid}\nfull_report={report_path}\n\n{diagnostics}"
+    except Exception as error:
+        diagnostics = f"failure diagnostics raised {type(error).__name__}: {error}"
+    report.sections.append(("Baqylau E2E diagnostics", diagnostics))
+    return report
 
-    def snapshots(self) -> tuple[AccountUsageSnapshot, ...]:
-        return ()
+
+@pytest.fixture(autouse=True)
+def stalled_scenario_report(
+    request: pytest.FixtureRequest,
+    application_process: ApplicationProcess,
+) -> Iterator[None]:
+    """Print live evidence after one minute with no stored progress."""
+    stopped = threading.Event()
+
+    def report_stall() -> None:
+        started_at = time.monotonic()
+        previous = e2e_progress_marker(application_process)
+        unchanged = 0
+        while not stopped.wait(30):
+            current = e2e_progress_marker(application_process)
+            if current == previous:
+                unchanged += 1
+            else:
+                previous = current
+                unchanged = 0
+            if unchanged < 2:
+                continue
+            print(
+                f"\nE2E stall report after "
+                f"{round(time.monotonic() - started_at)} seconds for "
+                f"{request.node.nodeid}\n"
+                f"progress_marker={current}\n"
+                f"{e2e_stall_diagnostics(application_process)}",
+                file=sys.stderr,
+                flush=True,
+            )
+            unchanged = 0
+
+    reporter = threading.Thread(target=report_stall, daemon=True)
+    reporter.start()
+    try:
+        yield
+    finally:
+        stopped.set()
+        reporter.join(timeout=1)
 
 
 class _LiveE2EUsageSource:
+    def __init__(self, runtime_configs: HarnessRuntimeConfigs) -> None:
+        self.claude = ClaudeCodeUsage(
+            runtime_configs.for_harness(HarnessName.CLAUDE_CODE)
+        )
+        self.codex = CodexUsage(runtime_configs.for_harness(HarnessName.CODEX))
+
     def read(self) -> tuple[UsageRow, ...]:
-        repository = _EmptyUsageRepository()
         return (
-            *claude_usage_reader.read(repository),
-            *codex_usage_reader.read(repository),
+            *self.claude.read(),
+            *self.codex.read(),
         )
 
 
-def _prewarm_usage_cache(path: Path) -> None:
+def _prewarm_usage_cache(
+    path: Path,
+    runtime_configs: HarnessRuntimeConfigs,
+) -> None:
     """Run the two account probes before twenty daemons compete for them."""
     rows = SharedUsageCache(path, max_age_seconds=600).read(
-        _LiveE2EUsageSource()
+        _LiveE2EUsageSource(runtime_configs)
     )
     claude = next((row for row in rows if row.harness == "claude_code"), None)
     codex = next((row for row in rows if row.harness == "codex"), None)
@@ -282,9 +370,12 @@ def isolated_claude_home(
         json.dumps(settings, sort_keys=True),
         encoding="utf-8",
     )
-    source_profile = source / ".claude.json"
-    if not source_profile.exists():
-        source_profile = Path.home() / ".claude.json"
+    default_source = Path.home() / ".claude"
+    source_profile = (
+        Path.home() / ".claude.json"
+        if source == default_source
+        else source / ".claude.json"
+    )
     shutil.copy2(source_profile, destination / ".claude.json")
 
     # Claude 2.1.246 asks for interactive consent when an organization-managed
@@ -376,7 +467,30 @@ def application_process(
     usage_cache = Path(tempfile.gettempdir()) / (
         f"baqylau-e2e-usage-{run_identity}.json"
     )
-    _prewarm_usage_cache(usage_cache)
+    codex_executable = shutil.which("codex")
+    claude_executable = shutil.which("claude")
+    if codex_executable is None or claude_executable is None:
+        raise pytest.UsageError("Codex and Claude executables are required")
+    runtime_configs = HarnessRuntimeConfigs(
+        (
+            (
+                HarnessName.CLAUDE_CODE,
+                HarnessRuntimeConfig(
+                    claude_executable,
+                    isolated_claude_home,
+                    isolated_claude_home / "managed-settings.json",
+                ),
+            ),
+            (
+                HarnessName.CODEX,
+                HarnessRuntimeConfig(codex_executable, isolated_codex_home),
+            ),
+        )
+    )
+    # A structured usage process can update profile metadata. Use the vendor
+    # default profiles for this account-level probe. The isolated profiles are
+    # for scenario sessions only.
+    _prewarm_usage_cache(usage_cache, default_harness_runtime_configs())
     configured = pytestconfig.getoption("--e2e-data-dir")
     if configured:
         data_directory = Path(str(configured)).expanduser().resolve()
@@ -394,11 +508,10 @@ def application_process(
             terminal="pty",
             notify_telegram=False,
             notify_webpush=False,
+            harness_runtime_configs=runtime_configs,
             environment_removals=HARNESS_PARENT_ENVIRONMENT_VARIABLES,
             base_environment={
                 **os.environ,
-                "CODEX_HOME": str(isolated_codex_home),
-                "CLAUDE_CONFIG_DIR": str(isolated_claude_home),
                 # Usage is global account state. One run-scoped snapshot keeps
                 # isolated daemons from launching the same native probes.
                 "BAQYLAU_USAGE_SHARED_CACHE": str(usage_cache),
@@ -729,7 +842,10 @@ def scenario_signoff(
     client: BaqylauClient,
     sessions: Sessions,
     wait_policy: WaitPolicy,
+    workspace: str,
 ) -> Iterator[None]:
+    for name in BACKGROUND_OUTPUT_FIXTURES:
+        Path(workspace, name).unlink(missing_ok=True)
     start = client.diagnostics.checkpoint()
     try:
         yield

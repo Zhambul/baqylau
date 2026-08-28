@@ -66,7 +66,7 @@ def test_harness_usage_service_uses_configured_shared_cache_age(monkeypatch, tmp
     monkeypatch.setenv("BAQYLAU_USAGE_SHARED_CACHE", str(tmp_path / "usage.json"))
     monkeypatch.setenv(USAGE_SHARED_CACHE_SECONDS_VARIABLE, "600")
 
-    service = HarnessUsageService(object(), object())
+    service = HarnessUsageService(object())
 
     assert service.shared_cache is not None
     assert service.shared_cache.max_age_seconds == 600

@@ -152,7 +152,7 @@ Feature: the browser controls real harness sessions
     When I open session "primary" in the browser
     And I send native command '/rename Native E2E 738' to session "primary" as control "native rename"
     Then control "native rename" response is accepted
-    And control "native rename" outcome is acknowledged
+    And control "native rename" reports sent delivery
     And session "primary" has title 'Native E2E 738'
     And the browser session header has title 'Native E2E 738'
     When I close session "primary" as control "park native named session"
@@ -278,11 +278,11 @@ Feature: the browser controls real harness sessions
     And session configuration "primary" uses no account
     When I launch session "primary" as turn "active work" with prompt
       """
-      Run `python -c 'import time; time.sleep(30); print("should-not-finish")'`
+      Run `while [ ! -f .baqylau-browser-codex-active-release ]; do sleep 0.2; done; printf 'should-not-finish\n'`
       as a foreground shell command. Do not run it in the background. Wait for
       it before you reply.
       """
-    And I name the only running command in turn "active work" containing 'time.sleep(30)' "active command"
+    And I name the only running command in turn "active work" containing 'baqylau-browser-codex-active-release' "active command"
     And I open session "primary" in the browser
     And I send browser prompt to session "primary" as turn "queued work"
       """

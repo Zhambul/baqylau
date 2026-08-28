@@ -75,3 +75,12 @@ def process_is_alive(process_id: int) -> bool:
         return True
     except ProcessLookupError:
         return False
+
+
+def process_executable(process_id: int) -> str | None:
+    """Return the absolute executable path for one live process."""
+    try:
+        executable = psutil.Process(process_id).exe()
+        return executable or None
+    except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
+        return None

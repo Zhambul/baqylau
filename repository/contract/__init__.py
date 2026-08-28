@@ -29,11 +29,9 @@ from repository.contract.sessions import SessionRepository
 from repository.contract.terminal import PaneWidthRepository
 from repository.contract.titles import NativeSessionTitleRepository
 from repository.contract.uploads import UploadRepository
-from repository.contract.usage import AccountUsageRepository
 from repository.contract.workspace import SessionWorkspaceRepository
 
 __all__ = [
-    "AccountUsageRepository",
     "CanonicalEventRepository",
     "AuditReadRepository",
     "AuditWriteRepository",

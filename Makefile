@@ -1,6 +1,6 @@
 PY ?= .venv/bin/python
 NPM ?= npm
-E2E_WORKERS ?= 20
+E2E_WORKERS ?= 6
 BROWSER_E2E_WORKERS ?= 4
 E2E_DIST ?= load
 FRONTEND_DIR = dashboard/frontend
@@ -20,7 +20,7 @@ test-frontend: frontend-install
 	cd $(FRONTEND_DIR) && $(NPM) run check
 	cd $(FRONTEND_DIR) && $(NPM) run test:coverage
 
-test-browser: build-frontend browser-static-e2e
+test-browser: browser-static-e2e
 
 browser-static-e2e:
 	cd $(FRONTEND_DIR) && BAQYLAU_E2E_PYTHON=$(abspath $(PY)) BAQYLAU_E2E_WORKERS=$(BROWSER_E2E_WORKERS) $(NPM) run test:browser
@@ -56,7 +56,7 @@ test-all:
 #   make test-drift E2E="--e2e-model claude-opus-5"   every scenario, one model
 #   make test-drift E2E="-k codex --e2e-data-dir /tmp/drift"   keep the databases
 test-drift:
-	$(PY) -m pytest tests/e2e/test_scenarios.py -q -x -n $(E2E_WORKERS) --dist $(E2E_DIST) --maxschedchunk 1 $(E2E)
+	$(PY) -m pytest tests/e2e/test_scenarios.py tests/e2e/test_chrome_permission.py -q -x -n $(E2E_WORKERS) --dist $(E2E_DIST) --maxschedchunk 1 $(E2E)
 
 test-browser-drift: build-frontend browser-live-e2e
 
@@ -65,7 +65,7 @@ browser-live-e2e:
 
 # Complete end-to-end gate. Every suite uses its measured parallelism. Suite
 # boundaries stay serial, so one failure stops before the next token-spending
-# layer starts. The frontend is built only once.
+# layer starts. Playwright rebuilds the frontend before its suite.
 e2e: build-frontend
 	$(MAKE) --no-print-directory test-drift
 	$(MAKE) --no-print-directory browser-live-e2e

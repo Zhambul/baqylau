@@ -46,7 +46,7 @@ from harness.models.controls import (
 from harness.models.raw_events import RawEvent, TranslationResult
 from harness.models.hooks import HarnessHookRequest, HarnessHookResponse
 from harness.models.info import HarnessInfo
-from harness.models.launch import HarnessLaunchPlan, LaunchRequest
+from harness.models.launch import LaunchRequest, LaunchResult
 from harness.models.probe import TerminalInputState
 from harness.models.session import Session
 from harness.models.telemetry import (
@@ -55,7 +55,6 @@ from harness.models.telemetry import (
     TelemetryContext,
 )
 from harness.models.usage import UsageRow
-from repository.contract.usage import AccountUsageRepository
 from domain.events import CanonicalEvent, EventPayload
 from terminal.contract import TerminalViewport
 from terminal.models import SESSION_WINDOW_TAG, WindowInfo
@@ -225,7 +224,7 @@ class HarnessController:
 
 
 class HarnessLauncher(Protocol):
-    def prepare(self, launch_request: LaunchRequest) -> HarnessLaunchPlan: ...
+    def launch(self, launch_request: LaunchRequest) -> LaunchResult: ...
 
 
 class HarnessCatalog(Protocol):
@@ -233,14 +232,9 @@ class HarnessCatalog(Protocol):
 
 
 class HarnessUsage(Protocol):
-    """One harness's plan-limit rows.
+    """One harness's current plan-limit rows."""
 
-    Takes the snapshot repository rather than reaching for one: a harness that
-    caches what it observed reads it back through the same interface everything
-    else does, and a harness that queries live needs nothing from it.
-    """
-
-    def read(self, account_usage_repository: AccountUsageRepository) -> tuple[UsageRow, ...]: ...
+    def read(self) -> tuple[UsageRow, ...]: ...
 
 
 class HarnessTerminalProbe(Protocol):

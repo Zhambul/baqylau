@@ -800,7 +800,6 @@ def test_owned_packages_never_use_raw_dictionaries_or_jsonvalue():
         "client/claude_hook.py": {"reply"},
         "client/codex_hook.py": {"reply"},
         "client/claude_otel.py": {"TELEMETRY_HEADERS"},
-        "client/claude_statusline.py": {"STATUSLINE_HEADERS"},
         "client/_model.py": {"ATTENTION_TWINS", "_entries", "_shells", "actors"},
         "client/_render.py": {
             "FILE_VERBS",
@@ -820,6 +819,7 @@ def test_owned_packages_never_use_raw_dictionaries_or_jsonvalue():
         "domain/entries.py": {"BODY_TYPES", "ENTRY_TYPES", "open_attentions"},
         "domain/events.py": {"EVENT_TYPES", "PAYLOAD_TYPES"},
         "engine/interpret/loop.py": {"identities"},
+        "engine/interpret/liveness.py": {"_terminal_owners"},
         "engine/react/loop.py": {"EMPTY_BODY_SUSPECT", "actors", "known", "states"},
         "engine/sessiondata/actors.py": {
             "FILE_TOOLS",
@@ -840,9 +840,11 @@ def test_owned_packages_never_use_raw_dictionaries_or_jsonvalue():
             "BACKGROUND_OUTCOMES",
             "notifications_by_actor",
         },
+        "harness/impl/claude_code/canonical/transcript.py": {"parents"},
         "harness/impl/claude_code/canonical/translator.py": {
             "_pending_compactions",
         },
+        "harness/impl/claude_code/canonical/turns.py": {"_response_turns"},
         "harness/impl/claude_code/canonical/sources.py": {"notifications_by_actor"},
         "harness/impl/claude_code/canonical/toolcalls.py": {
             "TOOL_KINDS",
@@ -891,7 +893,8 @@ def test_owned_packages_never_use_raw_dictionaries_or_jsonvalue():
             "_sources_by_session",
             "result_calls",
         },
-        "harness/impl/codex/controls/controller.py": {"HANDLERS"},
+        "harness/impl/codex/controls/controller.py": {"HANDLERS", "handlers"},
+        "harness/runtime.py": {"_by_harness", "by_harness"},
         "harness/impl/codex/continuity.py": {
             "_pending_by_window",
             "_resolved_by_session",
@@ -919,7 +922,6 @@ def test_owned_packages_never_use_raw_dictionaries_or_jsonvalue():
             "leads",
             "newest",
         },
-        "repository/impl/sqlite/usage.py": {"windows"},
         "repository/mapper/workspace.py": {"by_prompt"},
         "sdk/client.py": {"headers", "parameters", "query"},
         "sdk/state.py": {"folded", "open_by_actor"},
@@ -1199,7 +1201,6 @@ FILE_ACCESS_ALLOWLIST = {
     "harness/impl/claude_code/canonical/messages.py": "a child actor's meta.json sidecar, read as evidence",
     "harness/impl/claude_code/controls/controller.py": "reads the transcript tail to confirm an interrupt landed",
     "harness/impl/claude_code/model.py": "the agent meta.json sidecar beside a transcript",
-    "harness/impl/claude_code/usage/live.py": "Claude's native profile usage cache",
     "harness/impl/claude_code/slashcmds.py": "your .claude/commands and skills",
     "harness/impl/claude_code/hooks/foreground.py": "creates the tee file a command writes its output into",
     "harness/impl/claude_code/shell.py": "the tee file's directory",

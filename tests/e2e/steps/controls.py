@@ -269,6 +269,13 @@ def control_reports_queued_delivery(controls: Controls, name: str) -> None:
     assert outcome.status == "queued"
 
 
+@then(parsers.parse('control "{name}" reports sent delivery'))
+def control_reports_sent_delivery(controls: Controls, name: str) -> None:
+    outcome = controls.get(name).outcome
+    assert isinstance(outcome, MessageDeliveryResultResponse)
+    assert outcome.status == "sent"
+
+
 def _codex_queue_contains(
     codex_home: Path,
     session_id: str,

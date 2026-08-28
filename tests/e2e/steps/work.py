@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pytest_bdd import parsers, then, when
 
-from api.sessiondata.models.entry import TurnFinishedBodyResponse
 from sdk.client import BaqylauClient
 from sdk.state import AssignmentState, SessionSnapshot
 from tests.e2e.testkit import turns as turn_checks
@@ -295,6 +294,21 @@ def work_has_final_answer(
     )
 
 
+@then(parsers.parse('work "{name}" has first final answer \'{text}\''))
+def work_has_first_final_answer(
+    client: BaqylauClient,
+    works: Works,
+    name: str,
+    text: str,
+) -> None:
+    work = works.get(name)
+    answers = turn_checks.final_answer_texts(client, work.turn)
+    assert answers and turn_checks.matches_final_answer(answers[0], text), (
+        f"work {name!r} first final answer is not {text!r}; "
+        f"actual final answers: {answers}"
+    )
+
+
 @then(parsers.parse('work "{name}" has requested prompt \'{text}\''))
 def work_has_requested_prompt(works: Works, name: str, text: str) -> None:
     assert works.get(name).requested_prompt == text
@@ -485,25 +499,6 @@ def work_releases_lead(
             )
         if assignment.state != "succeeded" or assignment.finished_cursor is None:
             return None
-        if snapshot.data.session.harness == "claude_code":
-            assignment_finish = next(
-                (
-                    entry
-                    for entry in snapshot.entries
-                    if entry.cursor == assignment.finished_cursor
-                ),
-                None,
-            )
-            if assignment_finish is None:
-                return None
-            has_later_lead_turn = any(
-                entry.actor_id == lead.actor_id
-                and isinstance(entry.body, TurnFinishedBodyResponse)
-                and entry.occurred_at > assignment_finish.occurred_at
-                for entry in snapshot.entries
-            )
-            if not has_later_lead_turn:
-                return None
         return (
             True
             if lead.status == "awaiting_response" and not lead.statistics.active

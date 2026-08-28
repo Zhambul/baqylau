@@ -1,6 +1,7 @@
 """Claude Code's single public harness-plugin descriptor."""
 
-from harness.contract import HarnessPlugin
+from audit.recorder import AuditRecorder
+from harness.contract import HarnessPlugin, SessionResumeRecorder
 from harness.models import EffortOption, HarnessInfo, ModelOption, RewindModeOption
 from domain.events import SCHEMA_VERSION
 from domain.ids import HarnessName
@@ -14,8 +15,10 @@ from harness.impl.claude_code.controls.controller import controller
 from harness.impl.claude_code.launcher import ClaudeCodeLauncher
 from harness.impl.claude_code.reactors import ClaudeOtelCanonicalEventReactor
 from harness.impl.claude_code.probe import ClaudeCodeTerminalProbe
-from harness.impl.claude_code.usage.rows import usage_reader
+from harness.impl.claude_code.usage.rows import ClaudeCodeUsage
 from harness.impl.claude_code.controls import rewindmenu
+from harness.runtime import HarnessRuntimeConfig, default_harness_runtime_configs
+from terminal.contract import TerminalPlugin
 
 # The models the ✦ menu offers, each with the reasoning levels IT supports.
 # Claude Code's levels do not currently vary by model, so every model carries the
@@ -46,8 +49,7 @@ REWIND_MODES = tuple(
     RewindModeOption(mode.value, label) for mode, label in rewindmenu.MODE_LABELS.items()
 )
 
-plugin = HarnessPlugin(
-    info=HarnessInfo(
+INFO = HarnessInfo(
         name=HarnessName.CLAUDE_CODE,
         display_name="Claude Code",
         plugin_version="3",
@@ -61,21 +63,49 @@ plugin = HarnessPlugin(
         supports_readable_compaction_context=True,
         models=MODELS,
         rewind_modes=REWIND_MODES,
-    ),
-    hooks=ClaudeHookGateway(),
-    telemetry=ClaudeTelemetryGateway(),
-    sources=ClaudeRawEventSources(),
-    translator=ClaudeCanonicalTranslator(),
-    # No automatic account migration: a rate limit leaves the session where it
-    # is. Switching accounts relaunches the CLI under the same session id, and a
-    # resumed session's `session.started` is deduplicated against the first
-    # run's, so the first run's `session.finished` keeps it out of
-    # `watchable()` for good (see docs/html/resume-tombstone.html).
-    reactors=(ClaudeOtelCanonicalEventReactor(),),
-    controller=controller,
-    catalog=ClaudeCodeCatalog(),
-    model_display=model.display_model,
-    usage=usage_reader,
-    launcher=ClaudeCodeLauncher(),
-    terminal_probe=ClaudeCodeTerminalProbe(),
+)
+
+
+def build_plugin(
+    harness_runtime_config: HarnessRuntimeConfig,
+    terminal_plugin: TerminalPlugin | None = None,
+    session_resume_recorder: SessionResumeRecorder | None = None,
+    audit_recorder: AuditRecorder | None = None,
+    launch_environment: tuple[tuple[str, str], ...] = (),
+) -> HarnessPlugin:
+    configuration_directory = str(
+        harness_runtime_config.configuration_directory
+    )
+    return HarnessPlugin(
+        info=INFO,
+        hooks=ClaudeHookGateway(),
+        telemetry=ClaudeTelemetryGateway(),
+        sources=ClaudeRawEventSources(configuration_directory),
+        translator=ClaudeCanonicalTranslator(),
+        # A rate limit must not relaunch the CLI. A resumed session uses the
+        # same native session identity and the first finished event stays true.
+        reactors=(ClaudeOtelCanonicalEventReactor(),),
+        controller=controller,
+        catalog=ClaudeCodeCatalog(configuration_directory),
+        model_display=model.display_model,
+        usage=ClaudeCodeUsage(harness_runtime_config),
+        launcher=(
+            ClaudeCodeLauncher(
+                harness_runtime_config,
+                terminal_plugin,
+                session_resume_recorder,
+                audit_recorder,
+                launch_environment,
+            )
+            if terminal_plugin is not None
+            and session_resume_recorder is not None
+            and audit_recorder is not None
+            else None
+        ),
+        terminal_probe=ClaudeCodeTerminalProbe(),
+    )
+
+
+plugin = build_plugin(
+    default_harness_runtime_configs().for_harness(HarnessName.CLAUDE_CODE)
 )

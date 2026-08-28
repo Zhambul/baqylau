@@ -27,10 +27,11 @@ from domain.events import (
     ShellOutputFinished,
     ShellProgressed,
     TurnAborted,
+    TurnFinished,
     TurnStarted,
     UsageReported,
 )
-from domain.ids import AccountId
+from domain.ids import AccountId, TurnId
 from harness.impl.claude_code.ids import (
     ClaudeCodeActorId,
     ClaudeCodeCallId,
@@ -173,6 +174,8 @@ def prompt_turn(
     turn_semantics: TurnSemantics,
     native_identity: str,
     occurred_at: float | None,
+    *,
+    prompt_message_identity: str | None = None,
 ) -> list[CanonicalEvent[EventPayload]]:
     """The turn this prompt opens, if it opens one.
 
@@ -188,7 +191,9 @@ def prompt_turn(
             "turn",
             str(turn_id),
             "started",
-            TurnStarted(message_id_from_claude_code(ClaudeCodeMessageId(native_identity))),
+            TurnStarted(message_id_from_claude_code(ClaudeCodeMessageId(
+                prompt_message_identity or native_identity
+            ))),
             turn_id=turn_id,
             occurred_at=occurred_at,
         )
@@ -208,7 +213,8 @@ def slash_command(
     typed.
 
     `/rename` emits no event here. Its `agent-name` or `ai-title` record owns
-    the title change, and the local command does not open a model turn.
+    the title change. `/clear` starts a new native session. Neither command
+    opens a model turn.
 
     `/model`/`/effort` with a valid selection emit ONLY the state event —
     the model-change entry is what shows the switch, so a second, redundant
@@ -229,7 +235,7 @@ def slash_command(
     """
     name = record.name.lstrip("/").strip().lower()
     selection = record.arguments.strip()
-    if name == "rename":
+    if name in ("clear", "rename"):
         return []
     if selection and len(selection.split()) == 1 and name in ("model", "effort"):
         payload: EventPayload | None = (
@@ -408,6 +414,7 @@ def translate_transcript(
     selection_semantics: SelectionSemantics,
     *,
     actor_started: bool,
+    recovered_turn_id: TurnId | None = None,
 ) -> list[CanonicalEvent[EventPayload]]:
     native_message_id = transcript_document.message.id if transcript_document.message is not None else None
     native_identity = str(
@@ -746,6 +753,11 @@ def translate_transcript(
                     if ends_turn and block_index == last_text_index
                     else MessagePhase.INTERMEDIATE,
                     None,
+                    (
+                        raw_event.parent_actor_id
+                        if ends_turn and block_index == last_text_index
+                        else None
+                    ),
                 )
                 events.append(
                     event(
@@ -866,6 +878,38 @@ def translate_transcript(
                     occurred_at=occurred_at,
                 )
             )
+        if ends_turn:
+            claude_code_message_id = ClaudeCodeMessageId(
+                str(
+                    assistant_message.id
+                    if assistant_message is not None and assistant_message.id
+                    else native_identity
+                )
+            )
+            turn_id = turn_semantics.finished_by_transcript(
+                raw_event,
+                claude_code_message_id,
+                recovered_turn_id,
+            )
+            if turn_id is not None:
+                final_message_id = (
+                    message_id_from_claude_code(
+                        ClaudeCodeMessageId(f"{message_identity}:{last_text_index}")
+                    )
+                    if last_text_index >= 0
+                    else None
+                )
+                events.append(
+                    event(
+                        raw_event,
+                        "turn",
+                        str(turn_id),
+                        "finished",
+                        TurnFinished(final_message_id, Outcome.SUCCEEDED),
+                        turn_id=turn_id,
+                        occurred_at=occurred_at,
+                    )
+                )
         return events
     if isinstance(record, transcript.ResultsTranscriptRecord):
         events = []
@@ -890,6 +934,17 @@ def translate_transcript(
             else (None, False)
         )
         blocks = record.blocks
+        text_turn_id = None
+        if record.texts and not record.meta and not blocks and not record.interrupted:
+            first_text_identity = f"{native_identity}:text:0"
+            events.extend(prompt_turn(
+                raw_event,
+                turn_semantics,
+                native_identity,
+                occurred_at,
+                prompt_message_identity=first_text_identity,
+            ))
+            text_turn_id = turn_semantics.current(raw_event)
         # The line's `toolUseResult` sidecar carries what only the native
         # response document holds — a diff's structured patch, a background
         # launch's task id. It belongs to the line, so it can only be attributed
@@ -944,7 +999,7 @@ def translate_transcript(
                 text_identity,
                 "created",
                 payload,
-                turn_id=interrupted_turn_id,
+                turn_id=interrupted_turn_id or text_turn_id,
             ))
         if record.interrupted and interrupted_turn_id is not None:
             events = [

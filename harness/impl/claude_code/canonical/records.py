@@ -55,8 +55,6 @@ from harness.impl.claude_code.ids import (
     ClaudeCodeTaskListId,
     ClaudeCodeTurnId,
 )
-from domain.ids import AccountId
-
 # The one config every FOREIGN payload model shares — see the module header.
 FOREIGN = ConfigDict(extra="forbid", frozen=True)
 
@@ -69,6 +67,25 @@ class ForeignMetadata(BaseModel):
     """Named vendor metadata that this adapter deliberately does not interpret."""
 
     model_config = OPEN_FOREIGN
+
+
+class PermissionRule(BaseModel):
+    """One native rule in a permission update entry."""
+
+    model_config = FOREIGN
+    toolName: str
+    ruleContent: str | None = None
+
+
+class PermissionUpdate(BaseModel):
+    """One permission change that Claude offers or a hook returns."""
+
+    model_config = FOREIGN
+    type: str
+    rules: list[PermissionRule] | None = None
+    behavior: str | None = None
+    destination: str | None = None
+    mode: str | None = None
 
 
 class ImageSource(BaseModel):
@@ -401,6 +418,8 @@ class AssistantRecord(BaseModel):
     requestId: str | None = None
     effort: str | HookEffort | None = None
     attributionAgent: str | None = None
+    attributionMcpServer: str | None = None
+    attributionMcpTool: str | None = None
     attributionPlugin: str | None = None
     attributionSkill: str | None = None
     quotaLimits: ForeignMetadata | None = None
@@ -844,6 +863,7 @@ class HookPayload(BaseModel):
     index: int | None = None
     turn_id: ClaudeCodeTurnId | None = None
     notification_type: str | None = None
+    permission_suggestions: list[PermissionUpdate] | None = None
     prompt: str | None = None
     custom_instructions: str | None = None
     compact_summary: str | None = None
@@ -923,24 +943,6 @@ class OTelResourceMetrics(BaseModel):
 class OTelMetricsDocument(BaseModel):
     model_config = OPEN_FOREIGN
     resourceMetrics: list[OTelResourceMetrics] = Field(default_factory=list)
-
-
-class RateLimitWindow(BaseModel):
-    model_config = FOREIGN
-    used_percentage: int | float | None = None
-    resets_at: int | float | None = None
-
-
-class RateLimits(RootModel[Mapping[str, RateLimitWindow]]):
-    pass
-
-
-class StatusLineDocument(BaseModel):
-    model_config = OPEN_FOREIGN
-    rate_limits: RateLimits | None = None
-    account_id: AccountId | None = Field(default=None, alias="_account_id")
-    account_name: str | None = Field(default=None, alias="_account_name")
-    captured_at: int | float | None = Field(default=None, alias="_ts")
 
 
 # === The launch selection (messages.py launch_selections) ====================

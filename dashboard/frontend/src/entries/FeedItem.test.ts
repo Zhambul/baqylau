@@ -28,7 +28,68 @@ const EDIT: VisibleEntryPresentation = {
   },
 };
 
+function browser(state: 'succeeded' | 'failed'): VisibleEntryPresentation {
+  return {
+    ...EDIT,
+    key: `browser-${state}`,
+    group: 'commands',
+    summaryKind: 'tool',
+    state,
+    kind: 'block',
+    header: { kind: 'chip', chipKind: 'tool', label: 'Browser' },
+    summary: 'Read browser tabs',
+    body: {
+      kind: 'content',
+      content: {
+        text: 'Tab Context:\n- Available tabs',
+        mediaType: 'text/plain',
+      },
+    },
+    note: false,
+    quiet: true,
+    finishedAt: 1,
+    exitCode: null,
+  };
+}
+
 describe('feed item', () => {
+  it('shows tool outcome dots for success and failure', () => {
+    const properties = {
+      extraClass: '',
+      defaultOpen: false,
+      rewindModes: [],
+      rewindOpen: false,
+      onOpenRewind: undefined,
+      onCancelRewind: undefined,
+      onRewind: undefined,
+    };
+    const succeeded = render(FeedItem, {
+      ...properties,
+      presentation: browser('succeeded'),
+    });
+    const failed = render(FeedItem, {
+      ...properties,
+      presentation: browser('failed'),
+    });
+
+    expect(succeeded.container.querySelector('.blk')).toHaveAttribute(
+      'data-out',
+      'ok',
+    );
+    expect(succeeded.container.querySelector('.anmark')).toHaveAttribute(
+      'aria-label',
+      'succeeded',
+    );
+    expect(failed.container.querySelector('.blk')).toHaveAttribute(
+      'data-out',
+      'bad',
+    );
+    expect(failed.container.querySelector('.anmark')).toHaveAttribute(
+      'aria-label',
+      'failed',
+    );
+  });
+
   it('expands an Edit operation when its header is clicked', async () => {
     const user = userEvent.setup();
     const { container } = render(FeedItem, {

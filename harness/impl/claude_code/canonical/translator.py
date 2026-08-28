@@ -6,7 +6,7 @@ import base64
 from dataclasses import replace
 
 from domain.events import ShellProgressed, TaskListChanged
-from domain.ids import SessionId
+from domain.ids import SessionId, TurnId
 from domain.records import RecordedTranslationDecision
 from domain.values import OutputMode
 from repository.mapper.documents import StoredDocumentError, decode_document
@@ -29,6 +29,7 @@ from harness.impl.claude_code.ids import (
     ClaudeCodeTaskId,
     task_id_from_claude_code,
     task_list_id_from_claude_code,
+    turn_id_from_claude_code,
 )
 from harness.models import RawEvent, TranslationError, TranslationResult, UnknownRawEvent
 from harness.models.directives import ShellOutputChunk
@@ -46,7 +47,12 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
 
     def translate(self, raw_event: RawEvent) -> TranslationResult:
         try:
-            return self._stamped(raw_event, self._translate(raw_event))
+            observed_turn = self._turns.current(raw_event)
+            return self._stamped(
+                raw_event,
+                self._translate(raw_event),
+                observed_turn,
+            )
         except UnknownRawEvent as unknown:
             return TranslationResult((), RecordedTranslationDecision.IGNORED_UNKNOWN, unknown.reason)
 
@@ -59,7 +65,12 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
             if key[0] == session_id:
                 self._pending_compactions.pop(key, None)
 
-    def _stamped(self, raw_event: RawEvent, translation_result: TranslationResult) -> TranslationResult:
+    def _stamped(
+        self,
+        raw_event: RawEvent,
+        translation_result: TranslationResult,
+        observed_turn: TurnId | None,
+    ) -> TranslationResult:
         """Every fact of an open turn carries it.
 
         Stamped HERE, once, rather than by each of the forty places that build a
@@ -67,7 +78,22 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
         it said. The two events that name a turn themselves set it already and
         are left alone.
         """
-        turn_id = self._turns.current(raw_event)
+        # A response can close its turn while it is translated. Use the turn
+        # that was open when translation started in that case. A prompt opens
+        # its turn during translation, so use the new current turn when there
+        # was no turn before it.
+        turn_id = (
+            observed_turn
+            or self._turns.current(raw_event)
+            or next(
+                (
+                    canonical.turn_id
+                    for canonical in translation_result.canonical_events
+                    if canonical.turn_id is not None
+                ),
+                None,
+            )
+        )
         if turn_id is None or not translation_result.canonical_events:
             return translation_result
         stamped = tuple(
@@ -182,6 +208,20 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
             return TranslationResult((), RecordedTranslationDecision.IGNORED_NONSEMANTIC, "transcript plumbing record")
         if isinstance(record, transcript.BadTranscriptRecord):
             raise TranslationError("malformed Claude Code transcript record", context=raw_event.source_position)
+        recovered_turn_id = None
+        if (
+            isinstance(record, transcript.AssistantTranscriptRecord)
+            and record.message is not None
+            and record.message.stop_reason == "end_turn"
+            and raw_event.parent_actor_id is None
+        ):
+            recovered_turn = transcript.prompt_turn_before(
+                raw_event.source_name,
+                raw_event.source_position,
+                transcript_document.parentUuid,
+            )
+            if recovered_turn is not None:
+                recovered_turn_id = turn_id_from_claude_code(recovered_turn)
         compaction_key = raw_event.session_id, str(raw_event.actor_id)
         if isinstance(record, transcript.CompactTranscriptRecord):
             boundary_id = ClaudeCodeCompactionId(
@@ -208,6 +248,7 @@ class ClaudeCanonicalTranslator(HarnessTranslator):
             self._turns,
             self._selections,
             actor_started=starts_child_actor,
+            recovered_turn_id=recovered_turn_id,
         )
         events = session_events_ + metadata_events + transcript_events
         if not events:

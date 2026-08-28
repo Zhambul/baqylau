@@ -22,7 +22,7 @@ def test_parallel_work_prompt_keeps_native_tools_behind_the_adapter():
     codex = _parallel_delegation_prompt("codex", requests)
     claude = _parallel_delegation_prompt("claude_code", requests)
 
-    assert codex.count("multi_agent_v2__spawn_agent") == 1
+    assert codex.count("spawn_agent") == 1
     assert "multi_agent_v1__" not in codex
     assert "Agent tool" in claude
     assert "e2e_alpha_work" in codex

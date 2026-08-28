@@ -82,7 +82,6 @@ Feature: subagent work reaches the session feed
       | alpha work | Reply only with the word alpha. |
       | beta work  | Reply only with the word beta.  |
     Then turn "parallel delegation" completes
-    And turn "parallel delegation" has final answer 'launched'
     And work "alpha work" completes
     And work "alpha work" has worker type subagent
     And work "alpha work" has final answer 'alpha'

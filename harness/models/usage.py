@@ -50,17 +50,6 @@ class UsageWindowSample:
 
 
 @dataclass(frozen=True)
-class AccountUsageSnapshot:
-    """The current plan-limit picture for one account of one harness."""
-
-    harness: HarnessName
-    account_id: AccountId | None
-    display_name: str
-    captured_at: float
-    windows: tuple[UsageWindowSample, ...]
-
-
-@dataclass(frozen=True)
 class UsageRow:
     harness: HarnessName
     account_id: AccountId | None

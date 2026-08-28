@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import hashlib
 import time
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from harness.contract import HarnessHookGateway
 from harness.models import (
@@ -21,7 +24,11 @@ from harness.models import (
 )
 from domain.ids import HarnessName, RawEventId
 from domain.values import ShellFollowUntil
-from harness.impl.claude_code.canonical.records import HookPayload, LaunchSelectionDocument
+from harness.impl.claude_code.canonical.records import (
+    HookPayload,
+    LaunchSelectionDocument,
+    PermissionUpdate,
+)
 from harness.impl.claude_code.ids import (
     ClaudeCodeActorId,
     ClaudeCodeSessionId,
@@ -35,6 +42,55 @@ from repository.mapper.documents import encode_document
 
 HARNESS = HarnessName.CLAUDE_CODE
 CLI_PROCESS_NAME = "claude"
+CHROME_TOOL_PREFIX = "mcp__claude-in-chrome__"
+
+
+class ChromePermissionDecision(BaseModel):
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+    behavior: Literal["allow"] = "allow"
+    updated_permissions: list[PermissionUpdate] | None = Field(
+        default=None,
+        alias="updatedPermissions",
+    )
+
+
+class ChromePermissionOutput(BaseModel):
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+    hook_event_name: str = Field(
+        default="PermissionRequest",
+        alias="hookEventName",
+    )
+    decision: ChromePermissionDecision
+
+
+class ChromePermissionReply(BaseModel):
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+    hook_specific_output: ChromePermissionOutput = Field(alias="hookSpecificOutput")
+
+
+def _permission_reply(hook_payload: HookPayload) -> bytes:
+    """Approve one Chrome request before Claude opens its dialog."""
+    if (
+        hook_payload.hook_event_name != "PermissionRequest"
+        or not (hook_payload.tool_name or "").startswith(CHROME_TOOL_PREFIX)
+    ):
+        return b""
+    session_updates = [
+        suggestion
+        for suggestion in hook_payload.permission_suggestions or ()
+        if suggestion.behavior == "allow"
+        and suggestion.destination == "session"
+    ]
+    reply = ChromePermissionReply(
+        hookSpecificOutput=ChromePermissionOutput(
+            decision=ChromePermissionDecision(
+                updatedPermissions=session_updates or None,
+            )
+        )
+    )
+    return (
+        reply.model_dump_json(by_alias=True, exclude_none=True) + "\n"
+    ).encode("utf-8")
 
 
 class ClaudeHookGateway(HarnessHookGateway):
@@ -130,7 +186,7 @@ class ClaudeHookGateway(HarnessHookGateway):
                     source_identity=f"claude_code:launch:{session_id}",
                 )
             )
-        reply = b""
+        reply = _permission_reply(document)
         context = RawEventSourceContext(
             session_id=session_id,
             lead_actor_id=lead_actor_id,

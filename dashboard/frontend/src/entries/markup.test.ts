@@ -11,7 +11,7 @@ import {
 describe('trusted entry markup', () => {
   it('escapes plain text', () => {
     expect(plainTextHtml('<script>alert(1)</script>').value).toBe(
-      '<p>&lt;script&gt;alert(1)&lt;/script&gt;</p>',
+      '<p class="plain-text">&lt;script&gt;alert(1)&lt;/script&gt;</p>',
     );
   });
 
