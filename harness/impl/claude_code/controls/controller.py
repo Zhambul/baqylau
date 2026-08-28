@@ -106,7 +106,8 @@ NATIVE_TEXT_CONFIRM_POLL_SECONDS = 0.05
 NATIVE_TEXT_DELIVERY_ATTEMPTS = 2
 NATIVE_TEXT_QUEUED = "queued"
 NATIVE_TEXT_SENT = "sent"
-NATIVE_TITLE_CONFIRM_TIMEOUT_SECONDS = 5.0
+# Automatic naming uses a model call. It can take longer than local commands.
+NATIVE_TITLE_CONFIRM_TIMEOUT_SECONDS = 30.0
 
 
 def _same_native_prompt(expected: str, observed: str) -> bool:

@@ -20,6 +20,12 @@ STARTUP_TIMEOUT_SECONDS = 30.0
 SCREEN_LIMIT = 4_000
 
 
+def _main_screen(screen: str) -> bool:
+    return ">_ OpenAI Codex" in screen and (
+        "› Ask Codex to do anything" in screen or "esc to interrupt" in screen
+    )
+
+
 class CodexLauncher(HarnessLauncher):
     def __init__(
         self,
@@ -152,6 +158,15 @@ class CodexLauncher(HarnessLauncher):
                         "workspace_trust",
                         read.text,
                     )
+                    continue
+                if _main_screen(read.text):
+                    self._record(
+                        window_id,
+                        "ready",
+                        "Codex accepted the launch",
+                        "main",
+                    )
+                    return LaunchResult(LaunchStatus.STARTED, window_id=window_id)
             time.sleep(POLL_SECONDS)
 
         return self._error(

@@ -1909,6 +1909,20 @@ def test_claude_clear_input_waits_for_delayed_screen_updates():
     assert driver.lines == []
 
 
+def test_claude_clear_input_does_not_accept_a_prompt_suggestion():
+    divider = "\x1b[m\x1b[38:2:136:136:136m" + "─" * 20
+    screen = divider + "\n\x1b[m❯\xa0\x1b[22;2mshow me the audit records\n" + divider
+    terminal = FakeTerminal(screen_text=screen)
+
+    killed = claude_tui.clear_input(
+        TerminalDriver(terminal.plugin()),
+        "window-one",
+    )
+
+    assert killed == 0
+    assert terminal.keys == []
+
+
 def test_claude_foreground_post_tool_records_no_directive():
     """The foreground following ends with the committed operation.finished fact,
     not with a directive from the PostToolUse delivery."""
@@ -4030,6 +4044,33 @@ def test_codex_reports_login_as_a_launch_error():
     assert result.window_id == "window-two"
 
 
+@pytest.mark.parametrize(
+    "state",
+    (
+        "› Ask Codex to do anything",
+        "Working (20s • esc to interrupt)",
+    ),
+)
+def test_codex_accepts_its_normal_main_screen_before_the_session_tag(state):
+    terminal = FakeTerminal(
+        windows=[window("window-two")],
+        screen_text=(
+            "╭──────────────────────╮\n"
+            "│ >_ OpenAI Codex      │\n"
+            "╰──────────────────────╯\n"
+            f"{state}"
+        ),
+    )
+    launcher = _test_launcher(HarnessName.CODEX, terminal)
+
+    result = launcher.launch(
+        LaunchRequest("/work", "hello", None, None, None, None)
+    )
+
+    assert result.status == "started"
+    assert result.window_id == "window-two"
+
+
 def test_terminal_launches_receive_the_configured_harness_homes(monkeypatch):
     monkeypatch.setenv("BAQYLAU_DASHBOARD_PORT", "49123")
 
@@ -4273,25 +4314,9 @@ def test_claude_active_send_retries_until_the_native_queue_accepts_it(
     ]
 
 
-def test_codex_active_send_uses_the_running_harness_executable(
-    monkeypatch,
-    tmp_path,
-):
+def test_codex_active_send_uses_the_harness_window(tmp_path):
     from harness.impl.codex.plugin import build_plugin
 
-    commands = []
-
-    def run(command, **options):
-        commands.append((command, options))
-        return SimpleNamespace(returncode=0, stdout="queued\n", stderr="")
-
-    monkeypatch.setattr(codex_controller.subprocess, "run", run)
-    monkeypatch.setattr(
-        codex_controller,
-        "process_executable",
-        lambda _process_id: "/configured/bin/codex",
-    )
-    monkeypatch.setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
     session = Session(
         SessionId("session-one"),
         ActorId("session-one:lead"),
@@ -4309,24 +4334,249 @@ def test_codex_active_send_uses_the_running_harness_executable(
         HarnessRuntimeConfig("codex", tmp_path / "configured-codex-home")
     )
     assert plugin.controller is not None
+    terminal = FakeTerminal()
     outcome = plugin.controller.execute(
         request,
-        control_context(session, FakeTerminal().plugin(), lead_active=True),
+        control_context(session, terminal.plugin(), lead_active=True),
     )
 
     assert isinstance(outcome, MessageDeliveryResult)
     assert outcome.status == "queued"
-    assert commands[0][0] == [
-        "/configured/bin/codex",
-        "queue",
-        "--thread",
-        "session-one",
-        "--message",
-        "queued Codex prompt",
-    ]
-    assert commands[0][1]["env"]["CODEX_HOME"] == str(
-        tmp_path / "configured-codex-home"
+    assert terminal.submitted[-1][1] == "queued Codex prompt"
+
+
+def test_codex_idle_send_waits_for_the_native_prompt(monkeypatch, tmp_path):
+    source = tmp_path / "rollout.jsonl"
+    source.write_text("", encoding="utf-8")
+    terminal = FakeTerminal(screen_text="› Ask Codex to do anything")
+    native_submit = terminal.submit_text
+
+    def submit(request):
+        result = native_submit(request)
+        with source.open("a", encoding="utf-8") as rollout_file:
+            rollout_file.write(
+                json.dumps(
+                    {
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "id": "message-one",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": "test"}],
+                            "internal_chat_message_metadata_passthrough": {
+                                "turn_id": "turn-one",
+                            },
+                        },
+                    }
+                )
+                + "\n"
+            )
+        return result
+
+    monkeypatch.setattr(terminal, "submit_text", submit)
+    session = Session(
+        SessionId("session-one"),
+        ActorId("session-one:lead"),
+        str(source),
+        str(tmp_path),
     )
+    request = SendText(
+        session_id=session.session_id,
+        request_id="request-one",
+        text="test",
+    )
+
+    outcome = ProviderGraph().registry.plugin("codex").controller.execute(
+        request,
+        control_context(session, terminal.plugin()),
+    )
+
+    assert isinstance(outcome, MessageDeliveryResult)
+    assert outcome.status == "sent"
+
+
+def test_codex_plan_command_waits_for_plan_mode(monkeypatch, tmp_path):
+    source = tmp_path / "rollout.jsonl"
+    source.write_text("", encoding="utf-8")
+    terminal = FakeTerminal(screen_text="› Ask Codex to do anything")
+    native_submit = terminal.submit_text
+
+    def submit(request):
+        result = native_submit(request)
+        terminal.screen_text = (
+            "› Ask Codex to do anything\n"
+            "Plan mode (shift+tab to cycle)"
+        )
+        return result
+
+    monkeypatch.setattr(terminal, "submit_text", submit)
+    session = Session(
+        SessionId("session-one"),
+        ActorId("session-one:lead"),
+        str(source),
+        str(tmp_path),
+    )
+    request = SendText(
+        session_id=session.session_id,
+        request_id="request-one",
+        text="/plan",
+    )
+
+    outcome = ProviderGraph().registry.plugin("codex").controller.execute(
+        request,
+        control_context(session, terminal.plugin()),
+    )
+
+    assert isinstance(outcome, MessageDeliveryResult)
+    assert outcome.status == "sent"
+
+
+def test_codex_rename_command_waits_for_the_native_title(monkeypatch, tmp_path):
+    from harness.impl.codex.plugin import build_plugin
+
+    configuration_directory = tmp_path / "codex-home"
+    source = tmp_path / "rollout.jsonl"
+    source.write_text("", encoding="utf-8")
+    terminal = FakeTerminal(screen_text="› Ask Codex to do anything")
+    native_submit = terminal.submit_text
+    renamed = False
+
+    def submit(request):
+        nonlocal renamed
+        result = native_submit(request)
+        renamed = True
+        return result
+
+    monkeypatch.setattr(terminal, "submit_text", submit)
+    monkeypatch.setattr(
+        codex_controller.title.CodexThreadTitleRepository,
+        "read_title",
+        lambda _repository, _source: (
+            SimpleNamespace(text="Stable name") if renamed else None
+        ),
+    )
+    session = Session(
+        SessionId("session-one"),
+        ActorId("session-one:lead"),
+        str(source),
+        str(tmp_path),
+    )
+    plugin = build_plugin(
+        HarnessRuntimeConfig("codex", configuration_directory)
+    )
+    assert plugin.controller is not None
+
+    outcome = plugin.controller.execute(
+        SendText(
+            session.session_id,
+            "request-one",
+            text="/rename Stable name",
+        ),
+        control_context(session, terminal.plugin()),
+    )
+
+    assert isinstance(outcome, MessageDeliveryResult)
+    assert outcome.status == "sent"
+
+
+def test_codex_idle_send_follows_a_new_rewind_rollout(monkeypatch, tmp_path):
+    from harness.impl.codex.plugin import build_plugin
+
+    configuration_directory = tmp_path / "codex-home"
+    new_source = (
+        configuration_directory
+        / "sessions"
+        / "2026"
+        / "08"
+        / "28"
+        / "rollout-2026-08-28T20-00-00-new-session.jsonl"
+    )
+    new_source.parent.mkdir(parents=True)
+    old_source = tmp_path / "old-rollout.jsonl"
+    old_source.write_text("", encoding="utf-8")
+    terminal = FakeTerminal(screen_text="› Ask Codex to do anything")
+    native_insert = terminal.insert_text
+    native_key = terminal.send_key
+
+    def insert(request):
+        result = native_insert(request)
+        terminal.screen_text = f"› {request.text}"
+        return result
+
+    def send_key(request):
+        result = native_key(request)
+        if request.key == "enter":
+            with new_source.open("w", encoding="utf-8") as rollout_file:
+                rollout_file.write(
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "task_started",
+                                "turn_id": "rewind-turn",
+                            },
+                        }
+                    )
+                    + "\n"
+                )
+            terminal.screen_text = "Working (0s • esc to interrupt)"
+        return result
+
+    monkeypatch.setattr(terminal, "insert_text", insert)
+    monkeypatch.setattr(terminal, "send_key", send_key)
+    session = Session(
+        SessionId("old-session"),
+        ActorId("old-session:lead"),
+        str(old_source),
+        str(tmp_path),
+    )
+    plugin = build_plugin(
+        HarnessRuntimeConfig("codex", configuration_directory)
+    )
+    assert plugin.controller is not None
+    codex_controller.rewind_continuity.expect(
+        session.session_id,
+        WindowId("window-one"),
+    )
+
+    outcome = plugin.controller.execute(
+        SendText(session.session_id, "request-one", text="revised"),
+        control_context(session, terminal.plugin()),
+    )
+
+    assert isinstance(outcome, MessageDeliveryResult)
+    assert outcome.status == "sent"
+    assert terminal.inserted == [("window-one", "revised", "paste")]
+    assert terminal.keys[-1] == ("window-one", "enter")
+
+
+def test_codex_idle_send_reports_missing_native_confirmation(monkeypatch, tmp_path):
+    source = tmp_path / "rollout.jsonl"
+    source.write_text("", encoding="utf-8")
+    monkeypatch.setattr(codex_controller, "SEND_CONFIRM_TIMEOUT_SECONDS", 0)
+    session = Session(
+        SessionId("session-one"),
+        ActorId("session-one:lead"),
+        str(source),
+        str(tmp_path),
+    )
+    request = SendText(
+        session_id=session.session_id,
+        request_id="request-one",
+        text="test",
+    )
+
+    outcome = ProviderGraph().registry.plugin("codex").controller.execute(
+        request,
+        control_context(
+            session,
+            FakeTerminal(screen_text="› Ask Codex to do anything").plugin(),
+        ),
+    )
+
+    assert isinstance(outcome, ControlResult)
+    assert outcome.status == "indeterminate"
+    assert outcome.reason == "Codex did not confirm the submitted message"
 
 
 def test_claude_active_send_is_not_called_queued_without_native_confirmation(
@@ -4389,6 +4639,29 @@ def test_claude_native_queue_state_changes_to_sent_when_the_queue_drains(tmp_pat
 
     assert claude_controller._native_text_state(
         str(source), position, "native prompt"
+    ) == claude_controller.NATIVE_TEXT_SENT
+
+
+def test_claude_native_prompt_confirms_text_delivery(tmp_path):
+    source = tmp_path / "session.jsonl"
+    source.write_text("prefix\n", encoding="utf-8")
+    position = source.stat().st_size
+    with source.open("a", encoding="utf-8") as transcript_file:
+        transcript_file.write(
+            json.dumps(
+                {
+                    "type": "user",
+                    "uuid": "native-prompt-one",
+                    "message": {"content": "native prompt"},
+                }
+            )
+            + "\n"
+        )
+
+    assert claude_controller._native_text_state(
+        str(source),
+        position,
+        "native prompt",
     ) == claude_controller.NATIVE_TEXT_SENT
 
 
@@ -4721,6 +4994,25 @@ def test_claude_rewind_list_is_open_when_the_terminal_clips_its_footer():
     marker.txt +1 -1
 
   ❯ (current)"""
+
+    assert rewindmenu.menu_open(screen)
+
+
+def test_claude_rewind_list_accepts_the_new_three_space_header_indent():
+    screen = """Previous output
+
+   Rewind
+
+   Restore the code and/or conversation to the point before…
+
+    ↑ 1 more above
+
+     Reply only with the word second.
+     No code changes
+
+   ❯ (current)
+
+   Enter to continue · Esc to cancel"""
 
     assert rewindmenu.menu_open(screen)
 
@@ -5261,6 +5553,58 @@ def test_claude_prompt_and_codex_prompt_share_the_message_model():
     assert [event.turn_id for event in claude.canonical_events] == ["claude-message"] * 2
 
 
+def test_codex_user_messages_in_one_turn_keep_separate_identities():
+    translator = CodexCanonicalTranslator()
+    first = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "id": "native-message-one",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "test"}],
+                    "internal_chat_message_metadata_passthrough": {
+                        "turn_id": "turn-one",
+                    },
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="codex-prompt-with-turn",
+        )
+    )
+    second = translator.translate(
+        raw_event(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "id": "native-message-two",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "next"}],
+                    "internal_chat_message_metadata_passthrough": {
+                        "turn_id": "turn-one",
+                    },
+                },
+            },
+            harness=HarnessName.CODEX,
+            source_type="rollout",
+            raw_event_id="codex-second-prompt-with-turn",
+        )
+    )
+
+    prompts = [
+        payloads(first, MessageCreated)[0],
+        payloads(second, MessageCreated)[0],
+    ]
+    assert [prompt.turn_id for prompt in prompts] == ["turn-one", "turn-one"]
+    assert [prompt.payload.message_id for prompt in prompts] == [
+        "native-message-one",
+        "native-message-two",
+    ]
+
+
 def test_claude_child_prompt_is_authored_by_the_parent_agent():
     child_prompt = replace(
         raw_event(
@@ -5485,6 +5829,32 @@ def test_claude_task_notification_finishes_actor_assignment_instead_of_creating_
     assert finished[0].payload.assignment_id == "agent-tool-one"
     assert finished[0].payload.outcome == "succeeded"
     assert finished[0].payload.result.text == "Sunny, 29°C."
+
+
+def test_claude_killed_task_notification_cancels_actor_assignment():
+    notification = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {
+                "type": "queue-operation",
+                "operation": "enqueue",
+                "content": (
+                    "<task-notification><task-id>child-one</task-id>"
+                    "<tool-use-id>agent-tool-one</tool-use-id>"
+                    "<status>killed</status>"
+                    '<summary>Agent "e2e_child_sleep" was stopped by Claude</summary>'
+                    "</task-notification>"
+                ),
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="killed-task-notification",
+        )
+    )
+
+    finished = payloads(notification, ActorAssignmentFinished)
+    assert len(finished) == 1
+    assert finished[0].payload.assignment_id == "agent-tool-one"
+    assert finished[0].payload.outcome == Outcome.CANCELLED
 
 
 def test_claude_resumed_async_child_finishes_its_agent_assignment():
@@ -7205,6 +7575,75 @@ def test_claude_turn_opens_on_the_prompt_and_closes_on_the_stop_hook():
     assert after.canonical_events[0].turn_id is None
 
 
+def test_claude_blocking_stop_feedback_starts_the_continuation_turn():
+    translator = ClaudeCanonicalTranslator()
+    prompt = translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "first-prompt",
+                "message": {"content": "do the work"},
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="first-prompt",
+        )
+    )
+    stopped = translator.translate(
+        raw_event(
+            {"hook_event_name": "Stop", "hook_event_id": "first-stop"},
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="first-stop",
+        )
+    )
+    feedback = translator.translate(
+        raw_event(
+            {
+                "type": "user",
+                "uuid": "stop-feedback",
+                "isMeta": True,
+                "message": {"content": "Stop hook feedback:\nContinue the work."},
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="transcript",
+            raw_event_id="stop-feedback",
+        )
+    )
+    continued = translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_use_id": "continued-command",
+                "tool_name": "Bash",
+                "tool_input": {"command": "pwd"},
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="continued-command",
+        )
+    )
+    final_stop = translator.translate(
+        raw_event(
+            {"hook_event_name": "Stop", "hook_event_id": "final-stop"},
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="final-stop",
+        )
+    )
+
+    first_turn = payloads(prompt, TurnStarted)[0].turn_id
+    resumed_turn = payloads(feedback, TurnStarted)[0].turn_id
+    feedback_message = payloads(feedback, MessageCreated)[0]
+    assert resumed_turn is not None and resumed_turn != first_turn
+    assert feedback_message.turn_id == resumed_turn
+    assert feedback_message.payload.role == "system"
+    assert feedback_message.payload.phase == "synthetic"
+    assert all(event.turn_id == resumed_turn for event in continued.canonical_events)
+    assert payloads(stopped, TurnFinished)[0].turn_id == first_turn
+    assert payloads(final_stop, TurnFinished)[0].turn_id == resumed_turn
+
+
 def test_claude_search_is_one_fact_holding_both_its_query_and_its_result():
     """A search has no life between asking and answering that anyone reads, so
     the call alone is not a fact — it is remembered, and the result carries
@@ -7277,6 +7716,33 @@ def test_claude_search_is_one_fact_holding_both_its_query_and_its_result():
     assert performed.tool == "ToolSearch"
     assert performed.query == TextContent("select:WebSearch")
     assert performed.result.text == "→ loaded tool: WebSearch"
+    assert performed.outcome == "succeeded"
+
+
+def test_claude_tool_search_keeps_an_explicit_empty_result():
+    translator = ClaudeCanonicalTranslator()
+    result = translator.translate(
+        raw_event(
+            {
+                "hook_event_name": "PostToolUse",
+                "tool_use_id": "empty-tool-search",
+                "tool_name": "ToolSearch",
+                "tool_input": {"query": "select:MissingTool"},
+                "tool_response": {
+                    "matches": [],
+                    "query": "select:MissingTool",
+                    "total_deferred_tools": 34,
+                },
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="empty-tool-search-result",
+        )
+    )
+
+    performed = payloads(result, SearchPerformed)[0].payload
+    assert performed.query == TextContent("select:MissingTool")
+    assert performed.result == TextContent("No matching tools.")
     assert performed.outcome == "succeeded"
 
 
@@ -8098,6 +8564,27 @@ def test_claude_unknown_hook_field_fails_translation_naming_it():
                 raw_event_id="claude-unknown-field",
             )
         )
+
+
+def test_claude_stop_hook_accepts_cache_status_fields():
+    """Claude 2.1.251 adds cache status data to some Stop hooks."""
+    translated = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {
+                "hook_event_name": "Stop",
+                "session_id": "session-one",
+                "seconds_since_last_response": 6,
+                "context_tokens": 16231,
+                "prompt_cache_likely_expired": False,
+                "estimated_cache_write_usd": 0.0325,
+            },
+            harness=HarnessName.CLAUDE_CODE,
+            source_type="hook",
+            raw_event_id="claude-stop-cache-status",
+        )
+    )
+
+    assert translated.decision != "translation_failed"
 
 
 def test_claude_wrong_typed_hook_field_fails_translation():

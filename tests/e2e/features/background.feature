@@ -1,6 +1,7 @@
 Feature: background work reaches the session feed
 
   Scenario Outline: redirected output from one background command reaches its shell block
+    # Harness limit: claude_code only. Only Claude Code reports its redirected output file.
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "redirect background output" with prompt
       """
@@ -91,6 +92,7 @@ Feature: background work reaches the session feed
       | claude_code | haiku        | Your first tool call must be Bash with run_in_background set to true; do not call ToolSearch or another tool first. After Bash returns, wait for its automatic completion notification. |
 
   Scenario Outline: a command backgrounded mid-run keeps reporting
+    # Harness limit: claude_code only. Only Claude Code supports the background control.
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "run delayed echo" with prompt
       """

@@ -845,11 +845,12 @@ class ToolCallSemantics:
             and isinstance(call.tool_response, records.ToolResponse)
             and call.tool_response.matches is not None
         ):
+            loaded_tools = "\n".join(
+                f"→ loaded tool: {tool_name}"
+                for tool_name in call.tool_response.matches
+            )
             answered = content(
-                "\n".join(
-                    f"→ loaded tool: {tool_name}"
-                    for tool_name in call.tool_response.matches
-                )
+                loaded_tools or "No matching tools."
             )
         if (
             result is None

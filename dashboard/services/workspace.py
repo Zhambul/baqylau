@@ -37,7 +37,7 @@ from domain.workspace import (
     DialogState,
     QueuedMessage,
 )
-from domain.entries import QuestionAskedBody
+from domain.entries import QuestionAskedBody, SessionEntry
 from domain.sessiondata import SessionTask
 from domain.values import AttentionPrompt
 from harness.contract import CanonicalEventReaction
@@ -156,7 +156,9 @@ class SessionApplicationService:
         answers: tuple[AnswerSelection, ...],
         origin: str,
     ) -> None:
-        questions = self._pending_questions(session_id).get(attention_id)
+        questions = self._pending_questions(
+            self.session_data_repository.pending_attention(session_id)
+        ).get(attention_id)
         if questions is None:
             raise ValueError("attention is no longer pending")
         if len(answers) != len(questions):
@@ -166,8 +168,9 @@ class SessionApplicationService:
     # --- the whole page's state in one answer ---------------------------------
 
     def snapshot(self, session_id: SessionId) -> SessionApplicationSnapshot:
-        self._sync_terminal_draft(session_id)
-        composer, dialog = self._state(session_id)
+        pending_attention = self.session_data_repository.pending_attention(session_id)
+        terminal = self._terminal_state(session_id, bool(pending_attention))
+        composer, dialog = self._state(session_id, pending_attention)
         tasks = self._tasks(session_id)
         dismissed = self.task_dismissal_repository.dismissed_task_ids(session_id)
         return SessionApplicationSnapshot(
@@ -181,45 +184,66 @@ class SessionApplicationService:
             ),
             composer=composer,
             dialog=dialog,
-            terminal=self.terminal_session_reader.state(session_id),
+            terminal=terminal,
             errors=self.audit_read_repository.errors_for_session(session_id),
         )
 
-    def _sync_terminal_draft(self, session_id: SessionId) -> None:
-        """Move a changed terminal draft to the shared composer state."""
+    def _terminal_state(
+        self,
+        session_id: SessionId,
+        attention_pending: bool,
+    ) -> TerminalSessionState:
+        """Read one native input state and sync it when it is a composer."""
         with self.session_terminal_gate.enter(session_id):
             terminal = self.terminal_session_reader.state(session_id)
-            state = terminal.input_state
-            if state is None or state.typed_text is None:
-                return
-            text = state.typed_text
-            with self._terminal_text_lock:
-                known = session_id in self._terminal_text
-                previous = self._terminal_text.get(session_id)
-                if known and previous == text:
-                    return
-                self._terminal_text[session_id] = text
-            workspace = self.session_workspace_repository.find(session_id)
-            draft = None if workspace is None else workspace.draft
-            if text:
-                self.session_workspace_repository.save_composer_draft(
-                    session_id,
-                    ComposerDraft(text, "terminal", self.clock() * 1000),
-                )
-            elif draft is not None and draft.origin == "terminal":
-                self.session_workspace_repository.save_composer_draft(
-                    session_id,
-                    ComposerDraft("", "terminal", self.clock() * 1000),
-                )
+            if attention_pending:
+                # A native question or plan uses the terminal input area for
+                # its own controls. It is not the message composer.
+                return TerminalSessionState(terminal.window_id, None)
+            self._sync_terminal_draft(session_id, terminal)
+            return terminal
 
-    def _state(self, session_id: SessionId) -> tuple[ComposerState, DialogState]:
+    def _sync_terminal_draft(
+        self,
+        session_id: SessionId,
+        terminal_session_state: TerminalSessionState,
+    ) -> None:
+        """Move a changed terminal draft to the shared composer state."""
+        state = terminal_session_state.input_state
+        if state is None or state.typed_text is None:
+            return
+        text = state.typed_text
+        with self._terminal_text_lock:
+            known = session_id in self._terminal_text
+            previous = self._terminal_text.get(session_id)
+            if known and previous == text:
+                return
+            self._terminal_text[session_id] = text
+        workspace = self.session_workspace_repository.find(session_id)
+        draft = None if workspace is None else workspace.draft
+        if text:
+            self.session_workspace_repository.save_composer_draft(
+                session_id,
+                ComposerDraft(text, "terminal", self.clock() * 1000),
+            )
+        elif draft is not None and draft.origin == "terminal":
+            self.session_workspace_repository.save_composer_draft(
+                session_id,
+                ComposerDraft("", "terminal", self.clock() * 1000),
+            )
+
+    def _state(
+        self,
+        session_id: SessionId,
+        pending_attention: tuple[SessionEntry, ...],
+    ) -> tuple[ComposerState, DialogState]:
         workspace = self.session_workspace_repository.find(session_id)
         if workspace is None:
             return ComposerState(None, None), DialogState(None)
 
         queue = workspace.queue
 
-        pending_attention_ids = set(self._pending_questions(session_id))
+        pending_attention_ids = set(self._pending_questions(pending_attention))
         dialog_draft = workspace.dialog
         if dialog_draft is not None and dialog_draft.attention_id not in pending_attention_ids:
             dialog_draft = None
@@ -229,8 +253,9 @@ class SessionApplicationService:
         data = self.session_data_repository.read(session_id)
         return () if data is None else data.session.tasks
 
+    @staticmethod
     def _pending_questions(
-        self, session_id: SessionId
+        pending_attention: tuple[SessionEntry, ...],
     ) -> Mapping[AttentionId, tuple[AttentionPrompt, ...]]:
         """The questions still waiting on a person, by attention.
 
@@ -239,7 +264,7 @@ class SessionApplicationService:
         """
         pending_questions = {
             entry.body.attention_id: entry.body.questions
-            for entry in self.session_data_repository.pending_attention(session_id)
+            for entry in pending_attention
             if isinstance(entry.body, QuestionAskedBody)
         }
         return pending_questions

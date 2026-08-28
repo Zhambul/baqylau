@@ -1,6 +1,7 @@
 Feature: subagent work reaches the session feed
 
   Scenario Outline: a subagent can send an exact message to the lead
+    # Harness limit: claude_code only. Codex subagents do not receive the send_message tool.
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" and assign work "message work" to a subagent that sends 'CHILD_TO_LEAD_529' to the lead and returns 'MESSAGE_WORK_DONE'
     Then work "message work" completes

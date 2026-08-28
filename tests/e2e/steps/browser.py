@@ -21,6 +21,7 @@ from tests.e2e.testkit.references import (
     SessionContinuations,
     SessionSpecs,
     Sessions,
+    Shells,
     Turns,
 )
 from tests.e2e.testkit.resume import assert_one_live_session, assert_saved_metadata
@@ -66,6 +67,23 @@ def release_active_browser_work(
         "release\n",
         encoding="utf-8",
     )
+
+
+@when(
+    parsers.parse(
+        'I release active browser work in session "{session_name}" with marker "{marker}"'
+    )
+)
+def release_active_browser_work_with_marker(
+    client: BaqylauClient,
+    sessions: Sessions,
+    session_name: str,
+    marker: str,
+) -> None:
+    working_directory = client.sessions.snapshot(
+        sessions.get(session_name)
+    ).data.session.working_directory
+    Path(working_directory, marker).write_text("release\n", encoding="utf-8")
 
 
 @when(parsers.parse('I start browser session "{session_name}" as turn "{turn_name}" with prompt'))
@@ -384,6 +402,31 @@ def reload_browser_session(
     session_name: str,
 ) -> None:
     browser_session_driver.reload(sessions.get(session_name))
+
+
+@then(parsers.parse("the browser running operation time is at least {seconds:d} seconds"))
+def browser_running_operation_time_is_old_enough(
+    browser_session_driver: BrowserSessionDriver,
+    seconds: int,
+) -> None:
+    browser_session_driver.assert_running_elapsed_at_least(seconds)
+
+
+@then(
+    parsers.parse(
+        'the browser completed operation time for command "{command_name}" is at least {seconds:d} seconds'
+    )
+)
+def browser_completed_operation_time_is_old_enough(
+    browser_session_driver: BrowserSessionDriver,
+    shells: Shells,
+    command_name: str,
+    seconds: int,
+) -> None:
+    browser_session_driver.assert_completed_elapsed_at_least(
+        shells.get(command_name),
+        seconds,
+    )
 
 
 @when(parsers.parse('I reproduce a rebuild cursor overtake for session "{session_name}"'))

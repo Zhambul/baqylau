@@ -626,7 +626,11 @@ def test_only_a_harness_queued_message_is_recorded(monkeypatch, status):
     )
     service.control_effects = cast(
         ControlEffectRecorder,
-        SimpleNamespace(message_queued=lambda found, request: recorded.append((found, request))),
+        SimpleNamespace(
+            message_queued=lambda found, request: recorded.append(
+                ("queued", found, request)
+            ),
+        ),
     )
     service.sessions = cast(SessionRepository, Sessions(session))
     monkeypatch.setattr(
@@ -642,9 +646,9 @@ def test_only_a_harness_queued_message_is_recorded(monkeypatch, status):
 
     service._audited(request)
 
-    assert recorded == ([(session, request)] if status == "queued" else [])
-
-
+    assert recorded == (
+        [("queued", session, request)] if status == "queued" else []
+    )
 def test_only_a_confirmed_durable_rename_is_recorded(monkeypatch) -> None:
     session = Session(
         SessionId("session-one"),

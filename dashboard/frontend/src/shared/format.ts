@@ -46,6 +46,7 @@ export function timeAgo(timestamp: number, now = Date.now() / 1_000): string {
 }
 
 export function duration(seconds: number): string {
+  if (seconds > 0 && seconds < 1) return '<1s';
   const total = Math.max(0, Math.round(seconds));
   if (total < 60) return `${String(total)}s`;
   if (total < 3_600)

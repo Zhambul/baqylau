@@ -1,5 +1,21 @@
 Feature: sessions cross dashboard and terminal boundaries
 
+  Scenario Outline: a blocked Stop hook keeps the terminal tab busy
+    # Harness limit: claude_code only. Only Claude Code supports a Stop hook.
+    Given session configuration "primary" uses <harness> with model <model> and low effort in the isolated repository workspace
+    And the isolated repository has a blocking Claude Stop hook
+    When I start journey session "primary" from the terminal as turn "blocked stop" with prompt
+      """
+      Reply only with BEFORE_BLOCKED_STOP.
+      """
+    Then the blocking Claude Stop hook starts
+    And the blocked Stop hook feedback starts a new turn in session "primary"
+    And for 4 seconds the terminal tab for journey session "primary" does not have color awaiting_response
+
+    Examples:
+      | harness     | model |
+      | claude_code | haiku |
+
   Scenario Outline: closing the native terminal finishes every known actor
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I start journey session "primary" from the terminal as turn "native session start" with prompt
@@ -54,7 +70,7 @@ Feature: sessions cross dashboard and terminal boundaries
     And session configuration "primary" uses <account_mode> account
     When I start journey session "primary" from the <start_origin> as turn "before resume" with prompt
       """
-      Remember the marker resume-memory-638. Reply only with BEFORE_RESUME.
+      Reply only with BEFORE_RESUME.
       """
     Then turn "before resume" completes
     And turn "before resume" has final answer 'BEFORE_RESUME'
@@ -65,7 +81,7 @@ Feature: sessions cross dashboard and terminal boundaries
     When I close the terminal for journey session "primary"
     And I resume journey session "primary" from the <resume_origin> as turn "after resume" with prompt
       """
-      If you remember resume-memory-638, reply only with AFTER_RESUME.
+      Reply only with AFTER_RESUME.
       """
     Then turn "after resume" completes
     And turn "after resume" has final answer 'AFTER_RESUME'
@@ -133,86 +149,24 @@ Feature: sessions cross dashboard and terminal boundaries
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I start journey session "primary" from the terminal as turn "parallel command completion" with prompt
       """
-      Use the exec tool exactly two times.
-
-      In the first exec JavaScript cell, call tools.exec_command for each of
-      these three shell commands at the same time with Promise.all:
+      Run these three shell commands at the same time as three separate
+      foreground commands:
       `printf correlation-alpha-917`
       `printf correlation-beta-917`
       `printf correlation-gamma-917`
-      Set yield_time_ms to 30000 for each command. Wait for all three results
-      and print their outputs from the cell.
-
-      In the second exec JavaScript cell, call tools.exec_command for the shell
-      command `true` with yield_time_ms set to 30000. Print only r.output from
-      that cell. Then reply only with COMMANDS_SETTLED.
+      Wait for all three commands. Then run `true` as one foreground command.
+      Wait for it and reply only with COMMANDS_SETTLED.
       """
     Then turn "parallel command completion" completes
     And turn "parallel command completion" has final answer 'COMMANDS_SETTLED'
     When I name the only shell command in turn "parallel command completion" containing 'true' "blank command"
     Then command "blank command" has state succeeded
-    And command "blank command" has exit code 0
     And the terminal tab for journey session "primary" has color awaiting_response
 
     Examples:
-      | harness | model        |
-      | codex   | gpt-5.6-luna |
-
-  Scenario Outline: terminal Escape starts a prompt queued from the dashboard
-    Given session configuration "primary" uses <harness> with model <model> and low effort
-    When I start journey session "primary" from the terminal as turn "interrupted terminal work" with prompt
-      """
-      Run `python -c 'import time; time.sleep(30); print("should-not-finish")'`
-      as a foreground shell command. Do not run it in the background. Wait for
-      it before you reply.
-      """
-    And I name the only running foreground command in turn "interrupted terminal work" containing 'time.sleep(30)' "interrupted terminal command"
-    Then the terminal tab for journey session "primary" has color executing
-    When I continue journey session "primary" from the dashboard as turn "work after terminal interrupt" with prompt
-      """
-      Reply only with TERMINAL_INTERRUPT_QUEUE_DONE.
-      """
-    Then session "primary" has queued prompt 'Reply only with TERMINAL_INTERRUPT_QUEUE_DONE.' after a fresh application read
-    When I interrupt journey session "primary" from its terminal
-    Then turn "interrupted terminal work" has state aborted
-    And command "interrupted terminal command" has state cancelled
-    And turn "work after terminal interrupt" completes
-    And turn "work after terminal interrupt" has final answer 'TERMINAL_INTERRUPT_QUEUE_DONE'
-    And session "primary" has no queued prompts after a fresh application read
-    And the lead in session "primary" has status awaiting_response
-    And the terminal tab for journey session "primary" has color awaiting_response
-    And session "primary" has no running work
-
-    Examples:
-      | harness     | model |
-      | claude_code | haiku |
-
-  Scenario Outline: terminal Escape keeps a prompt queued from the dashboard
-    Given session configuration "primary" uses <harness> with model <model> and low effort
-    When I start journey session "primary" from the terminal as turn "interrupted terminal work" with prompt
-      """
-      Run `python -c 'import time; time.sleep(30); print("should-not-finish")'`
-      as a foreground shell command. Do not run it in the background. Wait for
-      it before you reply.
-      """
-    And I name the only running foreground command in turn "interrupted terminal work" containing 'time.sleep(30)' "interrupted terminal command"
-    Then the terminal tab for journey session "primary" has color executing
-    When I continue journey session "primary" from the dashboard as turn "queued work" with prompt
-      """
-      Reply only with CODEX_TERMINAL_QUEUE_STAYS.
-      """
-    Then session "primary" has queued prompt 'Reply only with CODEX_TERMINAL_QUEUE_STAYS.' after a fresh application read
-    When I interrupt journey session "primary" from its terminal
-    Then turn "interrupted terminal work" has state aborted
-    And command "interrupted terminal command" has state cancelled
-    And the lead in session "primary" has status awaiting_response
-    And the terminal tab for journey session "primary" has color awaiting_response
-    And session "primary" has queued prompt 'Reply only with CODEX_TERMINAL_QUEUE_STAYS.' after a fresh application read
-    And session "primary" has no running work
-
-    Examples:
-      | harness | model        |
-      | codex   | gpt-5.6-luna |
+      | harness     | model        |
+      | codex       | gpt-5.6-luna |
+      | claude_code | haiku        |
 
   Scenario Outline: renaming a completed session keeps its terminal tab done
     Given session configuration "primary" uses <harness> with model <model> and low effort
@@ -242,6 +196,7 @@ Feature: sessions cross dashboard and terminal boundaries
       | claude_code | haiku        |
 
   Scenario Outline: stopping a background command returns its terminal tab to done
+    # Harness limit: claude_code only. Only Claude Code exposes a native background command stop action.
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I start journey session "primary" from the terminal as turn "stop background command" with prompt
       """

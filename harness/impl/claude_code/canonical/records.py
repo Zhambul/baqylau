@@ -854,6 +854,10 @@ class HookPayload(BaseModel):
     reason: str | None = None
     stop_hook_active: bool | None = None
     last_assistant_message: str | None = None
+    seconds_since_last_response: int | float | None = None
+    context_tokens: int | None = None
+    prompt_cache_likely_expired: bool | None = None
+    estimated_cache_write_usd: int | float | None = None
     background_tasks: list[ForeignMetadata] | None = None
     session_crons: list[ForeignMetadata] | None = None
     message: str | None = None

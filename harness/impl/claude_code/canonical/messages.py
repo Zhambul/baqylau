@@ -478,6 +478,15 @@ def translate_transcript(
                     occurred_at=occurred_at,
                 ),
             ]
+        if record.resumed:
+            started = prompt_turn(
+                raw_event,
+                turn_semantics,
+                native_identity,
+                occurred_at,
+            )
+            created = replace(created, turn_id=turn_semantics.current(raw_event))
+            return [*started, created]
         if role != MessageRole.USER:
             # A synthetic or parent-authored prompt is machinery or a brief; a
             # turn belongs to the person who asked for one.
@@ -598,11 +607,7 @@ def translate_transcript(
         assignment_id = assignment_id_from_claude_code_call(assignment_call)
         tool_call_semantics.assignment_finished(raw_event, record.actor_id)
         status = record.status
-        outcome: Outcome = (
-            Outcome.FAILED if status == "failed"
-            else Outcome.CANCELLED if status == "cancelled"
-            else Outcome.SUCCEEDED
-        )
+        outcome = background_outcome(status) or Outcome.UNKNOWN
         result = record.result
         payload = ActorAssignmentFinished(
             assignment_id,

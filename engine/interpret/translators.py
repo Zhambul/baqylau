@@ -30,7 +30,12 @@ from domain.events import (
 from domain.shells import shell_output_source_key
 from domain.ids import AssignmentId, ShellId
 from domain.records import RecordedTranslationDecision
-from domain.values import ActorRole, OpenWorkKind, Outcome, TextContent
+from domain.values import (
+    ActorRole,
+    OpenWorkKind,
+    Outcome,
+    TextContent,
+)
 from domain.values import EffortChangeReason, ModelChangeReason, ModelReference
 from harness.models.directives import (
     EffortSelectionObservation,
@@ -204,17 +209,20 @@ class ControlTranslator(CoreTranslator):
                 RecordedTranslationDecision.TRANSLATED,
             )
         if raw_event.source_name == "message_queued":
-            observation = decode_document(MessageQueueObservation, raw_event.payload)
+            queue_observation = decode_document(
+                MessageQueueObservation,
+                raw_event.payload,
+            )
             return TranslationResult(
                 (
                     canonical_event(
                         raw_event,
                         "message_queue",
-                        str(observation.request_id),
+                        str(queue_observation.request_id),
                         "queued",
                         MessageQueued(
-                            observation.request_id,
-                            TextContent(observation.text),
+                            queue_observation.request_id,
+                            TextContent(queue_observation.text),
                         ),
                     ),
                 ),

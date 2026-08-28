@@ -116,16 +116,18 @@ def menu_region(screen: str) -> str:
     no menu is on screen. Anchoring at the last header skips scrollback (old
     prompt echoes, even a previously captured menu) above the live one.
 
-    The header LINE is matched whitespace-tolerantly: the TUI renders it with
-    trailing padding (`"  Rewind \\n"`, the styled row's fill), and a byte-exact
-    `"\\n  Rewind\\n"` match missed it — every web rewind bailed `step: "open"`
-    while the menu sat open on screen (measured 2026-07-29, session 69caa362;
-    the header sibling of the MENU_FOOT chord drift above)."""
+    The header line is whitespace-tolerant. Claude Code changes its leading
+    indent with the menu layout and can add trailing styled padding. A fixed
+    two-space anchor therefore misses an open menu."""
     if not screen:
         return ""
     # the \n-prefix lets a header on the very first screen row still anchor
-    hits = list(re.finditer(
-        r"\n  %s[ \t]*\n" % re.escape(MENU_HEADER), "\n" + screen))
+    hits = list(
+        re.finditer(
+            r"\n[ \t]+%s[ \t]*\n" % re.escape(MENU_HEADER),
+            "\n" + screen,
+        )
+    )
     return screen[max(0, hits[-1].start() - 1):] if hits else ""
 
 

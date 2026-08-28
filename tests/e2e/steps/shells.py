@@ -5,7 +5,7 @@ from __future__ import annotations
 from pytest_bdd import parsers, then, when
 
 from api.sessiondata.models.entry import ShellFinishedBodyResponse
-from sdk.client import BaqylauClient
+from sdk.client import BaqylauClient, wait_for
 from sdk.state import SessionSnapshot, ShellState
 from tests.e2e.testkit import selectors, turns as turn_checks
 from tests.e2e.testkit.policy import WaitPolicy
@@ -279,6 +279,54 @@ def turn_final_answer_is_after_command_finishes(
     assert answers[0].cursor > command_finishes[0].cursor, (
         f"turn {turn_name!r} answered at {answers[0].cursor} before "
         f"command {command_name!r} finished at {command_finishes[0].cursor}"
+    )
+
+
+@then(parsers.parse(
+    'command "{command_name}" finishes before message from "{turn_name}" '
+    'enters the chat'
+))
+def command_finishes_before_message_enters(
+    client: BaqylauClient,
+    turns: Turns,
+    shells: Shells,
+    wait_policy: WaitPolicy,
+    turn_name: str,
+    command_name: str,
+) -> None:
+    turn = turn_checks.resolved(
+        client,
+        turns.get(turn_name),
+        timeout=wait_policy.feed,
+    )
+    turns.replace(turn_name, turn)
+    command = shells.get(command_name)
+
+    def finished_cursor() -> int | None:
+        snapshot = client.sessions.snapshot(command.session)
+        found = [
+            entry.cursor
+            for entry in snapshot.entries
+            if entry.actor_id == command.actor_id
+            and isinstance(entry.body, ShellFinishedBodyResponse)
+            and entry.body.shell_id == command.shell_id
+        ]
+        if len(found) > 1:
+            raise AssertionError(
+                f"command {command_name!r} has {len(found)} completion facts"
+            )
+        return found[0] if found else None
+
+    command_finish = wait_for(
+        f"command {command_name!r} to finish",
+        finished_cursor,
+        timeout=wait_policy.feed,
+    )
+    if turn.prompt_cursor is None:
+        raise AssertionError(f"turn {turn_name!r} has no prompt cursor")
+    assert command_finish < turn.prompt_cursor, (
+        f"command {command_name!r} finished at {command_finish}; "
+        f"turn {turn_name!r} prompt was recorded at {turn.prompt_cursor}"
     )
 
 

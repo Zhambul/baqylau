@@ -1357,9 +1357,6 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 phase = MessagePhase.END_TURN
             elif role == MessageRole.ASSISTANT:
                 phase = MessagePhase.INTERMEDIATE
-            message_id = message_id_from_codex(CodexMessageId(native_identity))
-            message_content = content(record.text, markdown=role == "assistant")
-            payload: EventPayload = MessageCreated(message_id, role, message_content, phase, None)
             # A message need not belong to a turn; the bindings above in this
             # same function always do, so the name has to admit None here.
             message_turn_id: TurnId | None = (
@@ -1367,10 +1364,19 @@ class CodexCanonicalTranslator(HarnessTranslator):
                 if isinstance(record, ChatRecord) and record.turn
                 else None
             )
+            message_id = message_id_from_codex(CodexMessageId(native_identity))
+            message_content = content(record.text, markdown=role == "assistant")
+            payload: EventPayload = MessageCreated(
+                message_id,
+                role,
+                message_content,
+                phase,
+                None,
+            )
             return [event(
                 raw_event,
                 "message",
-                native_identity,
+                str(message_id),
                 "created",
                 payload,
                 message_turn_id,

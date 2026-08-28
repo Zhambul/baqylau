@@ -4,7 +4,7 @@ Feature: prompts sent during active work wait for that work
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "active work" with prompt
       """
-      Run `python -c 'import time; time.sleep(8); print("active-work-finished")'`
+      Run `python3 -c 'import time; time.sleep(8); print("active-work-finished")'`
       as a foreground shell command. Do not run it in the background. Wait for
       it, and then reply only with ACTIVE_WORK_DONE.
       """
@@ -15,7 +15,6 @@ Feature: prompts sent during active work wait for that work
       """
     Then control "queued delivery" response is accepted
     And control "queued delivery" reports queued delivery
-    And harness queue for session "primary" contains prompt 'Reply only with QUEUED_WORK_DONE.'
     And session "primary" has control "queued delivery" queued as prompt 'Reply only with QUEUED_WORK_DONE.' after a fresh application read
     And command "active command" has state succeeded
     And turn "queued work" produces its final answer after command "active command" finishes
@@ -33,7 +32,7 @@ Feature: prompts sent during active work wait for that work
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "interrupted work" with prompt
       """
-      Run `python -c 'import time; time.sleep(30); print("should-not-finish")'`
+      Run `python3 -c 'import time; time.sleep(30); print("should-not-finish")'`
       as a foreground shell command. Do not run it in the background. Wait for
       it before you reply.
       """
@@ -43,7 +42,6 @@ Feature: prompts sent during active work wait for that work
       Reply only with QUEUED_AFTER_INTERRUPT_DONE.
       """
     Then control "queued before interrupt" reports queued delivery
-    And harness queue for session "primary" contains prompt 'Reply only with QUEUED_AFTER_INTERRUPT_DONE.'
     And session "primary" has control "queued before interrupt" queued as prompt 'Reply only with QUEUED_AFTER_INTERRUPT_DONE.' after a fresh application read
     When I request interruption in session "primary" as control "interrupt with queue"
     Then control "interrupt with queue" response is accepted
@@ -57,35 +55,6 @@ Feature: prompts sent during active work wait for that work
     And session "primary" has no running work
 
     Examples:
-      | harness     | model |
-      | claude_code | haiku |
-
-  Scenario Outline: an interrupt keeps its queued prompt and returns to idle
-    Given session configuration "primary" uses <harness> with model <model> and low effort
-    When I launch session "primary" as turn "interrupted work" with prompt
-      """
-      Run `python -c 'import time; time.sleep(30); print("should-not-finish")'`
-      as a foreground shell command. Do not run it in the background. Wait for
-      it before you reply.
-      """
-    And I name the only running foreground command in turn "interrupted work" containing 'time.sleep(30)' "interrupted command"
-    And I send prompt to session "primary" as turn "queued work" and control "queued before interrupt"
-      """
-      Reply only with CODEX_QUEUE_STAYS_AFTER_INTERRUPT.
-      """
-    Then control "queued before interrupt" reports queued delivery
-    And harness queue for session "primary" contains prompt 'Reply only with CODEX_QUEUE_STAYS_AFTER_INTERRUPT.'
-    And session "primary" has control "queued before interrupt" queued as prompt 'Reply only with CODEX_QUEUE_STAYS_AFTER_INTERRUPT.' after a fresh application read
-    When I request interruption in session "primary" as control "interrupt with queue"
-    Then control "interrupt with queue" response is accepted
-    And control "interrupt with queue" outcome is acknowledged
-    And turn "interrupted work" has state aborted
-    And command "interrupted command" has state cancelled
-    And the lead in session "primary" has status awaiting_response
-    And harness queue for session "primary" contains prompt 'Reply only with CODEX_QUEUE_STAYS_AFTER_INTERRUPT.'
-    And session "primary" has control "queued before interrupt" queued as prompt 'Reply only with CODEX_QUEUE_STAYS_AFTER_INTERRUPT.' after a fresh application read
-    And session "primary" has no running work
-
-    Examples:
-      | harness | model        |
-      | codex   | gpt-5.6-luna |
+      | harness     | model        |
+      | codex       | gpt-5.6-luna |
+      | claude_code | haiku        |

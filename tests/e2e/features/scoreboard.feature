@@ -49,6 +49,7 @@ Feature: the scoreboard summarizes the session
       | claude_code | haiku        | low    |
 
   Scenario Outline: a completed yielded command is history, not live background work
+    # Harness limit: codex only. Only Codex exposes this yielded command event shape.
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "yielded command" with prompt
       """

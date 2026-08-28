@@ -712,6 +712,58 @@ test('keeps the new-session and resume-preview modal boundaries', async ({
   expect(failures).toEqual([]);
 });
 
+test('does not replace an unknown saved effort during resume', async ({
+  page,
+}) => {
+  const launchBodies: Record<string, unknown>[] = [];
+  await page.route('**/api/resumable-sessions?*', async (route) => {
+    const response = await route.fetch();
+    const document: unknown = await response.json();
+    if (!Array.isArray(document) || !document.every(isRecord))
+      throw new Error('resume response is not a list of objects');
+    const rows = document;
+    await route.fulfill({
+      response,
+      json: rows.map((row, index) =>
+        index === 0 ? { ...row, effort: null } : row,
+      ),
+    });
+  });
+  await page.route('**/api/sessions', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.fallback();
+      return;
+    }
+    const body: unknown = route.request().postDataJSON();
+    if (!isRecord(body)) throw new Error('launch request is not an object');
+    launchBodies.push(body);
+    await route.fulfill({
+      status: 202,
+      json: { status: 'started', window_id: 'resume-window', reason: null },
+    });
+  });
+
+  await page.goto('/');
+  const workingDirectory = await page.locator('.dirpath').innerText();
+  await page.getByRole('button', { name: '+ session' }).click();
+  const dialog = page.getByRole('dialog', { name: 'new session' });
+  await dialog.getByLabel('directory').fill(workingDirectory);
+  await dialog.getByText('fresh conversation').click();
+  const row = dialog.getByRole('option').first();
+  await expect(row).toBeVisible();
+  await row.click();
+  await dialog
+    .getByPlaceholder(/what should .* start on\?/)
+    .fill('Resume without changing effort.');
+  const launch = dialog.getByRole('button', { name: 'launch', exact: true });
+  await expect(launch).toBeEnabled();
+  await launch.click();
+
+  await expect.poll(() => launchBodies.length).toBe(1);
+  expect(launchBodies[0]?.effort).toBeNull();
+  expect(launchBodies[0]?.resume_session_id).not.toBeNull();
+});
+
 test('expands the new-session prompt without an input scrollbar', async ({
   page,
 }) => {

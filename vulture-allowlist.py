@@ -326,6 +326,10 @@ tool_calls                          # HookPayload
 is_interrupt                        # HookPayload
 stop_hook_active                    # HookPayload
 last_assistant_message              # HookPayload
+seconds_since_last_response         # HookPayload
+context_tokens                      # HookPayload
+prompt_cache_likely_expired         # HookPayload
+estimated_cache_write_usd           # HookPayload
 background_tasks                    # HookPayload
 session_crons                       # HookPayload
 final                               # HookPayload

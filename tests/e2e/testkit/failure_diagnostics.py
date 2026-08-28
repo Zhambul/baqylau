@@ -265,10 +265,14 @@ def _terminal_state(
         return f"terminal\n  read_error={type(error).__name__}: {error}"
     finally:
         client.close()
-    if window_ids is not None:
-        windows = tuple(
-            window for window in windows if str(window.window_id) in window_ids
-        )
+    owned_window_ids = (
+        window_ids
+        if window_ids is not None
+        else _stored_window_ids(application.config.data_directory)
+    )
+    windows = tuple(
+        window for window in windows if str(window.window_id) in owned_window_ids
+    )
     if not windows:
         return "terminal\n  windows=[]"
     for window in windows:
@@ -293,6 +297,28 @@ def _terminal_state(
             "  screen=" + _compact(window.screen or window.screen_error or "")
         )
     return "\n".join(lines)
+
+
+def _stored_window_ids(directory: Path) -> frozenset[str]:
+    """Read only terminal windows that this isolated E2E run observed."""
+    database = directory / "main.db"
+    if not database.exists():
+        return frozenset()
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True, timeout=1)
+        rows = connection.execute(
+            "SELECT terminal_window_id FROM sessions "
+            "WHERE terminal_window_id IS NOT NULL "
+            "UNION SELECT terminal_window_id FROM raw_events "
+            "WHERE terminal_window_id IS NOT NULL"
+        )
+        return frozenset(str(row[0]) for row in rows if row[0] is not None)
+    except sqlite3.Error:
+        return frozenset()
+    finally:
+        if connection is not None:
+            connection.close()
 
 
 def _profile_state(application: ApplicationProcess) -> str:

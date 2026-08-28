@@ -1,6 +1,7 @@
 Feature: an armed monitor reports its events
 
   Scenario Outline: monitor events arrive after the turn that armed it
+    # Harness limit: claude_code only. Only Claude Code supports monitors.
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" and assign work "arm ticks" to the <worker> with prompt
       """
@@ -24,6 +25,7 @@ Feature: an armed monitor reports its events
       | claude_code | haiku | lead   |
 
   Scenario Outline: monitor completion arrives while the lead is still working
+    # Harness limit: claude_code only. Only Claude Code supports monitors.
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" and assign work "arm short ticks" to the lead with prompt
       """

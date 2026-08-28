@@ -58,10 +58,7 @@ class ControlEffectRecorder:
         """Record a queue acceptance that the harness confirmed."""
         if session.plugin is None:
             raise ValueError(f"session has no attached harness plugin: {session.session_id}")
-        attachments = " ".join(attachment.local_path for attachment in send_text.attachments)
-        text = attachments + ("\n" if attachments and send_text.text else "")
-        text += send_text.text
-        text = text.strip()
+        text = self._message_text(send_text)
         if not text:
             return
         harness = session.plugin.info.name
@@ -84,6 +81,14 @@ class ControlEffectRecorder:
                 ),
             )
         )
+
+    @staticmethod
+    def _message_text(send_text: SendText) -> str:
+        attachments = " ".join(
+            attachment.local_path for attachment in send_text.attachments
+        )
+        text = attachments + ("\n" if attachments and send_text.text else "")
+        return (text + send_text.text).strip()
 
     def plan_decided(
         self,

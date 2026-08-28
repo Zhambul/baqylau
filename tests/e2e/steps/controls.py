@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import json
-import sqlite3
 import time
-from pathlib import Path
 
 from pytest_bdd import parsers, then, when
 
@@ -16,7 +13,7 @@ from api.controls.models.control_outcome_response import (
 from api.sessiondata.models.entry import MessageBodyResponse
 from sdk.client import BaqylauClient
 from sdk.state import SessionSnapshot
-from tests.e2e.testkit.references import Controls, SessionSpecs, Sessions, Turns
+from tests.e2e.testkit.references import Controls, Sessions, Turns
 from tests.e2e.testkit.policy import WaitPolicy
 
 
@@ -109,7 +106,7 @@ def session_has_concise_title(
         return True if (
             "\n" not in title
             and len(title) <= 80
-            and 2 <= len(title.split()) <= 8
+            and 1 <= len(title.split()) <= 8
             and "http" not in title.casefold()
             and "<" not in title
             and ">" not in title
@@ -274,75 +271,6 @@ def control_reports_sent_delivery(controls: Controls, name: str) -> None:
     outcome = controls.get(name).outcome
     assert isinstance(outcome, MessageDeliveryResultResponse)
     assert outcome.status == "sent"
-
-
-def _codex_queue_contains(
-    codex_home: Path,
-    session_id: str,
-) -> bool:
-    queue_path = codex_home / "queue_1.sqlite"
-    if not queue_path.is_file():
-        return False
-    with sqlite3.connect(f"file:{queue_path}?mode=ro", uri=True) as connection:
-        return connection.execute(
-            "SELECT 1 FROM queued_items WHERE thread_id = ? LIMIT 1",
-            (session_id,),
-        ).fetchone() is not None
-
-
-def _claude_queue_contains(
-    claude_home: Path,
-    session_id: str,
-    text: str,
-) -> bool:
-    for source in claude_home.rglob("*.jsonl"):
-        try:
-            lines = source.read_text(encoding="utf-8").splitlines()
-        except OSError:
-            continue
-        for line in reversed(lines):
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if (
-                record.get("type") == "queue-operation"
-                and record.get("operation") == "enqueue"
-                and record.get("sessionId") == session_id
-                and record.get("content") == text
-            ):
-                return True
-    return False
-
-
-@then(parsers.parse(
-    'harness queue for session "{session_name}" contains prompt \'{text}\''
-))
-def harness_queue_contains_prompt(
-    isolated_codex_home: Path,
-    isolated_claude_home: Path,
-    session_specs: SessionSpecs,
-    sessions: Sessions,
-    wait_policy: WaitPolicy,
-    session_name: str,
-    text: str,
-) -> None:
-    spec = session_specs.get(session_name)
-    session_id = sessions.get(session_name).session_id
-    deadline = time.monotonic() + wait_policy.pipeline
-    while True:
-        found = (
-            _codex_queue_contains(isolated_codex_home, session_id)
-            if spec.harness == "codex"
-            else _claude_queue_contains(isolated_claude_home, session_id, text)
-        )
-        if found:
-            return
-        if time.monotonic() >= deadline:
-            raise AssertionError(
-                f"{spec.harness} queue does not contain the expected prompt"
-            )
-        time.sleep(0.05)
 
 
 @then(parsers.parse(

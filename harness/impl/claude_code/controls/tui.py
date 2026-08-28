@@ -149,6 +149,8 @@ def clear_input(
     readable."""
     fallback_lines = min(prev_text.count("\n") + 1 if prev_text else 1, CLEAR_LINES_MAX)
     before = _input_text(composer_driver, win)
+    if before == "":
+        return 0
     killed = 0
     for _ in range(CLEAR_LINES_MAX):
         composer_driver.send_key(win, "ctrl+u")

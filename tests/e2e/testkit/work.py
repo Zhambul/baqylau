@@ -539,6 +539,13 @@ class WorkDriver:
                 "interrupt request returns, reply only with INTERRUPT_SENT."
             )
             return WorkerControlRef(work, turn=self._send_lead_turn(work.session, prompt))
+        if spec.harness == "claude_code":
+            prompt = (
+                "Use TaskStop exactly once. Set task_id to "
+                f"{work.worker.address!r}. Do not stop another task. After the "
+                "stop request returns, reply only with INTERRUPT_SENT."
+            )
+            return WorkerControlRef(work, turn=self._send_lead_turn(work.session, prompt))
         raise AssertionError(f"harness {spec.harness!r} has no worker interrupt adapter")
 
     def _send_lead_turn(self, session: SessionRef, prompt: str) -> TurnRef:

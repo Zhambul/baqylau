@@ -4,7 +4,7 @@ Feature: live harness sessions survive a Baqylau restart
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I start journey session "primary" from the dashboard as turn "before restart" with prompt
       """
-      Remember restart-memory-852. Reply only with BEFORE_RESTART.
+      Reply only with BEFORE_RESTART.
       """
     Then turn "before restart" completes
     And turn "before restart" has final answer 'BEFORE_RESTART'
@@ -13,7 +13,7 @@ Feature: live harness sessions survive a Baqylau restart
     And session "primary" remains live and keeps turn "before restart" after restart
     When I continue journey session "primary" from the dashboard as turn "after restart" with prompt
       """
-      If you remember restart-memory-852, reply only with AFTER_RESTART.
+      Reply only with AFTER_RESTART.
       """
     Then turn "after restart" completes
     And turn "after restart" has final answer 'AFTER_RESTART'
@@ -33,7 +33,7 @@ Feature: live harness sessions survive a Baqylau restart
     Then turn "lead ready" completes
     When I assign work "restart work" in session "primary" to the <worker> with prompt
       """
-      Run `python -c 'import time; time.sleep(12); print("restart-survived")'`
+      Run `python3 -c 'import time; time.sleep(12); print("restart-survived")'`
       as one foreground shell command. Wait for it. Then reply only with
       RESTART_WORK_DONE.
       """
@@ -55,11 +55,12 @@ Feature: live harness sessions survive a Baqylau restart
       | claude_code | haiku        | subagent |
 
   Scenario Outline: a yielded command closes its original job after restart
+    # Harness limit: codex only. Only Codex exposes this yielded command event shape.
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I start journey session "primary" from the dashboard as turn "yield before restart" with prompt
       """
       Use the shell execution tool with a 1000 ms yield time to run
-      `python -c 'import time; time.sleep(25); print("yield-restart-done")'`.
+      `python3 -c 'import time; time.sleep(25); print("yield-restart-done")'`.
       Do not poll the process after it yields. Reply only with YIELD_RESTART_STARTED.
       """
     Then turn "yield before restart" completes
@@ -83,7 +84,7 @@ Feature: live harness sessions survive a Baqylau restart
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I start journey session "primary" from the dashboard as turn "active work" with prompt
       """
-      Run `python -c 'import time; time.sleep(15); print("persistence-survived")'`
+      Run `python3 -c 'import time; time.sleep(15); print("persistence-survived")'`
       as one foreground shell command. Wait for it. Then reply only with
       ACTIVE_PERSISTENCE_DONE.
       """

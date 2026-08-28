@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, cast
 
 from domain.ids import SessionId, WindowId
@@ -45,11 +46,14 @@ class Workspaces:
 
 
 class ReadModel:
+    def __init__(self) -> None:
+        self.attention: tuple[Any, ...] = ()
+
     def read(self, _session_id):
         return None
 
     def pending_attention(self, _session_id):
-        return ()
+        return self.attention
 
 
 class AuditReads:
@@ -72,9 +76,14 @@ class TaskDismissals:
         return set()
 
 
-def service(states: TerminalStates, workspaces: Workspaces, times: list[float]):
+def service(
+    states: TerminalStates,
+    workspaces: Workspaces,
+    times: list[float],
+    read_model: ReadModel | None = None,
+):
     return SessionApplicationService(
-        cast(Any, ReadModel()),
+        cast(Any, read_model or ReadModel()),
         states,
         cast(Any, AuditReads()),
         cast(Any, workspaces),
@@ -127,3 +136,35 @@ def test_an_empty_terminal_clears_only_a_terminal_owned_draft() -> None:
     assert application.snapshot(session_id).composer.draft == ComposerDraft(
         "web edit", "browser-one", 3000
     )
+
+
+def test_native_attention_text_is_not_a_composer_draft() -> None:
+    session_id = SessionId("session-one")
+    states = TerminalStates("Which option should I use?")
+    workspaces = Workspaces()
+    read_model = ReadModel()
+    read_model.attention = (SimpleNamespace(body=object()),)
+
+    snapshot = service(states, workspaces, [], read_model).snapshot(session_id)
+
+    assert snapshot.composer.draft is None
+    assert snapshot.terminal == TerminalSessionState(WindowId("window-one"), None)
+
+
+def test_native_attention_does_not_replace_a_saved_browser_draft() -> None:
+    session_id = SessionId("session-one")
+    states = TerminalStates("Approve this plan?")
+    workspaces = Workspaces()
+    workspaces.save_composer_draft(
+        session_id,
+        ComposerDraft("browser draft", "browser-one", 1000),
+    )
+    read_model = ReadModel()
+    read_model.attention = (SimpleNamespace(body=object()),)
+
+    snapshot = service(states, workspaces, [], read_model).snapshot(session_id)
+
+    assert snapshot.composer.draft == ComposerDraft(
+        "browser draft", "browser-one", 1000
+    )
+    assert snapshot.terminal == TerminalSessionState(WindowId("window-one"), None)

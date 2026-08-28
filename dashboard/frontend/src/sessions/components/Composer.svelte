@@ -256,6 +256,11 @@
       if (outcome.kind === 'message-delivery' && outcome.status === 'queued') {
         view.settlePendingPrompt(requestId, 'dropped', 'queued');
         view.queuePendingPrompt(requestId, text);
+      } else if (
+        outcome.kind === 'message-delivery' &&
+        outcome.status === 'sent'
+      ) {
+        view.confirmPendingPrompt(requestId);
       }
       edited = false;
       pendingRemote = null;

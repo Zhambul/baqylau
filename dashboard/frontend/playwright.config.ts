@@ -1,7 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
 const baseURL = process.env.BAQYLAU_E2E_BASE_URL ?? 'http://127.0.0.1:8794';
-const workers = Number.parseInt(process.env.BAQYLAU_E2E_WORKERS ?? '16', 10);
+const workers = Number.parseInt(process.env.BAQYLAU_E2E_WORKERS ?? '4', 10);
 
 export default defineConfig({
   expect: {

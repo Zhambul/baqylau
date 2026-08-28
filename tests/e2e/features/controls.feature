@@ -13,14 +13,15 @@ Feature: session controls change live session state
     And the application contains exactly session "primary"
 
     Examples:
-      | harness | model |
-      | codex   | gpt-5.6-luna |
+      | harness     | model        |
+      | codex       | gpt-5.6-luna |
+      | claude_code | haiku        |
 
   Scenario Outline: closing a session stops its active work
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" and assign work "work during close" to the <worker> with prompt
       """
-      Run `python -c 'import time; time.sleep(30); print("unexpected-finish")'`
+      Run `python3 -c 'import time; time.sleep(30); print("unexpected-finish")'`
       as a foreground shell command. Do not run it in the background. Wait for
       it before you reply.
       """
@@ -103,6 +104,7 @@ Feature: session controls change live session state
       | claude_code | haiku |
 
   Scenario Outline: a parked session keeps a durable custom name
+    # Harness limit: claude_code only. Claude Code rejects automatic naming without a live terminal.
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "parked name sample" with prompt
       """
@@ -127,6 +129,7 @@ Feature: session controls change live session state
       | claude_code | haiku        | Parked Claude Code title 82451 |
 
   Scenario Outline: a parked generic session can replace a custom title automatically
+    # Harness limit: codex only. Codex can generate and store a title without a live terminal.
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "parked generic name" with prompt
       """

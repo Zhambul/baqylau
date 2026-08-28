@@ -77,11 +77,11 @@ The only run-scoped shared resource is a locked, atomic snapshot of read-only
 account usage, which prevents every daemon from launching the same native usage
 probes.
 
-The default is 20 live scenarios at a time and four frontend browser tests.
+The default is six live scenarios at a time and four frontend browser tests.
 The suite is dominated by subprocess, socket, and remote-model waits rather
-than Python CPU work. A measured 20-worker run starts every Codex and Claude
-Code session and keeps useful work in flight. xdist uses separate Python
-processes, so the GIL does not serialize them.
+than Python CPU work. Six workers keep useful work in flight without the high
+memory and load cost of one daemon and harness process group for each worker.
+xdist uses separate Python processes, so the GIL does not serialize them.
 Dynamic one-test scheduling and a one-test scheduling chunk keep every scenario
 independently assignable and prevent fail-fast from leaving a large preassigned
 tail. Codex, Claude Code, usage, and automatic-title scenarios all share this
@@ -92,7 +92,7 @@ explicit opt-in suites control one machine-level resource.
 `make e2e` is the complete end-to-end gate. It runs the live scenarios, the
 live-browser scenarios, and then static Playwright. Playwright rebuilds the
 production application before its suite. Every suite uses its measured maximum
-reliable parallelism: 20 workers for each live suite and four for static
+reliable parallelism: six workers for each live suite and four for static
 Playwright. The suite boundaries are serial, so a failed token-spending layer
 stops the gate before the next layer starts. Override `E2E_WORKERS` when you
 measure another machine. Cases do not share ports, data directories, harness

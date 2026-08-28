@@ -58,6 +58,62 @@ class RepositoryWorkspace:
             raise
         return tuple(granted)
 
+    def install_blocking_stop_hook(self) -> Path:
+        """Install a Stop hook that continues the session one time."""
+        claude_directory = Path(self.working_directory) / ".claude"
+        hook_directory = claude_directory / "hooks"
+        hook_directory.mkdir(parents=True, exist_ok=True)
+        script = hook_directory / "blocking_stop.py"
+        script.write_text(
+            """from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+
+request = json.load(sys.stdin)
+if request.get("stop_hook_active"):
+    raise SystemExit(0)
+
+Path(__file__).with_name("blocking-stop.started").write_text(
+    "started\\n",
+    encoding="utf-8",
+)
+print(json.dumps({
+    "decision": "block",
+    "reason": (
+        "Run the exact foreground Bash command `sleep 8`. Wait for it. "
+        "Then reply only with BLOCKED_STOP_CONTINUED."
+    ),
+}))
+""",
+            encoding="utf-8",
+        )
+        (claude_directory / "settings.json").write_text(
+            json.dumps({
+                "hooks": {
+                    "Stop": [{
+                        "hooks": [{
+                            "type": "command",
+                            "command": "python3 .claude/hooks/blocking_stop.py",
+                        }],
+                    }],
+                },
+            }),
+            encoding="utf-8",
+        )
+        return self.blocking_stop_marker
+
+    @property
+    def blocking_stop_marker(self) -> Path:
+        return (
+            Path(self.working_directory)
+            / ".claude"
+            / "hooks"
+            / "blocking-stop.started"
+        )
+
     def remove_linked_worktree(self) -> None:
         _git(
             Path(self.repository_root),

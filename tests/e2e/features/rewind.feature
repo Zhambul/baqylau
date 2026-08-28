@@ -32,6 +32,7 @@ Feature: rewind restores a named prompt for revision
       | claude_code | haiku |
 
   Scenario Outline: code rewind restores the file at the selected checkpoint
+    # Harness limit: claude_code only. Codex supports conversation rewind only.
     Given the rewind file contains 'rewind-baseline-194'
     And session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "file checkpoint" with prompt
@@ -58,6 +59,7 @@ Feature: rewind restores a named prompt for revision
       | claude_code | haiku |
 
   Scenario Outline: combined rewind restores file and conversation together
+    # Harness limit: claude_code only. Codex supports conversation rewind only.
     Given the rewind file contains 'rewind-baseline-194'
     And session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "kept memory" with prompt

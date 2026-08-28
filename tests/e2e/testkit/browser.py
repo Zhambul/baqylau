@@ -40,6 +40,7 @@ from tests.e2e.testkit.references import (
     QuestionRef,
     SessionContinuationRef,
     SessionSpec,
+    ShellRef,
     TurnRef,
 )
 from tests.e2e.testkit.resume import SessionResumeSupport
@@ -151,7 +152,19 @@ class BrowserSessionDriver:
         marker = self._usage_document_marker
         if marker is None or marker == "pending":
             raise AssertionError("the initial application read was not intercepted")
-        name = self._page.locator(".aname").filter(has_text=re.compile(rf"^{re.escape(harness)}$"))
+        harness_rows = [
+            row
+            for row in self._client.usage.state().usage_rows
+            if row.harness == harness
+        ]
+        if len(harness_rows) != 1:
+            raise AssertionError(
+                f"harness {harness!r} has {len(harness_rows)} usage rows"
+            )
+        display_name = harness_rows[0].display_name
+        name = self._page.locator(".aname").filter(
+            has_text=re.compile(rf"^{re.escape(display_name)}$")
+        )
         expect(name).to_be_visible(
             timeout=self._milliseconds(self._wait_policy.feed),
         )
@@ -424,6 +437,75 @@ class BrowserSessionDriver:
         self._page.reload()
         expect(self._page.get_by_role("button", name="+ session")).to_be_visible(
             timeout=self._milliseconds(self._wait_policy.feed),
+        )
+
+    def assert_running_elapsed_at_least(self, seconds: int) -> None:
+        timer = self._page.locator(".vsum .vtimer").first
+
+        def old_enough() -> bool | None:
+            if timer.count() == 0:
+                return None
+            return (
+                True
+                if self._duration_seconds(timer.inner_text()) >= seconds
+                else None
+            )
+
+        wait_for(
+            f"browser running operation time to reach {seconds} seconds",
+            old_enough,
+            timeout=self._wait_policy.feed,
+        )
+
+    def assert_completed_elapsed_at_least(
+        self,
+        reference: ShellRef,
+        seconds: int,
+    ) -> None:
+        snapshot = self._client.sessions.snapshot(reference.session)
+        matching = [
+            shell
+            for shell in snapshot.shells()
+            if shell.shell_id == reference.shell_id
+        ]
+        if len(matching) != 1:
+            raise AssertionError(
+                f"shell {reference.shell_id!r} has {len(matching)} matches"
+            )
+        command = matching[0].command
+        block = self._page.locator(".stream .blk").filter(
+            has=self._page.locator(".bsum", has_text=command)
+        )
+        summaries = self._page.locator(".stream .vsum")
+        for index in range(summaries.count()):
+            if block.count() > 0:
+                break
+            summaries.nth(index).click()
+        expect(block).to_have_count(
+            1,
+            timeout=self._milliseconds(self._wait_policy.feed),
+        )
+        tail = block.locator(".cqt")
+        expect(tail).to_be_visible(
+            timeout=self._milliseconds(self._wait_policy.feed),
+        )
+        elapsed = self._duration_seconds(tail.inner_text())
+        if elapsed < seconds:
+            raise AssertionError(
+                f"browser completed operation time is {elapsed} seconds, not at least {seconds}"
+            )
+
+    @staticmethod
+    def _duration_seconds(text: str) -> int:
+        hours = re.search(r"(\d+)h", text)
+        minutes = re.search(r"(\d+)m", text)
+        seconds = re.search(r"(\d+)s", text)
+        if hours is None and minutes is None and seconds is None:
+            raise AssertionError(f"browser operation time is not readable: {text!r}")
+        return (
+            (0 if hours is None else int(hours.group(1)) * 3_600)
+            + (0 if minutes is None else int(minutes.group(1)) * 60)
+            + (0 if seconds is None else int(seconds.group(1)))
         )
 
     def interrupt_turn(self) -> None:

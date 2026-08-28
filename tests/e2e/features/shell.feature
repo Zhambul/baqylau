@@ -24,6 +24,7 @@ Feature: shell work reaches the session feed
       | claude_code | haiku        | low    | subagent |
 
   Scenario Outline: input continues the same interactive command
+    # Harness limit: codex only. Only Codex exposes native input for a yielded command.
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" and assign work "answer interactive command" to the <worker> with prompt
       """

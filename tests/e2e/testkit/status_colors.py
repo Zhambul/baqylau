@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 from sdk.client import wait_for
@@ -24,12 +25,7 @@ class KittyTabColorReader:
         self._remote = remote or KittyRemote()
 
     def wait_for(self, window_id: str, expected: TabAppearance, timeout: float) -> None:
-        wanted = {
-            "active_bg": _value(expected.active_background),
-            "active_fg": _value(expected.active_foreground),
-            "inactive_bg": _value(expected.inactive_background),
-            "inactive_fg": _value(expected.inactive_foreground),
-        }
+        wanted = self._values(expected)
 
         def matches() -> bool | None:
             found = self._read(WindowId(window_id))
@@ -40,6 +36,32 @@ class KittyTabColorReader:
             matches,
             timeout=timeout,
         )
+
+    def assert_not_seen_for(
+        self,
+        window_id: str,
+        unexpected: TabAppearance,
+        duration: float,
+    ) -> None:
+        """Fail if Kitty uses the unexpected color during the full interval."""
+        unwanted = self._values(unexpected)
+        deadline = time.monotonic() + duration
+        while time.monotonic() < deadline:
+            found = self._read(WindowId(window_id))
+            if found == unwanted:
+                raise AssertionError(
+                    f"Kitty tab {window_id!r} used unexpected colors {unwanted}"
+                )
+            time.sleep(0.1)
+
+    @staticmethod
+    def _values(appearance: TabAppearance) -> dict[str, int]:
+        return {
+            "active_bg": _value(appearance.active_background),
+            "active_fg": _value(appearance.active_foreground),
+            "inactive_bg": _value(appearance.inactive_background),
+            "inactive_fg": _value(appearance.inactive_foreground),
+        }
 
     def _read(self, window_id: WindowId) -> dict[str, int | None] | None:
         output = self._remote.capture(

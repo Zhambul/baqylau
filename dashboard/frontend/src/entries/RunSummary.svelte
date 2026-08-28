@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
 
+  import { duration } from '../shared/format';
   import type { RunSummary } from './feed-model';
 
   let { summary, ontoggle }: { summary: RunSummary; ontoggle: () => void } =
@@ -23,14 +24,6 @@
   onDestroy(() => {
     if (timer !== null) clearInterval(timer);
   });
-
-  function duration(seconds: number): string {
-    const total = Math.max(0, Math.round(seconds));
-    if (total < 60) return `${String(total)}s`;
-    if (total < 3_600)
-      return `${String(Math.floor(total / 60))}m ${String(total % 60)}s`;
-    return `${String(Math.floor(total / 3_600))}h ${String(Math.floor((total % 3_600) / 60))}m`;
-  }
 </script>
 
 <button

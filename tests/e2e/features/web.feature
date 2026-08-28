@@ -1,6 +1,7 @@
 Feature: web activity stays on the work that requested it
 
   Scenario Outline: tool discovery keeps the loaded tools in the result
+    # Harness limit: claude_code only. Only Claude Code exposes the ToolSearch tool.
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" and assign work "tool discovery" to the lead with prompt
       """

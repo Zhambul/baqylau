@@ -238,8 +238,6 @@
     }
     escapeTimer = setTimeout(() => {
       escapeTimer = null;
-      if (view.capabilities?.interrupt === true)
-        void interruptFromKeyboard(view);
     }, ESCAPE_GESTURE_MILLISECONDS);
   }
 

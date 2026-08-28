@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import os
-import subprocess
 import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -43,7 +43,6 @@ from terminal.models import (
     TextSubmitRequest,
 )
 from domain.events import QuestionAsked
-from core.process import process_executable
 
 # The terminal's own window id: `terminal/` may depend on nothing outside
 # itself, so this module — the harness boundary that talks to a live
@@ -51,7 +50,14 @@ from core.process import process_executable
 # terminal contract request.
 from terminal.models.values import WindowId as NativeWindowId
 from harness.impl.codex.canonical import rollout, title
-from harness.impl.codex.canonical.records import PromptRecord, RolloutRecord, TaskStartedRecord, TurnAbortedRecord
+from harness.impl.codex.canonical.records import (
+    ChatRecord,
+    PromptRecord,
+    RolloutRecord,
+    TaskStartedRecord,
+    TurnAbortedRecord,
+)
+from harness.impl.codex.canonical.sources import RolloutCatalog
 from harness.impl.codex.continuity import RewindContinuity
 from harness.impl.codex.controls import backtrack, composer, dialog, modeldialog, plandialog
 from harness.services.terminal_driver import TerminalDriver
@@ -61,6 +67,17 @@ from domain.ids import HarnessName
 
 NATIVE_TITLE_CONFIRM_TIMEOUT_SECONDS = 5.0
 NATIVE_TITLE_CONFIRM_POLL_SECONDS = 0.05
+SEND_CONFIRM_TIMEOUT_SECONDS = 3.0
+SEND_CONFIRM_POLL_SECONDS = 0.05
+PLAN_COMMAND = "/plan"
+PLAN_MODE_MARKER = "Plan mode (shift+tab to cycle)"
+RENAME_COMMAND_PREFIX = "/rename "
+
+
+@dataclass(frozen=True)
+class RolloutPosition:
+    path: str
+    position: int
 
 
 def _result(request: ControlRequest, succeeded: bool, reason: str) -> ControlResult:
@@ -86,66 +103,19 @@ def _message(send_text: SendText) -> str:
     return attachments + ("\n" if attachments and send_text.text else "") + send_text.text
 
 
-def _queue(
-    send_text: SendText,
-    harness_process_id: int | None,
-    harness_runtime_config: HarnessRuntimeConfig,
-) -> ControlResult | MessageDeliveryResult:
-    executable = (
-        process_executable(harness_process_id)
-        if harness_process_id is not None
-        else None
-    )
-    if executable is None:
-        return ControlResult(
-            send_text.request_id,
-            ControlAcknowledgement.REJECTED,
-            "Codex process executable is unavailable",
-        )
-    command = [
-        executable,
-        "queue",
-        "--thread",
-        str(send_text.session_id),
-        "--message",
-        send_text.text,
-    ]
-    for attachment in send_text.attachments:
-        command.extend(("--image", attachment.local_path))
-    # The daemon can control a profile that is not its own default profile.
-    # Give this Codex child the same configured home as the terminal session.
-    environment = os.environ.copy()
-    environment["CODEX_HOME"] = str(
-        harness_runtime_config.configuration_directory
-    )
-    try:
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-            env=environment,
-        )
-    except (OSError, subprocess.TimeoutExpired) as error:
-        return ControlResult(
-            send_text.request_id,
-            ControlAcknowledgement.REJECTED,
-            f"Codex did not accept the message: {error}",
-        )
-    if completed.returncode != 0:
-        reason = (completed.stderr or completed.stdout).strip()
-        return ControlResult(
-            send_text.request_id,
-            ControlAcknowledgement.REJECTED,
-            reason or "Codex did not accept the message",
-        )
-    return MessageDeliveryResult(send_text.request_id, MessageDeliveryStatus.QUEUED)
-
-
 class SendTextHandler(ControlHandler):
-    def __init__(self, harness_runtime_config: HarnessRuntimeConfig) -> None:
+    def __init__(
+        self,
+        harness_runtime_config: HarnessRuntimeConfig,
+        rewind_continuity: RewindContinuity,
+        title_repository: title.CodexThreadTitleRepository,
+    ) -> None:
         self.runtime = harness_runtime_config
+        self.rewind_continuity = rewind_continuity
+        self.titles = title_repository
+        self.rollouts = RolloutCatalog(
+            str(harness_runtime_config.configuration_directory)
+        )
 
     def __call__(
         self,
@@ -158,50 +128,228 @@ class SendTextHandler(ControlHandler):
         if window_id is None:
             return ControlResult(request.request_id, ControlAcknowledgement.REJECTED, "session is not live")
         if control_context.lead_active:
-            return _queue(
-                request,
-                control_context.session.harness_process_id,
-                self.runtime,
+            result = _submit(request, control_context, _message(request))
+            if result.status != ControlAcknowledgement.ACKNOWLEDGED:
+                return ControlResult(
+                    result.request_id,
+                    ControlAcknowledgement.REJECTED,
+                    result.reason,
+                )
+            return MessageDeliveryResult(
+                result.request_id,
+                MessageDeliveryStatus.QUEUED,
             )
+        terminal_driver = TerminalDriver(control_context.terminal)
+        rewind_pending = self.rewind_continuity.pending(
+            request.session_id,
+            window_id,
+        )
         try:
-            composer.clear(TerminalDriver(control_context.terminal), window_id)
+            composer.clear(terminal_driver, window_id)
         except composer.ComposerError as error:
             return ControlResult(
                 request.request_id,
                 ControlAcknowledgement.REJECTED,
                 str(error),
             )
-        result = _submit(request, control_context, _message(request))
+        source_positions = self._source_positions(
+            control_context.session.source_reference
+        )
+        submitted_message = _message(request)
+        message = submitted_message.strip()
+        if rewind_pending:
+            try:
+                composer.CodexComposer().insert(
+                    terminal_driver,
+                    window_id,
+                    submitted_message,
+                )
+            except composer.ComposerError as error:
+                return ControlResult(
+                    request.request_id,
+                    ControlAcknowledgement.REJECTED,
+                    str(error),
+                )
+            result = _result(
+                request,
+                terminal_driver.send_key(window_id, "enter"),
+                "the Codex message enter key was not delivered",
+            )
+        else:
+            result = _submit(request, control_context, submitted_message)
         if result.status != ControlAcknowledgement.ACKNOWLEDGED:
             return ControlResult(
                 result.request_id,
                 ControlAcknowledgement.REJECTED,
                 result.reason,
             )
-        return MessageDeliveryResult(result.request_id, MessageDeliveryStatus.SENT)
+        deadline = time.monotonic() + SEND_CONFIRM_TIMEOUT_SECONDS
+        while True:
+            if message == PLAN_COMMAND and PLAN_MODE_MARKER in (
+                terminal_driver.get_text(window_id) or ""
+            ):
+                return MessageDeliveryResult(
+                    result.request_id,
+                    MessageDeliveryStatus.SENT,
+                )
+            renamed_to = _renamed_to(message)
+            if renamed_to is not None:
+                observed_title = self.titles.read_title(
+                    control_context.session.source_reference
+                )
+                if observed_title is not None and observed_title.text == renamed_to:
+                    return MessageDeliveryResult(
+                        result.request_id,
+                        MessageDeliveryStatus.SENT,
+                    )
+            confirmed = self._confirmed_prompt(
+                source_positions,
+                message,
+            )
+            if confirmed is not None:
+                return MessageDeliveryResult(
+                    result.request_id,
+                    MessageDeliveryStatus.SENT,
+                )
+            if rewind_pending and self._rewind_started(
+                source_positions,
+                control_context.session.source_reference,
+            ):
+                return MessageDeliveryResult(
+                    result.request_id,
+                    MessageDeliveryStatus.SENT,
+                )
+            if time.monotonic() >= deadline:
+                return ControlResult(
+                    result.request_id,
+                    ControlAcknowledgement.INDETERMINATE,
+                    "Codex did not confirm the submitted message",
+                )
+            time.sleep(SEND_CONFIRM_POLL_SECONDS)
+
+    def _source_positions(
+        self,
+        source_reference: str,
+    ) -> tuple[RolloutPosition, ...]:
+        paths = {*self.rollouts.paths(), source_reference}
+        positions: list[RolloutPosition] = []
+        for path in paths:
+            try:
+                position = os.path.getsize(path)
+            except OSError:
+                position = 0
+            positions.append(RolloutPosition(path, position))
+        return tuple(positions)
+
+    def _confirmed_prompt(
+        self,
+        source_positions: tuple[RolloutPosition, ...],
+        expected_text: str,
+    ) -> str | None:
+        paths = {
+            *self.rollouts.paths(),
+            *(source_position.path for source_position in source_positions),
+        }
+        for path in paths:
+            if _confirmed_prompt_after(
+                path,
+                _position_for(source_positions, path),
+                expected_text,
+            ):
+                return path
+        return None
+
+    def _rewind_started(
+        self,
+        source_positions: tuple[RolloutPosition, ...],
+        source_reference: str,
+    ) -> bool:
+        original = os.path.realpath(source_reference)
+        return any(
+            os.path.realpath(path) != original
+            and any(
+                isinstance(record, TaskStartedRecord)
+                for record in _rollout_records_after(
+                    path,
+                    _position_for(source_positions, path),
+                )
+            )
+            for path in self.rollouts.paths()
+        )
 
 
-def _rollout_abort_state(path: str, position: int) -> tuple[bool, bool]:
+def _position_for(
+    source_positions: tuple[RolloutPosition, ...],
+    path: str,
+) -> int:
+    return next(
+        (
+            source_position.position
+            for source_position in source_positions
+            if source_position.path == path
+        ),
+        0,
+    )
+
+
+def _renamed_to(message: str) -> str | None:
+    if not message.startswith(RENAME_COMMAND_PREFIX):
+        return None
+    name = message.removeprefix(RENAME_COMMAND_PREFIX).strip()
+    return name or None
+
+
+def _rollout_lines_after(path: str, position: int) -> tuple[str, ...]:
+    if position < 0:
+        return ()
     try:
         with open(path, "rb") as source:
             source.seek(position)
             lines = source.read().split(b"\n")[:-1]
     except OSError:
-        return False, False
-    abort_index = None
-    # None marks a line that would not parse. The slot is KEPT rather than
-    # skipped because abort_index is an index into this list, and dropping
-    # unparseable lines would silently shift every position after one.
-    records: list[RolloutRecord | None] = []
+        return ()
+    decoded: list[str] = []
     for line in lines:
         try:
-            record = rollout.parse_line(line.decode())
-        except (UnicodeDecodeError, ValidationError):
+            decoded.append(line.decode())
+        except UnicodeDecodeError:
+            continue
+    return tuple(decoded)
+
+
+def _rollout_records_after(path: str, position: int) -> tuple[RolloutRecord | None, ...]:
+    records: list[RolloutRecord | None] = []
+    for line in _rollout_lines_after(path, position):
+        try:
+            record = rollout.parse_line(line)
+        except ValidationError:
             records.append(None)
             continue
         records.append(record)
+    return tuple(records)
+
+
+def _confirmed_prompt_after(
+    path: str,
+    position: int,
+    expected_text: str,
+) -> bool:
+    for record in _rollout_records_after(path, position):
+        if (
+            isinstance(record, ChatRecord)
+            and record.role == "user"
+            and record.text == expected_text
+        ):
+            return True
+    return False
+
+
+def _rollout_abort_state(path: str, position: int) -> tuple[bool, bool]:
+    records = _rollout_records_after(path, position)
+    abort_index = None
+    for index, record in enumerate(records):
         if abort_index is None and isinstance(record, TurnAbortedRecord):
-            abort_index = len(records) - 1
+            abort_index = index
     if abort_index is None:
         return False, False
     queued = any(isinstance(record, (TaskStartedRecord, PromptRecord)) for record in records[abort_index + 1 :])
@@ -557,7 +705,11 @@ DEFAULT_RUNTIME_CONFIG = default_harness_runtime_configs().for_harness(
 )
 
 HANDLERS: Mapping[ControlName, ControlHandler] = {
-    ControlName.SEND_TEXT: SendTextHandler(DEFAULT_RUNTIME_CONFIG),
+    ControlName.SEND_TEXT: SendTextHandler(
+        DEFAULT_RUNTIME_CONFIG,
+        rewind_continuity,
+        title.titles,
+    ),
     ControlName.INTERRUPT: InterruptHandler(),
     ControlName.CLOSE_SESSION: CloseSessionHandler(),
     ControlName.RENAME_SESSION: RenameSessionHandler(title.titles),
@@ -577,7 +729,11 @@ def build_controller(
 ) -> HarnessController:
     handlers: Mapping[ControlName, ControlHandler] = {
         **HANDLERS,
-        ControlName.SEND_TEXT: SendTextHandler(harness_runtime_config),
+        ControlName.SEND_TEXT: SendTextHandler(
+            harness_runtime_config,
+            rewind_continuity,
+            title_repository,
+        ),
         ControlName.RENAME_SESSION: RenameSessionHandler(title_repository),
     }
     return HarnessController(handlers)

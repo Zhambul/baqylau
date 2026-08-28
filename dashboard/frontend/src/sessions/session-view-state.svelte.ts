@@ -90,6 +90,7 @@ const NO_CAPABILITIES: SessionCapabilities = {
 export type PendingPrompt = {
   readonly requestId: RequestId;
   readonly text: string;
+  readonly confirmed: boolean;
   readonly tracker: OptimisticActionTracker;
 };
 
@@ -432,6 +433,7 @@ export class SessionViewState {
       {
         requestId,
         text,
+        confirmed: false,
         tracker: new OptimisticActionTracker(
           this.sessionId,
           'composer',
@@ -440,6 +442,12 @@ export class SessionViewState {
       },
       ...this.pendingPrompts,
     ];
+  }
+
+  confirmPendingPrompt(requestId: RequestId): void {
+    this.pendingPrompts = this.pendingPrompts.map((prompt) =>
+      prompt.requestId === requestId ? { ...prompt, confirmed: true } : prompt,
+    );
   }
 
   settlePendingPrompt(

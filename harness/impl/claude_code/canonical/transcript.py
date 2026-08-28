@@ -180,6 +180,7 @@ class PromptTranscriptRecord:
     meta: bool = False
     interrupted: bool = False
     queued: bool = False
+    resumed: bool = False
     kind: TranscriptKind = TranscriptKind.PROMPT
 
 
@@ -492,6 +493,11 @@ _RESUMES_TURN = (
 )
 
 
+def _resumes_turn(text: str) -> bool:
+    """Return true when an injected prompt resumes work after a Stop."""
+    return any(pattern.match(text) for pattern in _RESUMES_TURN)
+
+
 # Every `kind` parse_line can return — the record vocabulary of this module,
 # declared in one place so a reader can see the whole of it, and so that adding
 # a kind is a visible act rather than one more branch somewhere.
@@ -591,11 +597,13 @@ def parse_line(s: str) -> TranscriptRecord | None:
             # carried so consumers can tell it from something the human typed.
             # The content goes in too: the teammate-mail wrapper is injected
             # with no structural flag to show it (see _TEAM_WRAPPER).
+            injected = _injected(user, content)
             return PromptTranscriptRecord(
                 content,
-                _injected(user, content),
+                injected,
                 bool(user.interruptedMessageId),
                 user.promptSource == "queued",
+                injected and _resumes_turn(content),
             )
         if isinstance(content, list):
             blocks: list[records.ToolResultBlock] = []

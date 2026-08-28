@@ -106,6 +106,9 @@
   let harness = $state(initial.harness);
   let modelId = $state(initial.modelId);
   let effort = $state(initial.effort);
+  let preserveNativeEffort = $state(
+    !initial.fresh && initial.effort.length === 0,
+  );
   let accountId = $state(initial.accountId);
   let prompt = $state(initial.prompt);
   let draftEdited = $state(initial.draftEdited);
@@ -205,6 +208,7 @@
       effort = '';
       return;
     }
+    if (!fresh && preserveNativeEffort && effort.length === 0) return;
     if (!efforts.some((item) => item.value === effort))
       effort =
         (efforts.find((item) => item.default) ?? efforts[0])?.value ?? '';
@@ -312,7 +316,8 @@
     if (launchableHarnesses.some((item) => item.name === row.harness))
       harness = row.harness;
     modelId = row.model?.id ?? modelId;
-    effort = row.effort ?? effort;
+    preserveNativeEffort = row.effort === null;
+    effort = row.effort ?? '';
     accountId = row.account?.id ?? accountId;
   }
 
@@ -706,7 +711,7 @@
       <button
         class="nsbtn primary"
         type="button"
-        disabled={submitting}
+        disabled={submitting || catalogLoading || catalog === null}
         onclick={submit}>{submitting ? 'launching…' : 'launch'}</button
       >
     </div>

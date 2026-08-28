@@ -1,6 +1,7 @@
 Feature: worktree changes reach the session feed
 
   Scenario Outline: a temporary worktree reports its complete lifecycle
+    # Harness limit: claude_code only. Only Claude Code exposes native worktree tools.
     Given session configuration "primary" uses <harness> with model <model> and low effort in a versioned workspace
     When I launch session "primary" and assign work "use temporary worktree" to the lead with prompt
       """

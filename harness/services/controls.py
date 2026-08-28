@@ -228,11 +228,11 @@ class HarnessControlService(HarnessReactorContext):
         if (
             isinstance(request, SendText)
             and isinstance(outcome, MessageDeliveryResult)
-            and outcome.status == MessageDeliveryStatus.QUEUED
         ):
             session = self.sessions.find(request.session_id)
             if session is not None:
-                self.control_effects.message_queued(session, request)
+                if outcome.status == MessageDeliveryStatus.QUEUED:
+                    self.control_effects.message_queued(session, request)
         if isinstance(request, CloseSession) and outcome.status == ControlAcknowledgement.ACKNOWLEDGED:
             session = self.sessions.find(request.session_id)
             if session is not None:

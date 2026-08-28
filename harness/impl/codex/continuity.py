@@ -75,6 +75,24 @@ class RewindContinuity:
             self._resolved_by_session[session_id] = pending.session_id
             return pending.session_id
 
+    def pending(
+        self,
+        session_id: SessionId,
+        window_id: WindowId,
+        *,
+        now: float | None = None,
+    ) -> bool:
+        """True while this window waits for its rewind continuation."""
+        observed_at = time.monotonic() if now is None else now
+        with self._lock:
+            pending = self._pending_by_window.get(window_id)
+            if pending is None:
+                return False
+            if pending.expires_at < observed_at:
+                del self._pending_by_window[window_id]
+                return False
+            return pending.session_id == session_id
+
     def release(self, session_id: SessionId) -> None:
         """Release a completed rewind relation."""
         with self._lock:

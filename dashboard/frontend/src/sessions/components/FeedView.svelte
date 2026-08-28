@@ -136,7 +136,7 @@
 
 <div class:rwpick={view.rewindPicking} class="stream">
   {#each view.pendingPrompts as prompt (prompt.requestId)}
-    <div class="msg prompt pending">
+    <div class="msg prompt" class:pending={!prompt.confirmed}>
       <span class="who">you</span>
       <div class="md">
         <p>

@@ -37,6 +37,7 @@ Feature: a dashboard answer resolves a harness question
       | claude_code | haiku        |
 
   Scenario Outline: a question records multiple selected choices
+    # Harness limit: claude_code only. Codex questions do not support multiple selected choices.
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" and assign question work "ask colours" to the lead with prompt
       """

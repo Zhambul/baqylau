@@ -7,6 +7,7 @@ from pytest_bdd import given, parsers, then, when
 
 from api.sessiondata.models.entry import MessageBodyResponse, TurnFinishedBodyResponse
 from sdk.client import ActionReceipt, BaqylauClient
+from sdk.state import SessionSnapshot
 from tests.e2e.testkit import selectors
 from tests.e2e.testkit.launching import start_named_session
 from tests.e2e.testkit.policy import WaitPolicy
@@ -319,6 +320,57 @@ def turn_has_prompt(client: BaqylauClient, turns: Turns, name: str, text: str) -
         and entry.body.content.text.strip() == text
     ]
     assert len(found) == 1, f"turn {name!r} has {len(found)} matching prompts"
+
+
+@then(parsers.parse(
+    'message from "{prompt_name}" enters the chat before response to '
+    '"{turn_name}" finishes'
+))
+def message_enters_before_response_finishes(
+    client: BaqylauClient,
+    turns: Turns,
+    wait_policy: WaitPolicy,
+    prompt_name: str,
+    turn_name: str,
+) -> None:
+    prompt = turn_checks.resolved(
+        client,
+        turns.get(prompt_name),
+        timeout=wait_policy.feed,
+    )
+    turn = turn_checks.resolved(
+        client,
+        turns.get(turn_name),
+        timeout=wait_policy.feed,
+    )
+    turns.replace(prompt_name, prompt)
+    turns.replace(turn_name, turn)
+    if prompt.prompt_cursor is None or turn.turn_id is None:
+        raise AssertionError("turn order requires resolved prompt and turn identities")
+
+    def completion_cursor(snapshot: SessionSnapshot) -> int | None:
+        found = [
+            entry.cursor
+            for entry in snapshot.entries
+            if entry.actor_id == turn.actor_id
+            and entry.turn_id == turn.turn_id
+            and isinstance(entry.body, TurnFinishedBodyResponse)
+        ]
+        if len(found) > 1:
+            raise AssertionError(
+                f"turn {turn_name!r} has {len(found)} completion facts"
+            )
+        return found[0] if found else None
+
+    completed_at = client.sessions.watch(turn.session).wait(
+        f"turn {turn_name!r} to complete",
+        completion_cursor,
+        timeout=wait_policy.turn,
+    )
+    assert prompt.prompt_cursor < completed_at, (
+        f"turn {prompt_name!r} prompt was recorded at {prompt.prompt_cursor}; "
+        f"turn {turn_name!r} completed at {completed_at}"
+    )
 
 
 @then(parsers.parse('turn "{name}" has final answer \'{text}\''))

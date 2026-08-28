@@ -4,7 +4,7 @@ Feature: background state survives a Baqylau restart
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I start journey session "primary" from the dashboard as turn "empty command through restart" with prompt
       """
-      Run only `python -c 'import time; time.sleep(12)'` as one foreground shell
+      Run only `python3 -c 'import time; time.sleep(12)'` as one foreground shell
       command. <execution_instruction> Wait for it. Do not run another tool.
       Then, reply only with the exact marker EMPTY_RESTART_DONE.
       """

@@ -2,6 +2,7 @@
   import { onDestroy, tick } from 'svelte';
 
   import type { HarnessCatalog } from '../harnesses/model';
+  import { duration } from '../shared/format';
   import PresentationBody from './PresentationBody.svelte';
   import type { VisibleEntryPresentation } from './presentation';
 
@@ -72,14 +73,6 @@
     if (timer !== null) clearInterval(timer);
   });
 
-  function duration(seconds: number): string {
-    const total = Math.max(0, Math.round(seconds));
-    if (total < 60) return `${String(total)}s`;
-    if (total < 3_600)
-      return `${String(Math.floor(total / 60))}m ${String(total % 60)}s`;
-    return `${String(Math.floor(total / 3_600))}h ${String(Math.floor((total % 3_600) / 60))}m`;
-  }
-
   function blockTail(): string {
     if (presentation.kind !== 'block' || !presentation.quiet) return '';
     if (presentation.state === null)
@@ -87,7 +80,8 @@
     const verdict =
       presentation.state === 'succeeded' ? 'finished' : presentation.state;
     const elapsed =
-      presentation.finishedAt === null
+      presentation.finishedAt === null ||
+      presentation.finishedAt <= presentation.occurredAt
         ? ''
         : ` · ${duration(presentation.finishedAt - presentation.occurredAt)}`;
     return `${verdict}${elapsed}`;

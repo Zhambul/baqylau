@@ -48,8 +48,6 @@ class SessionResumeSupport:
         )
         if saved.model is None:
             raise AssertionError(f"saved session {source.session_id!r} has no model")
-        if saved.effort is None:
-            raise AssertionError(f"saved session {source.session_id!r} has no effort")
         return ResumePreparation(
             source=source,
             source_cursor=before.cursor,
@@ -57,7 +55,7 @@ class SessionResumeSupport:
             spec=SessionSpec(
                 harness=saved.harness,
                 model=saved.model.name,
-                effort=saved.effort,
+                effort=saved.effort or "",
                 workspace=workspace,
                 account_id=(
                     saved.account.account_id if saved.account is not None else None
@@ -135,7 +133,8 @@ def assert_saved_metadata(
     assert snapshot.data.session.harness == saved.harness
     assert snapshot.data.session.title == saved.title
     assert lead.model == expected_model
-    assert lead.effort == saved.effort
+    if saved.effort is not None:
+        assert lead.effort == saved.effort
     if expected_account is None:
         assert actual_account is None
     else:

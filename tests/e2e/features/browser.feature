@@ -4,18 +4,20 @@ Feature: the browser controls real harness sessions
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I start browser session "primary" as turn "before cursor overtake" with prompt
       """
-      Do not use tools. Reply only with BEFORE_CURSOR_OVERTAKE.
+      The status identifier for this code task is BEFORE_CURSOR_OVERTAKE.
+      State that identifier only.
       """
     Then turn "before cursor overtake" completes
     When I reproduce a rebuild cursor overtake for session "primary"
     And I reload browser session "primary"
     And I send browser prompt to session "primary" as turn "after cursor overtake"
       """
-      Do not use tools. Reply only with AFTER_CURSOR_OVERTAKE.
+      The status identifier for this code task is AFTER_CURSOR_OVERTAKE.
+      State that identifier only.
       """
     Then turn "after cursor overtake" completes
     And turn "after cursor overtake" has final answer 'AFTER_CURSOR_OVERTAKE'
-    And the browser feed shows text containing 'Reply only with AFTER_CURSOR_OVERTAKE.'
+    And the browser feed shows text containing 'status identifier for this code task is AFTER_CURSOR_OVERTAKE'
 
     Examples:
       | harness     | model        |
@@ -28,8 +30,9 @@ Feature: the browser controls real harness sessions
     Then the browser shows the <harness> usage row without reloading the document
 
     Examples:
-      | harness |
-      | codex   |
+      | harness     |
+      | codex       |
+      | claude_code |
 
   Scenario Outline: a new-session draft survives modal close and page reload
     Given session configuration "draft form" uses <harness> with model <model> and low effort
@@ -179,6 +182,7 @@ Feature: the browser controls real harness sessions
       | claude_code | haiku        | no           |
 
   Scenario Outline: the browser shows one default profile and live Fable usage
+    # Harness limit: claude_code only. Fable usage is a Claude Code account feature.
     Given session configuration "claude form" uses <harness> with model <model> and low effort
     And session configuration "claude form" uses no account
     Given the browser is on the session list
@@ -270,40 +274,34 @@ Feature: the browser controls real harness sessions
     And session "primary" has no running work
 
     Examples:
-      | harness     | model |
-      | claude_code | haiku |
+      | harness     | model        |
+      | codex       | gpt-5.6-luna |
+      | claude_code | haiku        |
 
-  Scenario Outline: a browser interrupt keeps its queued prompt visible
+  Scenario Outline: operation times keep their event origin after a page reload
     Given session configuration "primary" uses <harness> with model <model> and low effort
-    And session configuration "primary" uses no account
-    When I launch session "primary" as turn "active work" with prompt
+    When I launch session "primary" as turn "timed work" with prompt
       """
-      Run `while [ ! -f .baqylau-browser-codex-active-release ]; do sleep 0.2; done; printf 'should-not-finish\n'`
+      Run `while [ ! -f <release_marker> ]; do sleep 0.2; done; printf 'timed-work-finished\n'`
       as a foreground shell command. Do not run it in the background. Wait for
-      it before you reply.
+      it, and then reply only with BROWSER_TIMED_DONE.
       """
-    And I name the only running command in turn "active work" containing 'baqylau-browser-codex-active-release' "active command"
+    And I name the only running command in turn "timed work" containing '<release_marker>' "timed command"
     And I open session "primary" in the browser
-    And I send browser prompt to session "primary" as turn "queued work"
-      """
-      Reply only with CODEX_BROWSER_QUEUE_STAYS.
-      """
-    Then the browser shows queued prompt 'Reply only with CODEX_BROWSER_QUEUE_STAYS.'
-    And session "primary" has queued prompt 'Reply only with CODEX_BROWSER_QUEUE_STAYS.' after a fresh application read
-    When I stop the current turn in the browser
-    Then command "active command" has state cancelled
-    And turn "active work" has state aborted
-    And the lead in session "primary" has status awaiting_response
-    And the browser shows queued prompt 'Reply only with CODEX_BROWSER_QUEUE_STAYS.'
-    And the browser composer is empty
+    Then the browser running operation time is at least 3 seconds
     When I reload browser session "primary"
-    Then the browser shows queued prompt 'Reply only with CODEX_BROWSER_QUEUE_STAYS.'
-    And session "primary" has queued prompt 'Reply only with CODEX_BROWSER_QUEUE_STAYS.' after a fresh application read
-    And session "primary" has no running work
+    Then the browser running operation time is at least 3 seconds
+    When I release active browser work in session "primary" with marker "<release_marker>"
+    Then turn "timed work" completes
+    And turn "timed work" has final answer 'BROWSER_TIMED_DONE'
+    And the browser completed operation time for command "timed command" is at least 3 seconds
+    When I reload browser session "primary"
+    Then the browser completed operation time for command "timed command" is at least 3 seconds
 
     Examples:
-      | harness | model        |
-      | codex   | gpt-5.6-luna |
+      | harness     | model        | release_marker                     |
+      | codex       | gpt-5.6-luna | .baqylau-browser-timer-codex       |
+      | claude_code | haiku        | .baqylau-browser-timer-claude-code |
 
   Scenario Outline: a browser loads older activity from one consistent feed
     Given session configuration "primary" uses <harness> with model <model> and low effort
@@ -341,6 +339,8 @@ Feature: the browser controls real harness sessions
       """
     And I name the pending question in work "answer card" containing 'Which browser path' "path choice"
     And I open session "primary" in the browser
+    Then the browser composer is empty
+    And session "primary" has no composer draft after a fresh application read
     Then the browser session header has status awaiting_attention and its canonical color
     And the browser attention badge for "primary" has status awaiting_attention and its canonical color
     And the browser has 1 asking session badges
@@ -393,6 +393,8 @@ Feature: the browser controls real harness sessions
       decide. After approval, reply only with BROWSER_PLAN_APPROVED.
       """
     And I name the pending plan in turn "approve browser plan" containing 'BROWSER-PLAN-APPROVE-731' "approved browser plan"
+    Then the browser composer is empty
+    And session "primary" has no composer draft after a fresh application read
     When I approve plan "approved browser plan" in the browser as action "approve browser plan"
     Then plan "approved browser plan" has state approved
     And plan "approved browser plan" is followed by final answer 'BROWSER_PLAN_APPROVED' after browser action "approve browser plan"
@@ -418,6 +420,7 @@ Feature: the browser controls real harness sessions
       | claude_code | haiku        | no           |
 
   Scenario Outline: a browser plan card sends feedback where supported
+    # Harness limit: claude_code only. Codex does not accept text feedback for a plan decision.
     Given session configuration "primary" uses <harness> with model <model> and low effort
     And session configuration "primary" uses <account> account
     When I launch session "primary" as turn "ready for browser feedback" with prompt

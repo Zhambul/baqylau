@@ -1,6 +1,7 @@
 Feature: model activity updates one worker and its session
 
   Scenario Outline: readable model reasoning stays with its worker
+    # Harness limit: codex only. Claude Code does not expose readable model reasoning.
     Given session configuration "primary" uses <harness> with model <model> and high effort
     When I launch session "primary" and assign work "inspect reasoning" to the <worker> with prompt
       """

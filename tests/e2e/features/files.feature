@@ -32,6 +32,7 @@ Feature: file operations reach the session feed
       | claude_code | haiku        | low    | subagent |
 
   Scenario Outline: a file read reports its path and content
+    # Harness limit: claude_code only. Only Claude Code has a native local text file read event.
     Given session configuration "primary" uses <harness> with model <model> and <effort> effort
     When I launch session "primary" and assign work "read project guide" to the <worker> with prompt
       """
@@ -52,6 +53,7 @@ Feature: file operations reach the session feed
       | claude_code | haiku        | low    | subagent |
 
   Scenario Outline: a deleted file keeps its complete operation history
+    # Harness limit: codex only. Only Codex apply_patch reports a native file delete operation.
     Given the file operation fixture does not exist
     And session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" and assign work "delete fixture" to the <worker> with prompt
@@ -78,6 +80,7 @@ Feature: file operations reach the session feed
       | codex   | gpt-5.6-luna | subagent |
 
   Scenario Outline: a renamed file keeps both exact paths
+    # Harness limit: codex only. Only Codex apply_patch reports a native file move operation.
     Given the file rename fixtures do not exist
     And session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" and assign work "rename fixture" to the <worker> with prompt

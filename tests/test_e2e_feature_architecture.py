@@ -11,6 +11,11 @@ ROOT = Path(__file__).parents[1]
 FEATURES = ROOT / "tests" / "e2e" / "features"
 SCENARIO = re.compile(r"^  (Scenario(?: Outline)?):\s*(.+)$", re.MULTILINE)
 FIXED_SESSION = re.compile(r'session configuration .+ uses (?:codex|claude_code)\b')
+HARNESSES = frozenset({"codex", "claude_code"})
+HARNESS_LIMIT = re.compile(
+    r"^    # Harness limit: (codex|claude_code) only\. (\S.*)$",
+    re.MULTILINE,
+)
 
 
 @dataclass(frozen=True)
@@ -23,6 +28,21 @@ class FeatureScenario:
     @property
     def behavior(self) -> str:
         return self.body.split("  Examples:", 1)[0]
+
+    @property
+    def harnesses(self) -> frozenset[str]:
+        return frozenset(
+            match.group(1)
+            for match in re.finditer(
+                r"^\s*\|\s*(codex|claude_code)\s*\|",
+                self.body,
+                re.MULTILINE,
+            )
+        )
+
+    @property
+    def harness_limits(self) -> tuple[tuple[str, str], ...]:
+        return tuple(HARNESS_LIMIT.findall(self.behavior))
 
 
 def _scenarios(path: Path) -> tuple[FeatureScenario, ...]:
@@ -56,6 +76,35 @@ def test_harness_behavior_is_selected_only_by_examples_rows():
                 violations.append(f"{location} has no Examples table")
             elif not re.search(r"^\s*\|\s*harness\s*\|", scenario.body, re.MULTILINE):
                 violations.append(f"{location} has no harness column")
+
+    assert violations == []
+
+
+def test_shared_harness_behavior_covers_each_harness():
+    violations = []
+    for path in sorted(FEATURES.glob("*.feature")):
+        for scenario in _scenarios(path):
+            if not scenario.harnesses:
+                continue
+            location = f"{path.relative_to(ROOT)}: {scenario.title}"
+            if scenario.harnesses == HARNESSES:
+                if scenario.harness_limits:
+                    violations.append(f"{location} has a stale harness limit comment")
+                continue
+            if len(scenario.harness_limits) != 1:
+                missing = ", ".join(sorted(HARNESSES - scenario.harnesses))
+                violations.append(
+                    f"{location} does not test {missing} and needs one harness limit comment"
+                )
+                continue
+            limited_harness, reason = scenario.harness_limits[0]
+            if scenario.harnesses != {limited_harness}:
+                violations.append(
+                    f"{location} tests {sorted(scenario.harnesses)!r}, but its comment selects "
+                    f"{limited_harness!r}"
+                )
+            if not reason.rstrip().endswith("."):
+                violations.append(f"{location} has an incomplete harness limit reason")
 
     assert violations == []
 

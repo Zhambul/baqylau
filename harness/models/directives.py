@@ -18,7 +18,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from domain.ids import AssignmentId, AttentionId, RequestId, SessionId, ShellId, TurnId
+from domain.ids import (
+    AssignmentId,
+    AttentionId,
+    RequestId,
+    SessionId,
+    ShellId,
+    TurnId,
+)
 from domain.stored import STORED
 from domain.values import OpenWorkKind, PlanState, ProgressStream, TitleOrigin
 

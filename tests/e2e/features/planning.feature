@@ -1,6 +1,7 @@
 Feature: planning tools update the session goal and tasks
 
   Scenario Outline: a subagent owns the task that it records
+    # Harness limit: codex only. Claude Code subagents do not receive task tools.
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" and assign work "record child task" to the subagent with prompt
       """
@@ -17,9 +18,10 @@ Feature: planning tools update the session goal and tasks
 
     Examples:
       | harness     | model        | task_instruction                                                                 |
-      | codex       | gpt-5.6-luna | Use update_plan with the exact step text "Child sample".                   |
+      | codex       | gpt-5.6-luna | Use update_plan with the exact step text "Child sample".                         |
 
   Scenario Outline: a task keeps its native description where supported
+    # Harness limit: claude_code only. Codex plan steps do not have descriptions.
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" and assign work "describe task" to the lead with prompt
       """
@@ -99,6 +101,7 @@ Feature: planning tools update the session goal and tasks
       | claude_code | haiku        | Use TaskCreate exactly once with subject "Tracked state sample" and no description. | Use TaskList to find "Tracked state sample", then use TaskUpdate exactly once to set its status to in_progress. | Use TaskList to find "Tracked state sample", then use TaskUpdate exactly once to set its status to completed. |
 
   Scenario Outline: goal tools update shared session state
+    # Harness limit: codex only. Claude Code does not expose goal tools.
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "record goal" with prompt
       """
@@ -177,6 +180,7 @@ Feature: planning tools update the session goal and tasks
       | claude_code | haiku        |
 
   Scenario Outline: plan feedback records the requested change
+    # Harness limit: claude_code only. Codex does not accept text feedback for a plan decision.
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "ready" with prompt
       """
