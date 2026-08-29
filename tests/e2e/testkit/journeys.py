@@ -14,6 +14,7 @@ from sdk.client import BaqylauClient, LaunchRef, SessionRef, wait_for
 from terminal.contract import TerminalPlugin
 from terminal.launch import launch_tab_request
 from terminal.models import (
+    EnvironmentVariable,
     KeySendRequest,
     TabCloseRequest,
     TextInputMode,
@@ -55,7 +56,7 @@ class JourneyDriver:
         application_port: int,
         wait_policy: WaitPolicy,
         harness_runtime_configs: HarnessRuntimeConfigs,
-        launch_environment: tuple[tuple[str, str], ...] = (),
+        launch_environment: tuple[EnvironmentVariable, ...] = (),
     ) -> None:
         self._client = client
         self._terminal = terminal
@@ -300,7 +301,12 @@ class JourneyDriver:
         # Claude process must use the user's installed authentication and hook
         # settings, as a normal terminal command does.
         environment.pop("CLAUDE_CONFIG_DIR", None)
-        environment.update(self._launch_environment)
+        environment.update(
+            {
+                variable.name: variable.value
+                for variable in self._launch_environment
+            }
+        )
         environment["BAQYLAU_DASHBOARD_PORT"] = str(self._application_port)
         environment["KITTY_WINDOW_ID"] = host.window_id
 
@@ -413,7 +419,10 @@ class JourneyDriver:
             arguments.extend(("-c", 'model_reasoning_summary="concise"'))
         if prompt.strip():
             arguments.append(prompt)
-        environment = dict(self._launch_environment)
+        environment = {
+            variable.name: variable.value
+            for variable in self._launch_environment
+        }
         environment["BAQYLAU_DASHBOARD_PORT"] = str(self._application_port)
         if harness == HarnessName.CLAUDE_CODE:
             environment["CLAUDE_CONFIG_DIR"] = str(runtime.configuration_directory)
@@ -427,7 +436,10 @@ class JourneyDriver:
             spec.workspace or self._workspace,
             self._reusable_shell_command((runtime.executable, *arguments)),
             title="Claude Code" if harness == HarnessName.CLAUDE_CODE else "Codex",
-            environment=tuple(environment.items()),
+            environment=tuple(
+                EnvironmentVariable(name, value)
+                for name, value in environment.items()
+            ),
         )
         opened = self._terminal.tabs.open_tab(request)
         if not opened.succeeded or opened.window_id is None:

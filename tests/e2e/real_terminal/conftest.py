@@ -13,6 +13,7 @@ from harness.runtime import HarnessRuntimeConfigs
 from sdk.client import BaqylauClient
 from terminal.impl.kitty.plugin import kitty_plugin
 from terminal.impl.kitty.remote import resolve_listen_on
+from terminal.models import EnvironmentVariable
 from tests.e2e.testkit.journeys import JourneyDriver
 from tests.e2e.testkit.policy import WaitPolicy
 from tests.e2e.testkit.process import (
@@ -97,9 +98,9 @@ def journey_driver(
         wait_policy,
         application_process.config.harness_runtime_configs,
         launch_environment=(
-            ("CODEX_HOME", str(isolated_codex_home)),
-            ("CLAUDE_CONFIG_DIR", str(isolated_claude_home)),
-            (
+            EnvironmentVariable("CODEX_HOME", str(isolated_codex_home)),
+            EnvironmentVariable("CLAUDE_CONFIG_DIR", str(isolated_claude_home)),
+            EnvironmentVariable(
                 "CLAUDE_CODE_MANAGED_SETTINGS_PATH",
                 str(isolated_claude_home / "managed-settings.json"),
             ),

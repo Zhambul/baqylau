@@ -17,7 +17,13 @@ from inference.default import (
     _ExecutableUnavailable,
     _ModelUnavailableAudit,
 )
-from terminal.models import ScreenReadRequest, ScreenReadResponse, TabCloseRequest, TabCloseResponse
+from terminal.models import (
+    EnvironmentVariable,
+    ScreenReadRequest,
+    ScreenReadResponse,
+    TabCloseRequest,
+    TabCloseResponse,
+)
 from terminal.models import TabOpenRequest, TabOpenResponse
 from terminal.models.values import WindowId
 from tests.fake_terminal import FakeTerminal, window
@@ -139,7 +145,9 @@ def test_small_model_prefers_the_provider_with_more_remaining_capacity() -> None
     assert "--safe-mode" in launch.command
     assert "--no-session-persistence" in launch.command
     assert "--tools" in launch.command
-    assert launch.environment == ((INTERNAL_MODEL_VARIABLE, "1"),)
+    assert launch.environment == (
+        EnvironmentVariable(INTERNAL_MODEL_VARIABLE, "1"),
+    )
     assert terminal.closed_tabs == ["model-1"]
 
 
@@ -157,8 +165,10 @@ def test_configured_executable_does_not_depend_on_the_daemon_path() -> None:
     assert response.text == "Configured executable session title"
     launch = terminal.opened_tabs[0]
     assert launch.command[0] == "/private/model-bin/codex"
-    assert launch.environment[0] == (INTERNAL_MODEL_VARIABLE, "1")
-    assert launch.environment[1][0] == "CODEX_HOME"
+    assert launch.environment[0] == EnvironmentVariable(
+        INTERNAL_MODEL_VARIABLE, "1"
+    )
+    assert launch.environment[1].name == "CODEX_HOME"
 
 
 def test_capacity_uses_the_most_exhausted_known_window() -> None:

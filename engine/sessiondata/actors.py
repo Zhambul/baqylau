@@ -59,6 +59,7 @@ from domain.sessiondata import (
     ActorStatistics,
     ActorStatus,
     ActorUsage,
+    ToolCount,
     LifecycleState,
 )
 from domain.values import (
@@ -552,9 +553,15 @@ def _file_counted(actor_statistics: ActorStatistics, file_accessed: FileAccessed
 
 
 def _tool_counted(actor_statistics: ActorStatistics, tool: str) -> ActorStatistics:
-    counts = dict(actor_statistics.tool_counts)
+    counts = {tool_count.tool: tool_count.count for tool_count in actor_statistics.tool_counts}
     counts[tool] = counts.get(tool, 0) + 1
-    return replace(actor_statistics, tool_counts=tuple(sorted(counts.items())))
+    return replace(
+        actor_statistics,
+        tool_counts=tuple(
+            ToolCount(tool_name, count)
+            for tool_name, count in sorted(counts.items())
+        ),
+    )
 
 
 def _timed(actor_statistics: ActorStatistics, canonical_event: CanonicalEvent[EventPayload]) -> ActorStatistics:

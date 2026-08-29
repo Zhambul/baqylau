@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from domain.ids import SessionId, WindowId
+from domain.ids import WindowId
 from harness.contract import HarnessResumeLocator
 from harness.impl.codex.ids import CodexSessionId, session_id_from_codex
+from harness.models import LocatedSession
 from terminal.models import WindowInfo
 
 
@@ -12,17 +13,20 @@ class CodexResumeLocator(HarnessResumeLocator):
     def locate(
         self,
         windows: tuple[WindowInfo, ...],
-    ) -> tuple[tuple[SessionId, WindowId], ...]:
-        located: list[tuple[SessionId, WindowId]] = []
+    ) -> tuple[LocatedSession, ...]:
+        located: list[LocatedSession] = []
         for window in windows:
             for process in window.processes:
                 native_session_id = _resumed_session(process.command)
                 if native_session_id is not None:
-                    match = (
+                    match = LocatedSession(
                         session_id_from_codex(native_session_id),
                         WindowId(str(window.window_id)),
                     )
-                    if all(existing[0] != match[0] for existing in located):
+                    if all(
+                        existing.session_id != match.session_id
+                        for existing in located
+                    ):
                         located.append(match)
         return tuple(located)
 

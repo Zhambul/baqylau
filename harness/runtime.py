@@ -18,15 +18,21 @@ class HarnessRuntimeConfig:
     use_vendor_default_configuration: bool = False
 
 
+@dataclass(frozen=True)
+class HarnessRuntimeEntry:
+    harness: HarnessName
+    config: HarnessRuntimeConfig
+
+
 class HarnessRuntimeConfigs:
     """One runtime configuration, indexed by harness name."""
 
     def __init__(
         self,
-        entries: Iterable[tuple[HarnessName, HarnessRuntimeConfig]],
+        entries: Iterable[HarnessRuntimeEntry],
     ) -> None:
         entry_values = tuple(entries)
-        by_harness = dict(entry_values)
+        by_harness = {entry.harness: entry.config for entry in entry_values}
         if len(by_harness) != len(entry_values):
             raise ValueError("duplicate harness runtime configuration")
         self._by_harness: Mapping[HarnessName, HarnessRuntimeConfig] = by_harness
@@ -37,8 +43,11 @@ class HarnessRuntimeConfigs:
         except KeyError as error:
             raise ValueError(f"missing runtime configuration for {harness}") from error
 
-    def entries(self) -> tuple[tuple[HarnessName, HarnessRuntimeConfig], ...]:
-        return tuple(self._by_harness.items())
+    def entries(self) -> tuple[HarnessRuntimeEntry, ...]:
+        return tuple(
+            HarnessRuntimeEntry(harness, config)
+            for harness, config in self._by_harness.items()
+        )
 
     def updated(
         self,
@@ -47,7 +56,10 @@ class HarnessRuntimeConfigs:
     ) -> HarnessRuntimeConfigs:
         return HarnessRuntimeConfigs(
             (
-                (name, harness_runtime_config if name == harness else current)
+                HarnessRuntimeEntry(
+                    name,
+                    harness_runtime_config if name == harness else current,
+                )
                 for name, current in self._by_harness.items()
             )
         )
@@ -84,7 +96,7 @@ def default_harness_runtime_configs() -> HarnessRuntimeConfigs:
     )
     return HarnessRuntimeConfigs(
         (
-            (
+            HarnessRuntimeEntry(
                 HarnessName.CLAUDE_CODE,
                 HarnessRuntimeConfig(
                     _installed_executable(
@@ -99,7 +111,7 @@ def default_harness_runtime_configs() -> HarnessRuntimeConfigs:
                     use_vendor_default_configuration=True,
                 ),
             ),
-            (
+            HarnessRuntimeEntry(
                 HarnessName.CODEX,
                 HarnessRuntimeConfig(
                     _installed_executable(

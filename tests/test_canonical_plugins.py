@@ -38,6 +38,7 @@ from harness.models import (
     Interrupt,
     LIVENESS_SOURCE_TYPE,
     LaunchRequest,
+    LocatedSession,
     OUTPUT_LOCATION_SOURCE_TYPE,
     QueryContext,
     RawEvent,
@@ -52,6 +53,7 @@ from terminal.adapter import SessionPaneRequest, SessionTerminalResult, Terminal
 from harness.services.terminal_driver import TerminalDriver
 from terminal.models import (
     ACTIVITY_PANE_TAG,
+    EnvironmentVariable,
     SCOREBOARD_PANE_TAG,
     SESSION_WINDOW_TAG,
     WindowProcess,
@@ -174,7 +176,11 @@ from engine.interpret.reactions import (
 )
 from harness.services.telemetry import TelemetryGatewayService
 from harness.registry import HarnessRegistry
-from harness.runtime import HarnessRuntimeConfig, HarnessRuntimeConfigs
+from harness.runtime import (
+    HarnessRuntimeConfig,
+    HarnessRuntimeConfigs,
+    HarnessRuntimeEntry,
+)
 from domain.events import ShellOutputLocated
 
 
@@ -3776,8 +3782,8 @@ def test_codex_resume_locator_finds_direct_and_login_shell_commands():
     )
 
     assert CodexResumeLocator().locate((direct, login_shell, unrelated)) == (
-        (SessionId("session-direct"), WindowId("window-one")),
-        (SessionId("session-shell"), WindowId("window-two")),
+        LocatedSession(SessionId("session-direct"), WindowId("window-one")),
+        LocatedSession(SessionId("session-shell"), WindowId("window-two")),
     )
 
 
@@ -3788,11 +3794,11 @@ def test_launchers_build_native_commands_and_share_terminal_launch_mechanics(
     monkeypatch.delenv("CLAUDE_CODE_MANAGED_SETTINGS_PATH", raising=False)
     runtime_configs = HarnessRuntimeConfigs(
         (
-            (
+            HarnessRuntimeEntry(
                 HarnessName.CLAUDE_CODE,
                 HarnessRuntimeConfig("claude", Path("/work/claude-home")),
             ),
-            (
+            HarnessRuntimeEntry(
                 HarnessName.CODEX,
                 HarnessRuntimeConfig("codex", Path("/work/codex-home")),
             ),
@@ -3808,7 +3814,7 @@ def test_launchers_build_native_commands_and_share_terminal_launch_mechanics(
             terminal.plugin(),
             SimpleNamespace(resumed=lambda *_arguments: None),
             _silent_audit(),
-            (("BAQYLAU_DASHBOARD_PORT", "49123"),),
+            (EnvironmentVariable("BAQYLAU_DASHBOARD_PORT", "49123"),),
         )
     }
     claude_launcher = plugins["claude_code"].launcher
@@ -3865,21 +3871,21 @@ def test_launchers_build_native_commands_and_share_terminal_launch_mechanics(
         "/work/context.md\nhello",
     )
     assert terminal.opened_tabs[0].environment == (
-        ("BAQYLAU_DASHBOARD_PORT", "49123"),
-        ("CLAUDE_CONFIG_DIR", "/work/claude-home"),
-        ("BAQYLAU_LAUNCH_MODEL", "fable"),
-        ("BAQYLAU_LAUNCH_EFFORT", "high"),
+        EnvironmentVariable("BAQYLAU_DASHBOARD_PORT", "49123"),
+        EnvironmentVariable("CLAUDE_CONFIG_DIR", "/work/claude-home"),
+        EnvironmentVariable("BAQYLAU_LAUNCH_MODEL", "fable"),
+        EnvironmentVariable("BAQYLAU_LAUNCH_EFFORT", "high"),
     )
     assert terminal.opened_tabs[1].environment == (
-        ("BAQYLAU_DASHBOARD_PORT", "49123"),
-        ("CODEX_HOME", "/work/codex-home"),
+        EnvironmentVariable("BAQYLAU_DASHBOARD_PORT", "49123"),
+        EnvironmentVariable("CODEX_HOME", "/work/codex-home"),
     )
 
 
 def _test_launcher(harness: HarnessName, terminal: FakeTerminal):
     runtime_configs = HarnessRuntimeConfigs(
         (
-            (
+            HarnessRuntimeEntry(
                 HarnessName.CLAUDE_CODE,
                 HarnessRuntimeConfig(
                     "claude",
@@ -3887,7 +3893,7 @@ def _test_launcher(harness: HarnessName, terminal: FakeTerminal):
                     Path("/work/claude-home/managed-settings.json"),
                 ),
             ),
-            (
+            HarnessRuntimeEntry(
                 HarnessName.CODEX,
                 HarnessRuntimeConfig("codex", Path("/work/codex-home")),
             ),
@@ -4075,7 +4081,7 @@ def test_terminal_launches_receive_the_configured_harness_homes(monkeypatch):
     monkeypatch.setenv("BAQYLAU_DASHBOARD_PORT", "49123")
 
     assert app_providers.harness_launch_environment() == (
-        ("BAQYLAU_DASHBOARD_PORT", "49123"),
+        EnvironmentVariable("BAQYLAU_DASHBOARD_PORT", "49123"),
     )
 
 
@@ -4086,7 +4092,7 @@ def test_direct_terminal_launch_rejects_invalid_environment_names():
         launch_tab_request(
             "/work",
             ("harness-cli",),
-            environment=(("bad name", "x"),),
+            environment=(EnvironmentVariable("bad name", "x"),),
         )
 
 

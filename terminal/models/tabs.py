@@ -9,6 +9,14 @@ from terminal.models.values import TabAppearance
 
 
 @dataclass(frozen=True)
+class EnvironmentVariable:
+    """One environment value for a terminal command."""
+
+    name: str
+    value: str
+
+
+@dataclass(frozen=True)
 class TabOpenRequest:
     """A new tab running `command` in `working_directory`.
 
@@ -24,7 +32,7 @@ class TabOpenRequest:
     # own tab title, and freezing that out at launch loses more than it gains.
     # `TabRenameRequest` is the deliberate override.
     title: str
-    environment: tuple[tuple[str, str], ...] = ()
+    environment: tuple[EnvironmentVariable, ...] = ()
 
 
 @dataclass(frozen=True)

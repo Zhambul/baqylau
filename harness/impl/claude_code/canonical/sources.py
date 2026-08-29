@@ -28,6 +28,12 @@ from harness.models import RawEvent, RawEventSourceContext, Session
 HARNESS = HarnessName.CLAUDE_CODE
 
 
+@dataclass(frozen=True)
+class _ActorContext:
+    actor_id: ActorId
+    parent_actor_id: ActorId | None
+
+
 class ClaudeTranscriptRawEventSource(HarnessRawEventSource):
     """One transcript file, read as complete lines.
 
@@ -54,7 +60,7 @@ class ClaudeTranscriptRawEventSource(HarnessRawEventSource):
         raw_events: list[RawEvent] = []
         for line in self.tail.read(after_position, self.EVENT_BATCH_SIZE):
             contexts = self._actor_contexts(line.content)
-            for index, (actor_id, parent_actor_id) in enumerate(contexts):
+            for index, actor_context in enumerate(contexts):
                 identity_suffix = f":idle:{index}" if len(contexts) > 1 else ""
                 raw_events.append(RawEvent(
                     raw_event_id=RawEventId(
@@ -65,8 +71,8 @@ class ClaudeTranscriptRawEventSource(HarnessRawEventSource):
                     source_name=self.source_path,
                     source_position=str(line.position),
                     session_id=self.context.session_id,
-                    actor_id=actor_id,
-                    parent_actor_id=parent_actor_id,
+                    actor_id=actor_context.actor_id,
+                    parent_actor_id=actor_context.parent_actor_id,
                     observed_at=time.time(),
                     encoding="jsonl",
                     payload=line.content,
@@ -74,7 +80,7 @@ class ClaudeTranscriptRawEventSource(HarnessRawEventSource):
                 ))
         return tuple(raw_events)
 
-    def _actor_contexts(self, line: bytes) -> tuple[tuple[ActorId, ActorId | None], ...]:
+    def _actor_contexts(self, line: bytes) -> tuple[_ActorContext, ...]:
         try:
             record = transcript.parse_line(line.decode("utf-8"))
         except (UnicodeDecodeError, ValidationError):
@@ -86,7 +92,7 @@ class ClaudeTranscriptRawEventSource(HarnessRawEventSource):
                     transcript.teammate_actor_id(self.source_path, notification.from_)
                     or ClaudeCodeActorId(notification.from_)
                 )
-                context = (
+                context = _ActorContext(
                     actor_id_from_claude_code(native_actor_id),
                     self.context.lead_actor_id,
                 )
@@ -101,7 +107,7 @@ class ClaudeTranscriptRawEventSource(HarnessRawEventSource):
         line: bytes,
         *,
         record: transcript.TranscriptRecord | None = None,
-    ) -> tuple[ActorId, ActorId | None]:
+    ) -> _ActorContext:
         if record is None:
             try:
                 record = transcript.parse_line(line.decode("utf-8"))
@@ -110,12 +116,16 @@ class ClaudeTranscriptRawEventSource(HarnessRawEventSource):
         if isinstance(record, transcript.TeamMessageTranscriptRecord):
             sender_text = record.sender
             if not sender_text:
-                return self.context.actor_id, self.context.parent_actor_id
+                return _ActorContext(
+                    self.context.actor_id, self.context.parent_actor_id
+                )
             if (
                 sender_text == transcript.LEAD_TEAMMATE_ID
                 and self.context.parent_actor_id is not None
             ):
-                return self.context.actor_id, self.context.parent_actor_id
+                return _ActorContext(
+                    self.context.actor_id, self.context.parent_actor_id
+                )
             # `team-lead` is the LEAD under its teammate-vocabulary alias, not a
             # participant of its own (transcript.LEAD_TEAMMATE_ID).
             sender = (
@@ -127,17 +137,22 @@ class ClaudeTranscriptRawEventSource(HarnessRawEventSource):
                 )
             )
             parent_actor_id = None if sender == self.context.lead_actor_id else self.context.lead_actor_id
-            return sender, parent_actor_id
+            return _ActorContext(sender, parent_actor_id)
         if (
             isinstance(record, transcript.ActorAssignmentFinishedTranscriptRecord)
             and record.actor_id
         ):
-            return actor_id_from_claude_code(record.actor_id), self.context.lead_actor_id
+            return _ActorContext(
+                actor_id_from_claude_code(record.actor_id),
+                self.context.lead_actor_id,
+            )
         if isinstance(record, transcript.BackgroundCommandCompletedTranscriptRecord):
             owner = self._child_tool_owner(record.operation_id)
             if owner is not None:
-                return owner, self.context.lead_actor_id
-        return self.context.actor_id, self.context.parent_actor_id
+                return _ActorContext(owner, self.context.lead_actor_id)
+        return _ActorContext(
+            self.context.actor_id, self.context.parent_actor_id
+        )
 
     def _child_tool_owner(self, call_id: ClaudeCodeCallId) -> ActorId | None:
         """Find the child transcript that contains one exact native tool call.

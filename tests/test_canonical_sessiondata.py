@@ -86,7 +86,7 @@ from domain.ids import (
     TaskListId,
     TurnId,
 )
-from domain.sessiondata import ActorStatus
+from domain.sessiondata import ActorStatus, ToolCount
 from domain.values import (
     AccountReference,
     ActorRole,
@@ -809,13 +809,13 @@ def test_the_scoreboard_counts_distinct_files_and_names_a_tool_per_action():
     statistics = state.actor(LEAD).statistics
     assert statistics.file_count == 2
     assert (statistics.lines_added, statistics.lines_removed) == (13, 3)
-    assert dict(statistics.tool_counts) == {
-        "Edit": 2,
-        "Read": 1,
-        "Grep": 1,
-        "WebFetch": 1,
-        "Browser": 1,
-    }
+    assert statistics.tool_counts == (
+        ToolCount("Browser", 1),
+        ToolCount("Edit", 2),
+        ToolCount("Grep", 1),
+        ToolCount("Read", 1),
+        ToolCount("WebFetch", 1),
+    )
 
 
 def test_commands_are_counted_once_and_their_failures_separately():

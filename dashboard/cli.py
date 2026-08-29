@@ -43,6 +43,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING
@@ -88,14 +89,21 @@ class HealthProcess(BaseModel):
     process_id: int
 
 
-def _options(
-    arguments: list[str],
-) -> tuple[
-    Mapping[str, str],
-    str | None,
-    "HarnessRuntimeConfigs",
-    tuple[tuple[str, str], ...],
-]:
+@dataclass(frozen=True)
+class _HarnessFlag:
+    name: str
+    value: str
+
+
+@dataclass(frozen=True)
+class _DashboardOptions:
+    variables: Mapping[str, str]
+    log_path: str | None
+    harness_runtime_configs: "HarnessRuntimeConfigs"
+    harness_flags: tuple[_HarnessFlag, ...]
+
+
+def _options(arguments: list[str]) -> _DashboardOptions:
     """The launch flags, as (variables to set, log path).
 
     Accepts `--flag value` and `--flag=value`, because a person types the first
@@ -103,7 +111,7 @@ def _options(
     """
     variables: dict[str, str] = {}
     log_path: str | None = None
-    harness_flags: list[tuple[str, str]] = []
+    harness_flags: list[_HarnessFlag] = []
     remaining = list(arguments)
     while remaining:
         argument = remaining.pop(0)
@@ -125,7 +133,7 @@ def _options(
             if not separator or not harness_name or not harness_value:
                 raise UsageError(f"{name} needs HARNESS=VALUE")
             harness_flags.append(
-                (
+                _HarnessFlag(
                     name,
                     f"{harness_name}="
                     f"{os.path.abspath(os.path.expanduser(harness_value))}",
@@ -143,16 +151,16 @@ def _options(
     from harness.runtime import default_harness_runtime_configs  # noqa: PLC0415
 
     configs = default_harness_runtime_configs()
-    for name, value in harness_flags:
-        harness_value, configured_value = value.split("=", 1)
+    for flag in harness_flags:
+        harness_value, configured_value = flag.value.split("=", 1)
         try:
             harness = HarnessName(harness_value)
         except ValueError as error:
             raise UsageError(f"unknown harness: {harness_value}") from error
         runtime = configs.for_harness(harness)
-        if name == "--harness-executable":
+        if flag.name == "--harness-executable":
             runtime = replace(runtime, executable=configured_value)
-        elif name == "--harness-config-dir":
+        elif flag.name == "--harness-config-dir":
             configuration_directory = Path(configured_value)
             runtime = replace(
                 runtime,
@@ -162,10 +170,10 @@ def _options(
                     and configuration_directory == runtime.configuration_directory
                 ),
             )
-        elif name == "--harness-settings-file":
+        elif flag.name == "--harness-settings-file":
             runtime = replace(runtime, settings_file=Path(configured_value))
         configs = configs.updated(harness, runtime)
-    return (
+    return _DashboardOptions(
         variables,
         log_path,
         configs,
@@ -175,15 +183,15 @@ def _options(
 
 def _forwarded(arguments: list[str]) -> list[str]:
     """The same flags, as a child's command line: what `start` hands `serve`."""
-    variables, log_path, _harnesses, harness_flags = _options(arguments)
+    options = _options(arguments)
     flags = []
     for flag, variable in LAUNCH_VARIABLES.items():
-        if variable in variables:
-            flags.extend([flag, variables[variable]])
-    if log_path is not None:
-        flags.extend([LOG_FLAG, log_path])
-    for flag, value in harness_flags:
-        flags.extend([flag, value])
+        if variable in options.variables:
+            flags.extend([flag, options.variables[variable]])
+    if options.log_path is not None:
+        flags.extend([LOG_FLAG, options.log_path])
+    for harness_flag in options.harness_flags:
+        flags.extend([harness_flag.name, harness_flag.value])
     return flags
 
 
@@ -379,18 +387,18 @@ def rebuild() -> int:
 def main(argv: list[str]) -> int:
     cmd = argv[1] if len(argv) > 1 else "open"
     try:
-        variables, log_path, harness_runtime_configs, _harness_flags = _options(argv[2:])
+        options = _options(argv[2:])
     except UsageError as error:
         print("%s\n%s" % (error, __doc__ or ""), file=sys.stderr)
         return 2
     # Applied BEFORE anything that reads them is imported: this module's imports
     # of the port contract and the server are lazy for exactly this reason, so
     # every module below resolves against the environment this call just decided.
-    os.environ.update(variables)
+    os.environ.update(options.variables)
     if cmd == "serve":
-        if log_path is not None:
-            _redirect(log_path)
-        return _serve(harness_runtime_configs)
+        if options.log_path is not None:
+            _redirect(options.log_path)
+        return _serve(options.harness_runtime_configs)
     if cmd == "start":
         return start(_forwarded(argv[2:]))
     if cmd == "stop":

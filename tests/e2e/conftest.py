@@ -24,6 +24,7 @@ from harness.models import UsageRow
 from harness.runtime import (
     HarnessRuntimeConfig,
     HarnessRuntimeConfigs,
+    HarnessRuntimeEntry,
     default_harness_runtime_configs,
 )
 from harness.services.usage import SharedUsageCache
@@ -476,7 +477,7 @@ def isolated_harness_runtime_configs(
     installed = default_harness_runtime_configs()
     return HarnessRuntimeConfigs(
         (
-            (
+            HarnessRuntimeEntry(
                 HarnessName.CLAUDE_CODE,
                 HarnessRuntimeConfig(
                     installed.for_harness(HarnessName.CLAUDE_CODE).executable,
@@ -484,7 +485,7 @@ def isolated_harness_runtime_configs(
                     isolated_claude_home / "managed-settings.json",
                 ),
             ),
-            (
+            HarnessRuntimeEntry(
                 HarnessName.CODEX,
                 HarnessRuntimeConfig(
                     installed.for_harness(HarnessName.CODEX).executable,

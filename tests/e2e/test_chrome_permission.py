@@ -16,6 +16,7 @@ from domain.ids import HarnessName
 from harness.runtime import (
     HarnessRuntimeConfig,
     HarnessRuntimeConfigs,
+    HarnessRuntimeEntry,
     default_harness_runtime_configs,
 )
 from sdk.client import BaqylauClient
@@ -68,11 +69,11 @@ def application_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iter
             notify_webpush=False,
             harness_runtime_configs=HarnessRuntimeConfigs(
                 (
-                    (
+                    HarnessRuntimeEntry(
                         HarnessName.CLAUDE_CODE,
                         HarnessRuntimeConfig(str(wrapper), tmp_path / "claude"),
                     ),
-                    (
+                    HarnessRuntimeEntry(
                         HarnessName.CODEX,
                         default_harness_runtime_configs().for_harness(
                             HarnessName.CODEX
@@ -95,6 +96,7 @@ def scenario_signoff() -> Iterator[None]:
     yield
 
 
+# Harness limit: claude_code only. Only Claude Code supports Chrome control.
 def test_claude_chrome_permission_is_accepted_automatically(
     application_process: ApplicationProcess,
     tmp_path: Path,

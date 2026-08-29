@@ -19,6 +19,7 @@ import ast
 import re
 from collections.abc import Mapping
 from enum import StrEnum
+from typing import NamedTuple
 
 from pydantic import BaseModel, ValidationError
 
@@ -160,7 +161,12 @@ def _next_js_tool(js: str, cursor: int) -> re.Match[str] | None:
     return None
 
 
-def js_tool_calls(js: str) -> tuple[tuple[str, str], ...]:
+class JavaScriptToolCall(NamedTuple):
+    name: str
+    arguments: str
+
+
+def js_tool_calls(js: str) -> tuple[JavaScriptToolCall, ...]:
     """All top-level `tools.<fn>(…)` calls in JavaScript execution order.
 
     codex ≥ 0.146 runs MANY tools through the SAME `exec` custom tool: a shell
@@ -203,7 +209,7 @@ def js_tool_calls(js: str) -> tuple[tuple[str, str], ...]:
             if not depth
             else js[match.end():]
         )
-        calls.append((match.group(1), arguments.strip()))
+        calls.append(JavaScriptToolCall(match.group(1), arguments.strip()))
         cursor = max(index, match.end())
     return tuple(calls)
 
@@ -456,7 +462,9 @@ def _rsp_custom_tool_call(custom_tool_call_payload: CustomToolCallPayload) -> Ro
         if len(calls) > 1:
             actions = []
             metadata = p.internal_chat_message_metadata_passthrough
-            for index, (name, arguments) in enumerate(calls, start=1):
+            for index, call in enumerate(calls, start=1):
+                name = call.name
+                arguments = call.arguments
                 action_call_id = CodexCallId(f"{call_id}:{index}")
                 if name == "apply_patch":
                     # Each authoritative FileChange item carries the patch and

@@ -203,7 +203,9 @@ class Interpreter:
             locator = plugin.resume_locator
             if locator is None:
                 continue
-            for session_id, window_id in locator.locate(terminal_windows):
+            for located_session in locator.locate(terminal_windows):
+                session_id = located_session.session_id
+                window_id = located_session.window_id
                 session = self.session_repository.find(session_id)
                 if session is None or session.terminal_window_id == window_id:
                     continue

@@ -25,7 +25,7 @@ columns, half of them null, and none of them queried.
 
 from __future__ import annotations
 
-MAIN_SCHEMA_VERSION = 23
+MAIN_SCHEMA_VERSION = 24
 AUDIT_SCHEMA_VERSION = 1
 
 # Version 4 rewrote the canonical vocabulary, so files older than that remain
@@ -69,6 +69,7 @@ AUDIT_SCHEMA_VERSION = 1
 # Version 22 accepts the observed native order: the replacement shell can finish
 # before the empty wrapper marks the original shell as background work.
 # Version 23 lets one shell follow several redirected output files.
+# Version 24 gives stored tool counts named fields.
 MAIN_MIGRATIONS: dict[int, tuple[str, ...]] = {
     5: (
         """
@@ -649,6 +650,26 @@ MAIN_MIGRATIONS: dict[int, tuple[str, ...]] = {
         """,
         "INSERT INTO shell_output SELECT * FROM shell_output_one_file",
         "DROP TABLE shell_output_one_file",
+    ),
+    24: (
+        """
+        UPDATE session_data_actors
+        SET payload = json_set(
+            payload,
+            '$.statistics.tool_counts',
+            json((
+                SELECT json_group_array(
+                    json_object(
+                        'tool', json_extract(value, '$[0]'),
+                        'count', json_extract(value, '$[1]')
+                    )
+                )
+                FROM json_each(payload, '$.statistics.tool_counts')
+            ))
+        )
+        WHERE json_type(payload, '$.statistics.tool_counts') = 'array'
+          AND json_type(payload, '$.statistics.tool_counts[0]') = 'array'
+        """,
     ),
 }
 

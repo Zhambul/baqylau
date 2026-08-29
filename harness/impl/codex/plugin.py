@@ -19,6 +19,7 @@ from harness.impl.codex.controls import modeldialog
 from harness.impl.codex.controls.composer import CodexComposer
 from harness.runtime import HarnessRuntimeConfig, default_harness_runtime_configs
 from terminal.contract import TerminalPlugin
+from terminal.models import EnvironmentVariable
 
 # codex sets model and effort through ONE picker, and its reasoning levels are
 # per-model: measured on codex-cli 0.147.0, gpt-5.6-luna's advanced sub-step
@@ -66,7 +67,7 @@ def build_plugin(
     terminal_plugin: TerminalPlugin | None = None,
     session_resume_recorder: SessionResumeRecorder | None = None,
     audit_recorder: AuditRecorder | None = None,
-    launch_environment: tuple[tuple[str, str], ...] = (),
+    launch_environment: tuple[EnvironmentVariable, ...] = (),
 ) -> HarnessPlugin:
     configuration_directory = str(
         harness_runtime_config.configuration_directory

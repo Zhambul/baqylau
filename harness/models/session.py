@@ -13,6 +13,12 @@ if TYPE_CHECKING:  # the plugin is the composition root above these messages
 
 
 @dataclass(frozen=True)
+class LocatedSession:
+    session_id: SessionId
+    window_id: WindowId
+
+
+@dataclass(frozen=True)
 class Session:
     """One observed harness session — a read-model derived from committed facts.
 

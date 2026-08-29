@@ -1,21 +1,28 @@
-"""Architecture rules for harness-neutral live feature files."""
+"""Architecture rules for harness-neutral E2E tests."""
 
 from __future__ import annotations
 
+import ast
 import re
 from dataclasses import dataclass
 from pathlib import Path
+
+from domain.ids import HarnessName
 
 
 ROOT = Path(__file__).parents[1]
 FEATURES = ROOT / "tests" / "e2e" / "features"
 SCENARIO = re.compile(r"^  (Scenario(?: Outline)?):\s*(.+)$", re.MULTILINE)
-FIXED_SESSION = re.compile(r'session configuration .+ uses (?:codex|claude_code)\b')
-HARNESSES = frozenset({"codex", "claude_code"})
+HARNESSES = frozenset(harness.value for harness in HarnessName)
+HARNESS_NAME = "|".join(re.escape(harness) for harness in sorted(HARNESSES))
+FIXED_SESSION = re.compile(rf"session configuration .+ uses (?:{HARNESS_NAME})\b")
+HARNESS_ROW = re.compile(rf"^\s*\|\s*({HARNESS_NAME})\s*\|", re.MULTILINE)
 HARNESS_LIMIT = re.compile(
-    r"^    # Harness limit: (codex|claude_code) only\. (\S.*)$",
+    rf"^\s*# Harness limit: (?:(?P<harness>{HARNESS_NAME}) only|"
+    r"(?P<none>no harness))\. (?P<reason>\S.*)$",
     re.MULTILINE,
 )
+HARNESS_LIMIT_LINE = re.compile(r"^\s*# Harness limit:.*$", re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -33,16 +40,32 @@ class FeatureScenario:
     def harnesses(self) -> frozenset[str]:
         return frozenset(
             match.group(1)
-            for match in re.finditer(
-                r"^\s*\|\s*(codex|claude_code)\s*\|",
-                self.body,
-                re.MULTILINE,
-            )
+            for match in HARNESS_ROW.finditer(self.body)
         )
 
     @property
-    def harness_limits(self) -> tuple[tuple[str, str], ...]:
-        return tuple(HARNESS_LIMIT.findall(self.behavior))
+    def harness_limits(self) -> tuple[HarnessLimit, ...]:
+        return _harness_limits(self.behavior)
+
+    @property
+    def harness_limit_lines(self) -> tuple[str, ...]:
+        return tuple(HARNESS_LIMIT_LINE.findall(self.behavior))
+
+
+@dataclass(frozen=True)
+class HarnessLimit:
+    harnesses: frozenset[str]
+    reason: str
+
+
+def _harness_limits(source: str) -> tuple[HarnessLimit, ...]:
+    return tuple(
+        HarnessLimit(
+            frozenset({match.group("harness")}) if match.group("harness") else frozenset(),
+            match.group("reason"),
+        )
+        for match in HARNESS_LIMIT.finditer(source)
+    )
 
 
 def _scenarios(path: Path) -> tuple[FeatureScenario, ...]:
@@ -57,6 +80,22 @@ def _scenarios(path: Path) -> tuple[FeatureScenario, ...]:
         )
         for index, match in enumerate(matches)
     )
+
+
+def _direct_test_functions(
+    tree: ast.Module,
+) -> tuple[ast.AsyncFunctionDef | ast.FunctionDef, ...]:
+    tests = []
+    containers: list[ast.Module | ast.ClassDef] = [tree]
+    while containers:
+        container = containers.pop()
+        for node in container.body:
+            if isinstance(node, ast.ClassDef):
+                containers.append(node)
+            elif isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)):
+                if node.name.startswith("test_"):
+                    tests.append(node)
+    return tuple(tests)
 
 
 def test_harness_behavior_is_selected_only_by_examples_rows():
@@ -80,13 +119,14 @@ def test_harness_behavior_is_selected_only_by_examples_rows():
     assert violations == []
 
 
-def test_shared_harness_behavior_covers_each_harness():
+def test_each_e2e_scenario_covers_each_harness_or_declares_a_limit():
     violations = []
     for path in sorted(FEATURES.glob("*.feature")):
         for scenario in _scenarios(path):
-            if not scenario.harnesses:
-                continue
             location = f"{path.relative_to(ROOT)}: {scenario.title}"
+            if len(scenario.harness_limit_lines) != len(scenario.harness_limits):
+                violations.append(f"{location} has an invalid harness limit comment")
+                continue
             if scenario.harnesses == HARNESSES:
                 if scenario.harness_limits:
                     violations.append(f"{location} has a stale harness limit comment")
@@ -94,16 +134,44 @@ def test_shared_harness_behavior_covers_each_harness():
             if len(scenario.harness_limits) != 1:
                 missing = ", ".join(sorted(HARNESSES - scenario.harnesses))
                 violations.append(
-                    f"{location} does not test {missing} and needs one harness limit comment"
+                    f"{location} does not test {missing} and needs one "
+                    "'# Harness limit:' comment"
                 )
                 continue
-            limited_harness, reason = scenario.harness_limits[0]
-            if scenario.harnesses != {limited_harness}:
+            limit = scenario.harness_limits[0]
+            if scenario.harnesses != limit.harnesses:
                 violations.append(
                     f"{location} tests {sorted(scenario.harnesses)!r}, but its comment selects "
-                    f"{limited_harness!r}"
+                    f"{sorted(limit.harnesses)!r}"
                 )
-            if not reason.rstrip().endswith("."):
+            if not limit.reason.rstrip().endswith("."):
+                violations.append(f"{location} has an incomplete harness limit reason")
+
+    assert violations == []
+
+
+def test_direct_python_e2e_tests_declare_a_harness_limit():
+    violations = []
+    e2e_root = ROOT / "tests" / "e2e"
+    for path in sorted(e2e_root.rglob("test_*.py")):
+        source = path.read_text(encoding="utf-8")
+        lines = source.splitlines()
+        for node in _direct_test_functions(ast.parse(source)):
+            first_line = min(
+                (item.lineno for item in (*node.decorator_list, node)),
+                default=node.lineno,
+            )
+            comment = lines[first_line - 2] if first_line > 1 else ""
+            limits = _harness_limits(comment)
+            location = f"{path.relative_to(ROOT)}: {node.name}"
+            if len(limits) != 1:
+                violations.append(
+                    f"{location} needs one '# Harness limit:' comment directly above it"
+                )
+                continue
+            if limits[0].harnesses == HARNESSES:
+                violations.append(f"{location} has a stale harness limit comment")
+            if not limits[0].reason.rstrip().endswith("."):
                 violations.append(f"{location} has an incomplete harness limit reason")
 
     assert violations == []

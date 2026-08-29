@@ -55,6 +55,7 @@ from terminal.models.panes import (
     WindowFocusResponse,
 )
 from terminal.models.tabs import (
+    EnvironmentVariable,
     TabCloseRequest,
     TabCloseResponse,
     TabColorClearRequest,
@@ -122,13 +123,13 @@ class PtyWindows:
         self,
         command: tuple[str, ...],
         working_directory: str,
-        environment: tuple[tuple[str, str], ...],
+        environment: tuple[EnvironmentVariable, ...],
     ) -> PtyWindow | None:
         with self.lock:
             window_id = WindowId(f"{self._namespace}:{next(self._ids)}")
             child_environment = dict(self.environment)
             launch_environment = {
-                str(name): str(value) for name, value in environment
+                variable.name: variable.value for variable in environment
             }
             child_environment.update(launch_environment)
         # Last, so the window's own identity cannot be overridden by a caller's

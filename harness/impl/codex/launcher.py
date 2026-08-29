@@ -12,7 +12,12 @@ from harness.models import LaunchRequest, LaunchResult, LaunchStatus
 from harness.runtime import HarnessRuntimeConfig
 from terminal.contract import TerminalPlugin
 from terminal.launch import launch_tab_request
-from terminal.models import KeySendRequest, ScreenReadRequest, SESSION_WINDOW_TAG
+from terminal.models import (
+    EnvironmentVariable,
+    KeySendRequest,
+    ScreenReadRequest,
+    SESSION_WINDOW_TAG,
+)
 from terminal.models.values import WindowId as TerminalWindowId
 
 POLL_SECONDS = 0.25
@@ -33,7 +38,7 @@ class CodexLauncher(HarnessLauncher):
         terminal_plugin: TerminalPlugin,
         session_resume_recorder: SessionResumeRecorder,
         audit_recorder: AuditRecorder,
-        launch_environment: tuple[tuple[str, str], ...] = (),
+        launch_environment: tuple[EnvironmentVariable, ...] = (),
     ) -> None:
         self.runtime = harness_runtime_config
         self.terminal = terminal_plugin
@@ -91,7 +96,9 @@ class CodexLauncher(HarnessLauncher):
                 title="Codex",
                 environment=(
                     *self.launch_environment,
-                    ("CODEX_HOME", str(self.runtime.configuration_directory)),
+                    EnvironmentVariable(
+                        "CODEX_HOME", str(self.runtime.configuration_directory)
+                    ),
                 ),
             )
         )

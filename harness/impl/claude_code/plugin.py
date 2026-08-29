@@ -19,6 +19,7 @@ from harness.impl.claude_code.usage.rows import ClaudeCodeUsage
 from harness.impl.claude_code.controls import rewindmenu
 from harness.runtime import HarnessRuntimeConfig, default_harness_runtime_configs
 from terminal.contract import TerminalPlugin
+from terminal.models import EnvironmentVariable
 
 # The models the ✦ menu offers, each with the reasoning levels IT supports.
 # Claude Code's levels do not currently vary by model, so every model carries the
@@ -71,7 +72,7 @@ def build_plugin(
     terminal_plugin: TerminalPlugin | None = None,
     session_resume_recorder: SessionResumeRecorder | None = None,
     audit_recorder: AuditRecorder | None = None,
-    launch_environment: tuple[tuple[str, str], ...] = (),
+    launch_environment: tuple[EnvironmentVariable, ...] = (),
 ) -> HarnessPlugin:
     configuration_directory = str(
         harness_runtime_config.configuration_directory

@@ -27,13 +27,20 @@ from _model import (
     TokenRecord,
 )
 
+
+class Color(NamedTuple):
+    red: int
+    green: int
+    blue: int
+
+
 RESET = "\033[0m"
 CLEAR = "\033[H\033[2J\033[3J"
 # The mirror's standing title. Painted through the same wrap as everything else
 # so that it obeys the pane's width: the daemon emitted it as a fixed string,
 # which over-ran a narrow pane by twelve columns.
 HEADER_TEXT = " ◧ command mirror — waiting for commands… "
-HEADER_COLOR = (128, 128, 128)
+HEADER_COLOR = Color(128, 128, 128)
 # The mirror is a scrollback surface: it paints the whole feed and lets the
 # terminal keep the history. Past this many rows the oldest are dropped, because
 # a repaint that writes a hundred thousand lines is felt.
@@ -41,23 +48,23 @@ SCROLLBACK_ROWS = 4800
 
 # The palette, unchanged from the daemon's (`terminal/mirror/presenter.py`) so
 # that a person who looks at both panes and the browser sees one product.
-TEXT = (170, 185, 210)
-MUTED = (133, 143, 166)
-DIM = (92, 99, 112)
-USER = (97, 175, 239)
-SUCCESS = (152, 195, 121)
-FAILURE = (224, 108, 117)
-WORKING = (209, 154, 102)
-MODIFIED = (229, 192, 123)
-DARK = (24, 26, 30)
-VALUE = (171, 178, 191)
+TEXT = Color(170, 185, 210)
+MUTED = Color(133, 143, 166)
+DIM = Color(92, 99, 112)
+USER = Color(97, 175, 239)
+SUCCESS = Color(152, 195, 121)
+FAILURE = Color(224, 108, 117)
+WORKING = Color(209, 154, 102)
+MODIFIED = Color(229, 192, 123)
+DARK = Color(24, 26, 30)
+VALUE = Color(171, 178, 191)
 SEPARATOR = " · "
 # The backgrounds a diff is read by. Intra-line emphasis is computed from the
 # diff itself and needs no syntax-highlighting dependency.
-REMOVED_BACKGROUND = (55, 31, 36)
-ADDED_BACKGROUND = (29, 50, 38)
-REMOVED_CHANGED_BACKGROUND = (103, 42, 50)
-ADDED_CHANGED_BACKGROUND = (43, 87, 58)
+REMOVED_BACKGROUND = Color(55, 31, 36)
+ADDED_BACKGROUND = Color(29, 50, 38)
+REMOVED_CHANGED_BACKGROUND = Color(103, 42, 50)
+ADDED_CHANGED_BACKGROUND = Color(43, 87, 58)
 
 # What a click on a pane link launches. Both are the terminal's own
 # configuration — a scheme it maps to a program — and both carry the session and
@@ -66,11 +73,15 @@ ADDED_CHANGED_BACKGROUND = (43, 87, 58)
 COPY_SCHEME = "baqylau-content://%s/%s/%s"
 VIEW_SCHEME = "baqylau-view://%s/%s/%s"
 
-Color = tuple[int, int, int]
 # A link builder: an id in, the URI a click on it should carry out. Passed in
 # rather than built here because it needs the session and the pane kind, which are
 # the PROCESS's identity and not the renderer's business.
 Links = Callable[[str], str]
+
+
+class _ScorePart(NamedTuple):
+    text: str
+    color: Color
 
 
 class Span:
@@ -355,7 +366,7 @@ def session_usage(model: SessionModel) -> tuple[TokenRecord, float | None]:
     return tokens, cost
 
 
-def _row(marker: str, parts: list[tuple[str, Color]], width: int) -> list[str]:
+def _row(marker: str, parts: list[_ScorePart], width: int) -> list[str]:
     """One scoreboard row: a marker, then as many ` · `-joined parts as fit.
 
     Parts are dropped from the RIGHT when they do not fit, never truncated: the
@@ -392,16 +403,16 @@ def scoreboard(model: SessionModel, width: int) -> str:
         + tokens.cache_read_tokens
         + cache_write
     )
-    identity = [(model.session.session_id, VALUE)]
+    identity = [_ScorePart(model.session.session_id, VALUE)]
     account = model.session.account
     if account:
-        identity.append(("◈ " + account.display_name, MUTED))
-    messages = [("%d msgs" % statistics.actor_message_count, MUTED)]
-    activity = [("%d cmds" % statistics.shell_command_count, MUTED)]
+        identity.append(_ScorePart("◈ " + account.display_name, MUTED))
+    messages = [_ScorePart("%d msgs" % statistics.actor_message_count, MUTED)]
+    activity = [_ScorePart("%d cmds" % statistics.shell_command_count, MUTED)]
     if statistics.failed_shell_command_count:
-        activity.append(("%d✗" % statistics.failed_shell_command_count, FAILURE))
-    activity.append(("⏱ " + duration(statistics.active_seconds), MUTED))
-    usage_parts = [("%s total" % count(total), VALUE)]
+        activity.append(_ScorePart("%d✗" % statistics.failed_shell_command_count, FAILURE))
+    activity.append(_ScorePart("⏱ " + duration(statistics.active_seconds), MUTED))
+    usage_parts = [_ScorePart("%s total" % count(total), VALUE)]
     for value, label in (
         (tokens.input_tokens, "in"),
         (tokens.output_tokens, "out"),
@@ -409,19 +420,19 @@ def scoreboard(model: SessionModel, width: int) -> str:
         (cache_write, "write"),
     ):
         if value:
-            usage_parts.append(("%s %s" % (count(value), label), MUTED))
+            usage_parts.append(_ScorePart("%s %s" % (count(value), label), MUTED))
     if cost is not None:
-        usage_parts.append(("≈ $%.2f" % cost, WORKING))
-    detail: list[tuple[str, Color]] = []
+        usage_parts.append(_ScorePart("≈ $%.2f" % cost, WORKING))
+    detail: list[_ScorePart] = []
     if statistics.file_count:
         noun = "file" if statistics.file_count == 1 else "files"
-        detail.append(("%d %s" % (statistics.file_count, noun), MUTED))
+        detail.append(_ScorePart("%d %s" % (statistics.file_count, noun), MUTED))
     if statistics.lines_added:
-        detail.append(("+%d" % statistics.lines_added, SUCCESS))
+        detail.append(_ScorePart("+%d" % statistics.lines_added, SUCCESS))
     if statistics.lines_removed:
-        detail.append(("-%d" % statistics.lines_removed, FAILURE))
+        detail.append(_ScorePart("-%d" % statistics.lines_removed, FAILURE))
     detail.extend(
-        ("%s %d" % (tool, tool_count), MUTED)
+        _ScorePart("%s %d" % (tool, tool_count), MUTED)
         for tool, tool_count in sorted(
             statistics.tool_counts.items(), key=lambda item: (-item[1], item[0].lower())
         )
@@ -676,10 +687,20 @@ class _DiffRow(NamedTuple):
     kind: str
     number: int | None
     text: str
-    changed: tuple[int, int] | None = None
+    changed: _TextRange | None = None
 
 
-def _changed_ranges(before: str, after: str) -> tuple[tuple[int, int], tuple[int, int]]:
+class _TextRange(NamedTuple):
+    start: int
+    end: int
+
+
+class _ChangedRanges(NamedTuple):
+    removed: _TextRange
+    added: _TextRange
+
+
+def _changed_ranges(before: str, after: str) -> _ChangedRanges:
     prefix = 0
     limit = min(len(before), len(after))
     while prefix < limit and before[prefix] == after[prefix]:
@@ -688,7 +709,10 @@ def _changed_ranges(before: str, after: str) -> tuple[tuple[int, int], tuple[int
     remaining = min(len(before) - prefix, len(after) - prefix)
     while suffix < remaining and before[-suffix - 1] == after[-suffix - 1]:
         suffix += 1
-    return (prefix, len(before) - suffix), (prefix, len(after) - suffix)
+    return _ChangedRanges(
+        _TextRange(prefix, len(before) - suffix),
+        _TextRange(prefix, len(after) - suffix),
+    )
 
 
 def _diff_rows(unified_diff: str) -> list[_DiffRow]:

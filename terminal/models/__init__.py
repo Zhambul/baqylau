@@ -29,6 +29,7 @@ from terminal.models.panes import (
     WindowFocusResponse,
 )
 from terminal.models.tabs import (
+    EnvironmentVariable,
     TabCloseRequest,
     TabCloseResponse,
     TabColorClearRequest,
@@ -58,6 +59,7 @@ from terminal.models.viewport import (
 
 __all__ = [
     "ACTIVITY_PANE_TAG",
+    "EnvironmentVariable",
     "KeySendRequest",
     "KeySendResponse",
     "PaneAnchor",

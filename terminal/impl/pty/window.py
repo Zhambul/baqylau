@@ -39,13 +39,26 @@ CLOSE_TIMEOUT_SECONDS = 10.0
 DESCENDANT_CLOSE_TIMEOUT_SECONDS = 2.0
 READ_SIZE = 65536
 
+
+@dataclass(frozen=True)
+class _TerminalQuery:
+    query: bytes
+    reply: bytes
+
+
+@dataclass(frozen=True, order=True)
+class _LocatedReply:
+    position: int
+    reply: bytes
+
+
 _QUERY_REPLIES = (
-    (b"\x1b[c", b"\x1b[?1;2c"),
-    (b"\x1b[?u", b"\x1b[?0u"),
-    (b"\x1b]10;?\x07", b"\x1b]10;rgb:ffff/ffff/ffff\x1b\\"),
-    (b"\x1b]10;?\x1b\\", b"\x1b]10;rgb:ffff/ffff/ffff\x1b\\"),
-    (b"\x1b]11;?\x07", b"\x1b]11;rgb:0000/0000/0000\x1b\\"),
-    (b"\x1b]11;?\x1b\\", b"\x1b]11;rgb:0000/0000/0000\x1b\\"),
+    _TerminalQuery(b"\x1b[c", b"\x1b[?1;2c"),
+    _TerminalQuery(b"\x1b[?u", b"\x1b[?0u"),
+    _TerminalQuery(b"\x1b]10;?\x07", b"\x1b]10;rgb:ffff/ffff/ffff\x1b\\"),
+    _TerminalQuery(b"\x1b]10;?\x1b\\", b"\x1b]10;rgb:ffff/ffff/ffff\x1b\\"),
+    _TerminalQuery(b"\x1b]11;?\x07", b"\x1b]11;rgb:0000/0000/0000\x1b\\"),
+    _TerminalQuery(b"\x1b]11;?\x1b\\", b"\x1b]11;rgb:0000/0000/0000\x1b\\"),
 )
 _CURSOR_POSITION_QUERY = b"\x1b[6n"
 
@@ -58,21 +71,29 @@ class _TerminalQueryResponder:
 
     def feed(self, chunk: bytes, row: int, column: int) -> bytes:
         data = self.pending + chunk
-        found: list[tuple[int, bytes]] = []
-        for query, reply in _QUERY_REPLIES:
-            position = data.find(query)
+        found: list[_LocatedReply] = []
+        for terminal_query in _QUERY_REPLIES:
+            position = data.find(terminal_query.query)
             while position >= 0:
-                found.append((position, reply))
-                position = data.find(query, position + len(query))
+                found.append(_LocatedReply(position, terminal_query.reply))
+                position = data.find(
+                    terminal_query.query,
+                    position + len(terminal_query.query),
+                )
         position = data.find(_CURSOR_POSITION_QUERY)
         while position >= 0:
-            found.append((position, f"\x1b[{row};{column}R".encode()))
+            found.append(
+                _LocatedReply(position, f"\x1b[{row};{column}R".encode())
+            )
             position = data.find(
                 _CURSOR_POSITION_QUERY,
                 position + len(_CURSOR_POSITION_QUERY),
             )
 
-        queries = (*(query for query, _reply in _QUERY_REPLIES), _CURSOR_POSITION_QUERY)
+        queries = (
+            *(terminal_query.query for terminal_query in _QUERY_REPLIES),
+            _CURSOR_POSITION_QUERY,
+        )
         longest_prefix = max(len(query) for query in queries) - 1
         tail = data[-longest_prefix:]
         self.pending = b""
@@ -81,7 +102,7 @@ class _TerminalQueryResponder:
             if any(query.startswith(candidate) for query in queries):
                 self.pending = candidate
                 break
-        return b"".join(reply for _position, reply in sorted(found))
+        return b"".join(located.reply for located in sorted(found))
 
 
 @dataclass

@@ -56,6 +56,7 @@ from domain.sessiondata import (
     SessionFacts,
     SessionGoal,
     SessionTask,
+    ToolCount,
 )
 from domain.values import (
     AccountReference,
@@ -365,7 +366,7 @@ def test_an_actors_numbers_are_its_own():
                 lines_added=120,
                 lines_removed=30,
                 actor_message_count=2,
-                tool_counts=(("Bash", 12), ("Read", 4)),
+                tool_counts=(ToolCount("Bash", 12), ToolCount("Read", 4)),
                 active_seconds=1240.0,
             ),
         )

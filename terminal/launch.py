@@ -9,26 +9,28 @@ from __future__ import annotations
 
 import re
 
-from terminal.models import TabOpenRequest
+from terminal.models import EnvironmentVariable, TabOpenRequest
 
 ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def _validate_launch(
-    command: tuple[str, ...], environment: tuple[tuple[str, str], ...]
+    command: tuple[str, ...], environment: tuple[EnvironmentVariable, ...]
 ) -> None:
     if not command:
         raise ValueError("launch command cannot be empty")
-    for name, _ in environment:
-        if not ENVIRONMENT_NAME.fullmatch(name):
-            raise ValueError(f"invalid environment variable name: {name!r}")
+    for variable in environment:
+        if not ENVIRONMENT_NAME.fullmatch(variable.name):
+            raise ValueError(
+                f"invalid environment variable name: {variable.name!r}"
+            )
 
 
 def launch_tab_request(
     working_directory: str,
     command: tuple[str, ...],
     title: str = "",
-    environment: tuple[tuple[str, str], ...] = (),
+    environment: tuple[EnvironmentVariable, ...] = (),
 ) -> TabOpenRequest:
     """Build one direct, interactive terminal launch for a harness CLI."""
     _validate_launch(command, environment)

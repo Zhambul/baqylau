@@ -94,8 +94,8 @@ class KittyTabs(TerminalTabs):
         arguments = ["launch", "--type=tab", "--cwd", tab_open_request.working_directory]
         if self.kitty_remote.app_focused():
             arguments.append("--keep-focus")
-        for name, value in tab_open_request.environment:
-            arguments += ["--env", f"{name}={value}"]
+        for variable in tab_open_request.environment:
+            arguments += ["--env", f"{variable.name}={variable.value}"]
         # The request's title is NOT pinned here. A launched tab's title
         # follows its window's own OSC title, which the harness running in it
         # publishes; an explicit title at launch would freeze that out.

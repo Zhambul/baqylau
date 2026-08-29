@@ -48,7 +48,7 @@ from harness.models.hooks import HarnessHookRequest, HarnessHookResponse
 from harness.models.info import HarnessInfo
 from harness.models.launch import LaunchRequest, LaunchResult
 from harness.models.probe import TerminalInputState
-from harness.models.session import Session
+from harness.models.session import LocatedSession, Session
 from harness.models.telemetry import (
     HarnessTelemetryRequest,
     HarnessTelemetryResponse,
@@ -271,7 +271,7 @@ class HarnessResumeLocator(Protocol):
     def locate(
         self,
         windows: tuple[WindowInfo, ...],
-    ) -> tuple[tuple[SessionId, WindowId], ...]: ...
+    ) -> tuple[LocatedSession, ...]: ...
 
 
 class SessionTerminalState(Protocol):

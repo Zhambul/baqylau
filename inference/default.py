@@ -21,7 +21,12 @@ from harness.runtime import HarnessRuntimeConfig, HarnessRuntimeConfigs, default
 from inference.contract import Model, ModelPromptRequest, ModelPromptResponse
 from inference.errors import ModelUnavailableError, ProviderUnavailableError
 from terminal.contract import TerminalPlugin
-from terminal.models import ScreenReadRequest, TabCloseRequest, TabOpenRequest
+from terminal.models import (
+    EnvironmentVariable,
+    ScreenReadRequest,
+    TabCloseRequest,
+    TabOpenRequest,
+)
 
 INTERNAL_MODEL_VARIABLE = "BAQYLAU_INTERNAL_MODEL"
 DEFAULT_TIMEOUT_SECONDS = 45.0
@@ -81,6 +86,13 @@ class _Candidate:
     command: Callable[[str, str], tuple[str, ...]]
 
 
+@dataclass(frozen=True)
+class _RankedCandidate:
+    capacity: Decimal
+    order: int
+    candidate: _Candidate
+
+
 class _ErrorAudit(AuditDocument):
     error_type: str
     error: str
@@ -112,6 +124,12 @@ class _AvailableProvider(AuditDocument):
 _ProviderState: TypeAlias = (
     _ExecutableUnavailable | _CapacityUnavailable | _AvailableProvider
 )
+
+
+@dataclass(frozen=True)
+class _CandidateSelection:
+    candidates: tuple[_Candidate, ...]
+    provider_states: tuple[_ProviderState, ...]
 
 
 class _ModelUnavailableAudit(_ErrorAudit):
@@ -248,7 +266,7 @@ class _SmallModel:
 
     def send(self, model_prompt_request: ModelPromptRequest) -> ModelPromptResponse:
         try:
-            candidates, provider_states = self._candidates()
+            selection = self._candidates()
         except Exception as error:
             self.audit.error(
                 model_prompt_request.session_id,
@@ -263,8 +281,8 @@ class _SmallModel:
         # provider; a timeout moves to the other provider first. Each provider
         # has a finite deadline, but current native CLIs can need more than 15
         # seconds under ordinary load before they write their final result.
-        attempts = list(candidates)
-        retries = {candidate: 1 for candidate in candidates}
+        attempts = list(selection.candidates)
+        retries = {candidate: 1 for candidate in selection.candidates}
         attempt = 0
         while attempts:
             candidate = attempts.pop(0)
@@ -305,15 +323,15 @@ class _SmallModel:
             _ModelUnavailableAudit(
                 error_type=error_audit.error_type,
                 error=error_audit.error,
-                providers=provider_states,
+                providers=selection.provider_states,
                 attempt_failures=tuple(failures),
             ),
         )
         raise model_unavailable_error
 
-    def _candidates(self) -> tuple[tuple[_Candidate, ...], tuple[_ProviderState, ...]]:
+    def _candidates(self) -> _CandidateSelection:
         rows = self.usage.usage_rows()
-        ranked: list[tuple[Decimal, int, _Candidate]] = []
+        ranked: list[_RankedCandidate] = []
         states: list[_ProviderState] = []
         for order, candidate in enumerate(CANDIDATES):
             executable = self.executable_resolver(candidate.executable)
@@ -345,9 +363,21 @@ class _SmallModel:
                     remaining_capacity_percent=capacity,
                 )
             )
-            ranked.append((capacity, -order, replace(candidate, executable=executable)))
-        ranked.sort(reverse=True, key=lambda item: (item[0], item[1]))
-        return tuple(candidate for _capacity, _order, candidate in ranked), tuple(states)
+            ranked.append(
+                _RankedCandidate(
+                    capacity,
+                    -order,
+                    replace(candidate, executable=executable),
+                )
+            )
+        ranked.sort(
+            reverse=True,
+            key=lambda item: (item.capacity, item.order),
+        )
+        return _CandidateSelection(
+            tuple(item.candidate for item in ranked),
+            tuple(states),
+        )
 
     def _send(self, candidate: _Candidate, request: ModelPromptRequest) -> ModelPromptResponse:
         with tempfile.TemporaryDirectory(prefix="baqylau-model-") as directory:
@@ -408,27 +438,29 @@ class _SmallModel:
 def _model_environment(
     harness: HarnessName,
     runtime_config: HarnessRuntimeConfig,
-) -> tuple[tuple[str, str], ...]:
+) -> tuple[EnvironmentVariable, ...]:
     if harness == HarnessName.CLAUDE_CODE:
-        environment = [(INTERNAL_MODEL_VARIABLE, "1")]
+        environment = [EnvironmentVariable(INTERNAL_MODEL_VARIABLE, "1")]
         if not runtime_config.use_vendor_default_configuration:
             environment.append(
-                (
+                EnvironmentVariable(
                     "CLAUDE_CONFIG_DIR",
                     str(runtime_config.configuration_directory),
                 )
             )
         if runtime_config.settings_file is not None:
             environment.append(
-                (
+                EnvironmentVariable(
                     "CLAUDE_CODE_MANAGED_SETTINGS_PATH",
                     str(runtime_config.settings_file),
                 )
             )
         return tuple(environment)
     return (
-        (INTERNAL_MODEL_VARIABLE, "1"),
-        ("CODEX_HOME", str(runtime_config.configuration_directory)),
+        EnvironmentVariable(INTERNAL_MODEL_VARIABLE, "1"),
+        EnvironmentVariable(
+            "CODEX_HOME", str(runtime_config.configuration_directory)
+        ),
     )
 
 

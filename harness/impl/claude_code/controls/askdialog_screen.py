@@ -68,6 +68,12 @@ class Row:
     check: bool | None
 
 
+@dataclass(frozen=True)
+class _QuestionMatch:
+    count: int
+    index: int
+
+
 def region(screen: str) -> str:
     """The dialog region: from the LAST header-chip bar (the only ☐/☒ on a
     terminal screen) to the end. "" when no dialog is on screen.
@@ -168,16 +174,16 @@ def current_question(
     # questions have the same best match. A wrong answer is worse than an
     # indeterminate control result.
     visible_labels = {row.label for row in rows(screen)}
-    matches: list[tuple[int, int]] = []
+    matches: list[_QuestionMatch] = []
     for i, question in enumerate(questions):
         option_labels = {
             label
             for option in (question.options or ())
             if (label := (option.label or "").strip())
         }
-        matches.append((len(visible_labels & option_labels), i))
-    best_count = max((count for count, _ in matches), default=0)
-    winners = [i for count, i in matches if count == best_count]
+        matches.append(_QuestionMatch(len(visible_labels & option_labels), i))
+    best_count = max((match.count for match in matches), default=0)
+    winners = [match.index for match in matches if match.count == best_count]
     if best_count > 0 and len(winners) == 1:
         return winners[0]
     return None

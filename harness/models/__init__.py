@@ -87,7 +87,7 @@ from harness.models.launch import (
     LaunchStatus,
 )
 from harness.models.probe import TerminalInputState, TerminalSessionState
-from harness.models.session import Session
+from harness.models.session import LocatedSession, Session
 from harness.models.usage import (
     UsageBlock,
     UsageRow,
@@ -138,6 +138,7 @@ __all__ = [
     "LaunchRequest",
     "LaunchResult",
     "LaunchStatus",
+    "LocatedSession",
     "ModelOption",
     "OUTPUT_LOCATION_SOURCE_TYPE",
     "RESUME_LIVENESS_SOURCE_TYPE",

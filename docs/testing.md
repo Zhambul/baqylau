@@ -128,6 +128,20 @@ The suite has these layers:
   step checks one fact. Time limits are in `testkit.policy`, not in feature
   text.
 
+Each E2E scenario must test all values in `HarnessName`. If a harness cannot
+support the behavior, put one machine-readable comment in the scenario:
+
+```gherkin
+    # Harness limit: claude_code only. Only Claude Code supports monitors.
+```
+
+Use `codex only` for a Codex-only scenario. Use `no harness` for an
+infrastructure scenario that does not start a harness. The reason must end with
+a period. Put the same comment directly above a direct Python E2E test. The
+architecture tests compare each feature comment with its Examples rows. They
+also get the complete harness set from `HarnessName`. Thus, a new harness makes
+each shared scenario fail until its Examples table includes the new harness.
+
 The suite does not read application logs or databases. Each scenario records a
 diagnostic checkpoint before it starts. At signoff, it closes each active
 session, checks that the session and all actors are finished, waits for the raw,

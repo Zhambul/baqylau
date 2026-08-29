@@ -13,7 +13,12 @@ from harness.models import LaunchRequest, LaunchResult, LaunchStatus
 from harness.runtime import HarnessRuntimeConfig
 from terminal.contract import TerminalPlugin
 from terminal.launch import launch_tab_request
-from terminal.models import KeySendRequest, ScreenReadRequest, SESSION_WINDOW_TAG
+from terminal.models import (
+    EnvironmentVariable,
+    KeySendRequest,
+    ScreenReadRequest,
+    SESSION_WINDOW_TAG,
+)
 from terminal.models.values import WindowId as TerminalWindowId
 
 # The launch selections ride the CLI environment. Claude Code does not report
@@ -35,7 +40,7 @@ class ClaudeCodeLauncher(HarnessLauncher):
         terminal_plugin: TerminalPlugin,
         session_resume_recorder: SessionResumeRecorder,
         audit_recorder: AuditRecorder,
-        launch_environment: tuple[tuple[str, str], ...] = (),
+        launch_environment: tuple[EnvironmentVariable, ...] = (),
     ) -> None:
         self.runtime = harness_runtime_config
         self.terminal = terminal_plugin
@@ -63,20 +68,29 @@ class ClaudeCodeLauncher(HarnessLauncher):
         environment = list(self.launch_environment)
         if not self.runtime.use_vendor_default_configuration:
             environment.append(
-                ("CLAUDE_CONFIG_DIR", str(self.runtime.configuration_directory))
+                EnvironmentVariable(
+                    "CLAUDE_CONFIG_DIR", str(self.runtime.configuration_directory)
+                )
             )
         if self.runtime.settings_file is not None:
             environment.append(
-                ("CLAUDE_CODE_MANAGED_SETTINGS_PATH", str(self.runtime.settings_file))
+                EnvironmentVariable(
+                    "CLAUDE_CODE_MANAGED_SETTINGS_PATH",
+                    str(self.runtime.settings_file),
+                )
             )
         if launch_request.resume_session_id is not None:
             arguments.extend(("--resume", str(launch_request.resume_session_id)))
         if launch_request.model:
             arguments.extend(("--model", launch_request.model))
-            environment.append((LAUNCH_MODEL_VARIABLE, launch_request.model))
+            environment.append(
+                EnvironmentVariable(LAUNCH_MODEL_VARIABLE, launch_request.model)
+            )
         if launch_request.effort:
             arguments.extend(("--effort", launch_request.effort))
-            environment.append((LAUNCH_EFFORT_VARIABLE, launch_request.effort))
+            environment.append(
+                EnvironmentVariable(LAUNCH_EFFORT_VARIABLE, launch_request.effort)
+            )
         if prompt.strip():
             arguments.append(prompt)
 

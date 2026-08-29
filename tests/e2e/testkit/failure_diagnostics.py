@@ -323,7 +323,9 @@ def _stored_window_ids(directory: Path) -> frozenset[str]:
 
 def _profile_state(application: ApplicationProcess) -> str:
     lines = ["harness profiles"]
-    for harness, runtime in application.config.harness_runtime_configs.entries():
+    for entry in application.config.harness_runtime_configs.entries():
+        harness = entry.harness
+        runtime = entry.config
         line = (
             f"  harness={harness} executable={runtime.executable!r} "
             f"configuration_directory={str(runtime.configuration_directory)!r} "

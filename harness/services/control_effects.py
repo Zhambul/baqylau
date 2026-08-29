@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 
 from domain.entries import (
     AssignmentFinishedBody,
@@ -41,6 +42,12 @@ from harness.models.directives import (
 from repository.contract.facts import RawEventRepository
 from repository.contract.session_data import SessionDataRepository
 from repository.mapper.documents import encode_document
+
+
+@dataclass(frozen=True)
+class SessionCloseWork:
+    entry: SessionEntry
+    observation: SessionCloseWorkObservation
 
 
 class ControlEffectRecorder:
@@ -206,7 +213,7 @@ class ControlEffectRecorder:
     def work_before_close(
         self,
         session_id: SessionId,
-    ) -> tuple[tuple[SessionEntry, SessionCloseWorkObservation], ...]:
+    ) -> tuple[SessionCloseWork, ...]:
         """Read the open work before the terminal can end or change it."""
         entries = self.session_data.entries_of_types(
             session_id,
@@ -225,7 +232,7 @@ class ControlEffectRecorder:
         self,
         session: Session,
         close_session: CloseSession,
-        observations: tuple[tuple[SessionEntry, SessionCloseWorkObservation], ...],
+        observations: tuple[SessionCloseWork, ...],
     ) -> None:
         """Record the confirmed close and every work item that it stopped."""
         if session.plugin is None:
@@ -256,7 +263,9 @@ class ControlEffectRecorder:
                 harness_process_id=session.harness_process_id,
             )
         ]
-        for entry, observation in observations:
+        for work in observations:
+            entry = work.entry
+            observation = work.observation
             identity = (
                 f"{harness}:control:{close_session.session_id}:"
                 f"{close_session.request_id}:{observation.kind}:{observation.subject_id}"
@@ -282,7 +291,7 @@ class ControlEffectRecorder:
 
 def _open_work(
     entries: tuple[SessionEntry, ...],
-) -> tuple[tuple[SessionEntry, SessionCloseWorkObservation], ...]:
+) -> tuple[SessionCloseWork, ...]:
     turns: dict[TurnId | ShellId | AssignmentId, SessionEntry] = {}
     shells: dict[TurnId | ShellId | AssignmentId, SessionEntry] = {}
     assignments: dict[TurnId | ShellId | AssignmentId, SessionEntry] = {}
@@ -310,8 +319,11 @@ def _open_work(
 def _work_observations(
     open_work_kind: OpenWorkKind,
     open_items: Mapping[TurnId | ShellId | AssignmentId, SessionEntry],
-) -> tuple[tuple[SessionEntry, SessionCloseWorkObservation], ...]:
+) -> tuple[SessionCloseWork, ...]:
     return tuple(
-        (entry, SessionCloseWorkObservation(open_work_kind, subject_id, entry.turn_id))
+        SessionCloseWork(
+            entry,
+            SessionCloseWorkObservation(open_work_kind, subject_id, entry.turn_id),
+        )
         for subject_id, entry in open_items.items()
     )

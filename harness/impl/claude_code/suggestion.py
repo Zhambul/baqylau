@@ -17,6 +17,12 @@
 # `parse()` is a pure function over the ANSI screen string (unit-tested);
 # `probe()` wraps it with the get-text call + audit-before-swallow.
 import re
+from typing import NamedTuple
+
+
+class _VisibleCharacter(NamedTuple):
+    value: str
+    faint: bool
 
 
 CONTROL_SEQUENCE = re.compile(
@@ -52,7 +58,7 @@ def _apply_sgr(faint: bool, params: str) -> bool:
     return faint
 
 
-def _faint_chars(s: str) -> list[tuple[str, bool]]:
+def _faint_chars(s: str) -> list[_VisibleCharacter]:
     """Walk `s` yielding (char, faint) for each VISIBLE char, tracking the SGR
     intensity state and skipping every escape sequence (SGR updates the state;
     OSC 8 hyperlinks / other CSI are stepped over)."""
@@ -69,7 +75,7 @@ def _faint_chars(s: str) -> list[tuple[str, bool]]:
                 continue
             i += 1
             continue
-        out.append((s[i], faint))
+        out.append(_VisibleCharacter(s[i], faint))
         i += 1
     return out
 
@@ -106,7 +112,7 @@ def input_box_visible(screen: str) -> bool:
     )
 
 
-def _box_content(screen: str) -> list[tuple[str, bool]]:
+def _box_content(screen: str) -> list[_VisibleCharacter]:
     """The input box's post-prompt `[(char, faint)]` list — the shared
     intermediate of `parse()` and `typed()`: the box region's visible chars with
     their SGR faint state, dropped through the first prompt marker (the box's

@@ -174,7 +174,8 @@ def actor(actor_facts: ActorFacts, *, now: float | None = None) -> ActorResponse
             lines_removed=statistics.lines_removed,
             actor_message_count=statistics.actor_message_count,
             tool_counts=tuple(
-                ToolCountResponse(tool=tool, count=count) for tool, count in statistics.tool_counts
+                ToolCountResponse(tool=tool_count.tool, count=tool_count.count)
+                for tool_count in statistics.tool_counts
             ),
             active_seconds=statistics.active_seconds + open_interval,
             active=statistics.active_since_internal is not None,

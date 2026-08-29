@@ -171,27 +171,27 @@ def tool_kind(native_name: str) -> ToolKind:
 
 CHROME_TOOL_PREFIX = "mcp__claude-in-chrome__"
 
-CHROME_ACTIONS: tuple[tuple[str, str], ...] = (
-    ("browser_batch", "Run browser actions"),
-    ("file_upload", "Upload file in browser"),
-    ("form_input", "Fill browser form"),
-    ("get_page_text", "Read page text"),
-    ("gif_creator", "Record browser GIF"),
-    ("javascript_tool", "Run JavaScript in browser"),
-    ("list_connected_browsers", "List connected browsers"),
-    ("read_console_messages", "Read browser console"),
-    ("read_network_requests", "Read browser network requests"),
-    ("read_page", "Read page"),
-    ("resize_window", "Resize browser window"),
-    ("select_browser", "Select browser"),
-    ("shortcuts_execute", "Run browser shortcut"),
-    ("shortcuts_list", "List browser shortcuts"),
-    ("switch_browser", "Switch browser"),
-    ("tabs_close_mcp", "Close browser tab"),
-    ("tabs_context_mcp", "Read browser tabs"),
-    ("tabs_create_mcp", "Create browser tab"),
-    ("upload_image", "Upload image in browser"),
-)
+CHROME_ACTIONS = {
+    "browser_batch": "Run browser actions",
+    "file_upload": "Upload file in browser",
+    "form_input": "Fill browser form",
+    "get_page_text": "Read page text",
+    "gif_creator": "Record browser GIF",
+    "javascript_tool": "Run JavaScript in browser",
+    "list_connected_browsers": "List connected browsers",
+    "read_console_messages": "Read browser console",
+    "read_network_requests": "Read browser network requests",
+    "read_page": "Read page",
+    "resize_window": "Resize browser window",
+    "select_browser": "Select browser",
+    "shortcuts_execute": "Run browser shortcut",
+    "shortcuts_list": "List browser shortcuts",
+    "switch_browser": "Switch browser",
+    "tabs_close_mcp": "Close browser tab",
+    "tabs_context_mcp": "Read browser tabs",
+    "tabs_create_mcp": "Create browser tab",
+    "upload_image": "Upload image in browser",
+}
 
 
 def _plain_action(value: str) -> str:
@@ -214,14 +214,7 @@ def browser_action(native_name: str, arguments: records.ToolArguments) -> str:
         if action == "wait":
             return "Wait in browser"
         return f"{_plain_action(action)} in browser"
-    return next(
-        (
-            action
-            for chrome_tool_name, action in CHROME_ACTIONS
-            if chrome_tool_name == tool_name
-        ),
-        _plain_action(tool_name),
-    )
+    return CHROME_ACTIONS.get(tool_name, _plain_action(tool_name))
 
 
 def browser_result_content(

@@ -153,6 +153,7 @@ from repository.impl.sqlite.uploads import SqliteUploadRepository
 from repository.impl.sqlite.workspace import SqliteSessionWorkspaceRepository
 from terminal.adapter import TerminalAdapter
 from terminal.contract import TerminalPlugin
+from terminal.models import EnvironmentVariable
 from terminal.impl import resolve as resolve_terminal
 from terminal.impl.null import null_plugin
 from terminal.impl.pty.plugin import pty_plugin
@@ -381,10 +382,10 @@ def audit_reads(database: AuditReaderDb) -> AuditReadRepository:
 AuditReads = Annotated[AuditReadRepository, Depends(audit_reads)]
 
 
-def harness_launch_environment() -> tuple[tuple[str, str], ...]:
+def harness_launch_environment() -> tuple[EnvironmentVariable, ...]:
     """Values that every terminal-launched harness must receive."""
     return (
-        (
+        EnvironmentVariable(
             "BAQYLAU_DASHBOARD_PORT",
             os.environ.get("BAQYLAU_DASHBOARD_PORT", "8377"),
         ),

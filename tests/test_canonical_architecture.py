@@ -846,8 +846,9 @@ def test_owned_packages_never_use_raw_dictionaries_or_jsonvalue():
         },
         "harness/impl/claude_code/canonical/turns.py": {"_response_turns"},
         "harness/impl/claude_code/canonical/sources.py": {"notifications_by_actor"},
-        "harness/impl/claude_code/canonical/toolcalls.py": {
-            "TOOL_KINDS",
+            "harness/impl/claude_code/canonical/toolcalls.py": {
+                "CHROME_ACTIONS",
+                "TOOL_KINDS",
             "FILE_ACTIONS",
             "calls",
             "agent_assignments",

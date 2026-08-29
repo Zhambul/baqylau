@@ -24,15 +24,15 @@ def test_dashboard_flags_build_one_runtime_config_for_each_harness(tmp_path):
         f"{HarnessName.CLAUDE_CODE}={configuration_directory}",
     ]
 
-    _variables, _log, runtime_configs, forwarded = dashboard_cli._options(
-        arguments
-    )
-    runtime = runtime_configs.for_harness(HarnessName.CLAUDE_CODE)
+    options = dashboard_cli._options(arguments)
+    runtime = options.harness_runtime_configs.for_harness(HarnessName.CLAUDE_CODE)
 
     assert runtime.executable == str(executable)
     assert runtime.configuration_directory == configuration_directory
     assert dashboard_cli._forwarded(arguments) == [
-        item for pair in forwarded for item in pair
+        item
+        for flag in options.harness_flags
+        for item in (flag.name, flag.value)
     ]
 
 

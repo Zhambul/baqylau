@@ -49,10 +49,12 @@ from domain.ids import (
 from domain.sessiondata import (
     ActorBackground,
     ActorFacts,
+    ActorStatistics,
     ActorStatus,
     LifecycleState,
     SessionFacts,
     SessionGoal,
+    ToolCount,
 )
 from domain.shells import ShellFollowState, ShellOutputFollowing
 from domain.preferences import (
@@ -1430,6 +1432,34 @@ AN_ACTOR = ActorFacts(
     name="claude",
     state=LifecycleState.RUNNING,
 )
+
+
+def test_version_twenty_four_names_stored_tool_count_fields(tmp_path):
+    path = str(tmp_path / "main.db")
+    old_database = main_database(path)
+    old_store = SqliteSessionDataRepository(old_database)
+    old_store.apply(
+        SESSION,
+        SessionDataChanges(session=A_SESSION, actors=(AN_ACTOR,)),
+        1,
+    )
+    with old_database.write() as connection:
+        connection.execute(
+            "UPDATE session_data_actors SET payload = json_set("
+            "payload, '$.statistics.tool_counts', json(?))",
+            ('[["Bash", 2], ["Read", 1]]',),
+        )
+        connection.execute("UPDATE schema_version SET version=23 WHERE id=1")
+
+    upgraded = main_database(path)
+    upgraded.initialize()
+    session_data = SqliteSessionDataRepository(upgraded).read(SESSION)
+
+    assert session_data is not None
+    assert session_data.actors[0].statistics == replace(
+        ActorStatistics(),
+        tool_counts=(ToolCount("Bash", 2), ToolCount("Read", 1)),
+    )
 
 
 def test_document_mapper_reuses_one_adapter_for_each_shape():

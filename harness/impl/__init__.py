@@ -19,6 +19,7 @@ from domain.ids import HarnessName
 from harness.contract import HarnessPlugin, SessionResumeRecorder
 from harness.runtime import HarnessRuntimeConfigs, default_harness_runtime_configs
 from terminal.contract import TerminalPlugin
+from terminal.models import EnvironmentVariable
 
 
 def installed(
@@ -26,7 +27,7 @@ def installed(
     terminal_plugin: TerminalPlugin | None = None,
     session_resume_recorder: SessionResumeRecorder | None = None,
     audit_recorder: AuditRecorder | None = None,
-    launch_environment: tuple[tuple[str, str], ...] = (),
+    launch_environment: tuple[EnvironmentVariable, ...] = (),
 ) -> tuple[HarnessPlugin, ...]:
     """Every harness installed here, in directory order."""
     runtime_configs = harness_runtime_configs or default_harness_runtime_configs()

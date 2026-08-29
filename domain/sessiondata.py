@@ -132,6 +132,14 @@ class ActorBackground:
 
 
 @dataclass(frozen=True)
+class ToolCount:
+    __pydantic_config__ = STORED
+
+    tool: str
+    count: int
+
+
+@dataclass(frozen=True)
 class ActorStatistics:
     __pydantic_config__ = STORED
 
@@ -142,7 +150,7 @@ class ActorStatistics:
     lines_added: int = 0
     lines_removed: int = 0
     actor_message_count: int = 0
-    tool_counts: tuple[tuple[str, int], ...] = ()
+    tool_counts: tuple[ToolCount, ...] = ()
     # Closed intervals only — prompt to turn end. The interval still open when
     # the aggregate is read is added by the route that answers, because its
     # length is the current time and no fact says what that is.
