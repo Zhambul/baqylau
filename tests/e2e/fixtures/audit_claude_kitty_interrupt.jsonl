@@ -1,0 +1,4 @@
+{"type":"user","uuid":"prompt-one","cwd":"/tmp/interrupt-replay","message":{"role":"user","content":"Watch the job."}}
+{"type":"user","uuid":"tool-interrupt","interruptedMessageId":"response-one","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}
+{"type":"user","uuid":"notification-one","parentUuid":"tool-interrupt","origin":{"kind":"task-notification"},"promptSource":"system","message":{"role":"user","content":"<task-notification><task-id>job-one</task-id><tool-use-id>call-one</tool-use-id><status>completed</status><summary>Background command finished</summary></task-notification>"}}
+{"type":"user","uuid":"final-interrupt","parentUuid":"notification-one","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}

@@ -28,7 +28,7 @@ def assistant_model_events(
         source.raw_event.actor_id,
         response.model.reference,
         dependencies.work_state.ModelChangeReason.REPORTED_BY_HARNESS,
-        dependencies.model_names.family(response.model.model_name) or response.model.model_name or "",
+        dependencies.model_names.selection_key(response.model.model_name or ""),
     )
     if reported is None:
         return []

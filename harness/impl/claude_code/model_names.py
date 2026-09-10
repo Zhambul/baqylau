@@ -66,17 +66,11 @@ def display_model(model_reference: ModelReference) -> str:
     return alias_display(short_name) or model_reference.name
 
 
-def family(model: str | None) -> str | None:
-    """Return the recognized model family.
+def selection_key(model_name: str) -> str:
+    """Compare aliases with their current model, without merging versions.
 
     Returns:
-        The model family, or ``None``.
+        The resolved short model name.
 
     """
-    if not model:
-        return None
-    normalized_model = model.lower()
-    for model_family in (FABLE_MODEL, OPUS_MODEL, SONNET_MODEL, HAIKU_MODEL):
-        if model_family in normalized_model:
-            return model_family
-    return None
+    return alias_display(short_model(model_name))

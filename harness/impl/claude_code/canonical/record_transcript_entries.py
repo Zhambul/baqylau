@@ -105,6 +105,9 @@ class AssistantRecord(BaseModel):
     request_id: Annotated[str | None, Field(alias="requestId")] = None
     api_block_index: Annotated[int | None, Field(alias="apiBlockIndex")] = None
     effort: str | HookEffort | None = None
+    per_turn_effort: Annotated[str | HookEffort | None, Field(alias="perTurnEffort")] = None
+    native_tool_inputs: Annotated[ForeignMetadata | None, Field(alias="wireToolInputs")] = None
+    native_ingest_context: Annotated[ForeignMetadata | None, Field(alias="wireIngestContext")] = None
     attribution_agent: Annotated[str | None, Field(alias="attributionAgent")] = None
     attribution_mcp_server: Annotated[str | None, Field(alias="attributionMcpServer")] = None
     attribution_mcp_tool: Annotated[str | None, Field(alias="attributionMcpTool")] = None

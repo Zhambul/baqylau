@@ -51,6 +51,7 @@ class ClaudeCodeModel(StrEnum):
     CLAUDE_FABLE_FIVE_ONE = "claude-fable-5-1"
     CLAUDE_OPUS_FIVE = "claude-opus-5"
     CLAUDE_OPUS_FOUR_EIGHT = "claude-opus-4-8"
+    CLAUDE_OPUS_FOUR_SIX = "claude-opus-4-6"
     CLAUDE_SONNET_FIVE = "claude-sonnet-5"
     CLAUDE_HAIKU_FOUR_FIVE = "claude-haiku-4-5"
     CLAUDE_HAIKU_FOUR_FIVE_OCTOBER = "claude-haiku-4-5-20251001"
@@ -65,6 +66,7 @@ CLAUDE_CODE_MODELS = (
     ClaudeCodeModel.CLAUDE_FABLE_FIVE_ONE,
     ClaudeCodeModel.CLAUDE_OPUS_FIVE,
     ClaudeCodeModel.CLAUDE_OPUS_FOUR_EIGHT,
+    ClaudeCodeModel.CLAUDE_OPUS_FOUR_SIX,
     ClaudeCodeModel.CLAUDE_SONNET_FIVE,
     ClaudeCodeModel.CLAUDE_HAIKU_FOUR_FIVE,
     ClaudeCodeModel.CLAUDE_HAIKU_FOUR_FIVE_OCTOBER,

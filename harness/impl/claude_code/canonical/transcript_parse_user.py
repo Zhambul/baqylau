@@ -28,6 +28,7 @@ from harness.impl.claude_code.canonical.transcript_notifications import task_not
 from harness.impl.claude_code.canonical.transcript_user_text import (
     classify_user_text,
     injected as _injected,
+    interrupted as _interrupted,
     resumes_turn as _resumes_turn,
     teammate_idle_notifications,
 )
@@ -84,7 +85,7 @@ def _ordinary_user_text(
     return PromptTranscriptRecord(
         content,
         injected,
-        bool(user_record.interrupted_message_id),
+        _interrupted(user_record, content),
         user_record.prompt_source == "queued",
         injected and _resumes_turn(content),
     )
@@ -115,7 +116,7 @@ def _parse_user_results(
         tuple(text_blocks),
         _injected(user_record, first_text),
         user_record.tool_denial_kind == "user-rejected",
-        bool(user_record.interrupted_message_id),
+        _interrupted(user_record, first_text),
     )
 
 

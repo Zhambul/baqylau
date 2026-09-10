@@ -63,7 +63,7 @@ def _launch_model_event(
         raw_event.actor_id,
         dependencies.support.model_reference(dependencies.model.ClaudeCodeModel(model_selection)),
         work_state.ModelChangeReason.SELECTED,
-        dependencies.model_names.family(model_selection) or model_selection,
+        dependencies.model_names.selection_key(model_selection),
     )
     if changed is None:
         return None

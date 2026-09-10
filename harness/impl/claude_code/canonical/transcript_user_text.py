@@ -15,6 +15,10 @@ RECAP_HINT = re.compile(r"\s*\(disable recaps in /config\)\s*$")
 TEAM_WRAPPER = re.compile(r"^\s*Another Claude session sent a message:\s*<teammate-message\b")
 RESUMES_TURN = (re.compile(r"^\s*Stop hook feedback:"),)
 LEAD_TEAMMATE_ID = "team-lead"
+INTERRUPT_MARKERS = (
+    "[Request interrupted by user]",
+    "[Request interrupted by user for tool use]",
+)
 
 
 def classify_user_text(text: str) -> tuple[str, str, str | None]:
@@ -75,10 +79,20 @@ def injected(record: records.UserRecord, text: str = "") -> bool:
     """
     return bool(
         record.is_meta
-        or record.interrupted_message_id
+        or interrupted(record, text)
         or record.is_compact_summary
         or (text and TEAM_WRAPPER.match(text)),
     )
+
+
+def interrupted(record: records.UserRecord, text: str) -> bool:
+    """Recognize native interrupt markers with or without a message ID.
+
+    Returns:
+        True for an interrupt ID or an exact interrupt marker.
+
+    """
+    return bool(record.interrupted_message_id) or text.strip() in INTERRUPT_MARKERS
 
 
 def resumes_turn(text: str) -> bool:

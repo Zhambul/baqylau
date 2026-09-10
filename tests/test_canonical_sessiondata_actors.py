@@ -144,6 +144,7 @@ def test_the_claude_namer_speaks_one_vocabulary() -> None:
         "opus": "opus-5",
         session_values.SONNET_MODEL_ID: session_values.SONNET_MODEL_NAME,
         "haiku": "haiku-4.5",
+        "claude-opus-4-6": "opus-4.6",
     }
 
 

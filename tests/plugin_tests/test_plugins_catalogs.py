@@ -43,6 +43,7 @@ def test_static_menu_vocabulary_lives_on_harness() -> None:
         "opus",
         "sonnet",
         "haiku",
+        "claude-opus-4-6",
     ]
     assert all(model.model_name.startswith("gpt-") for model in codex_plugin.harness_info.models)
     assert claude_plugin.harness_info.rewind_modes

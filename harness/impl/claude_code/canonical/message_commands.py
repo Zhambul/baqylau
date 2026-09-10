@@ -122,7 +122,7 @@ def _slash_selection_event(
             source.raw_event.actor_id,
             dependencies.support.model_reference(dependencies.model.ClaudeCodeModel(selection)),
             work_state.ModelChangeReason.SELECTED,
-            dependencies.model_names.family(selection) or selection,
+            dependencies.model_names.selection_key(selection),
         )
         if name == message_subject_values.MODEL_SUBJECT
         else semantics.selections.effort(

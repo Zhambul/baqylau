@@ -295,6 +295,9 @@ attribution_agent  # AssistantRecord
 attribution_plugin  # AssistantRecord
 attribution_skill  # AssistantRecord
 quota_limits  # AssistantRecord
+per_turn_effort  # AssistantRecord foreign field
+native_tool_inputs  # AssistantRecord foreign field
+native_ingest_context  # AssistantRecord foreign field
 logical_parent_uuid  # SystemRecord
 tool_use_uppercase_id  # SystemRecord
 tool_use_id  # SystemRecord / AgentMetaFile
