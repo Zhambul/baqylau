@@ -30,7 +30,6 @@ from harness.models.catalog import (
 from harness.models.controls import (
     ControlName,
 )
-from harness.registry import HarnessRegistryError
 
 router = APIRouter()
 
@@ -89,19 +88,12 @@ def catalog(
     Returns:
         Catalog.
 
-    Raises:
-        HarnessRegistryError: If the harness registry is not valid.
-
     """
     context = QueryContext(
         session_id=SessionId(session_id) if session_id else None,
         working_directory=working_directory,
     )
-    try:
-        harness_name = HarnessName(harness)
-    except ValueError as error:
-        message = f"unknown harness: {harness}"
-        raise HarnessRegistryError(message) from error
+    harness_name = HarnessName(harness)
     # The menu payload is composed here, from the two places its parts honestly
     # live: the STATIC vocabulary on the plugin's HarnessInfo (built once, as a
     # literal) and the per-directory part from the catalogue. The contract

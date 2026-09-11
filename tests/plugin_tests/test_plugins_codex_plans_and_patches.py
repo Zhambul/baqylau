@@ -2,8 +2,8 @@
 """Codex plan and patch translation tests."""
 
 from domain.event_work import PlanProposed
-from domain.ids import HarnessName
 from harness.impl.codex.canonical.translator import CodexCanonicalTranslator
+from tests.harness_names import CODEX_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_events import payloads, raw_event
 from tests.plugin_tests.support_values import text_of
@@ -24,7 +24,7 @@ def test_codex_plan_has_a_canonical_fact() -> None:
                     },
                 },
             },
-            harness=HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="plan",
         ),
@@ -47,7 +47,7 @@ def test_codex_plan_response_wrapper_is_covered() -> None:
                     fixture.CONTENT_FIELD: "<proposed_plan>1. Change it</proposed_plan>",
                 },
             },
-            harness=HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="plan-wrapper",
         ),
@@ -70,7 +70,7 @@ def test_codex_preliminary_patch_marker() -> None:
                     fixture.INPUT_FIELD: "*** Begin Patch",
                 },
             },
-            harness=HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="patch-call",
         ),
@@ -93,7 +93,7 @@ def test_codex_exec_wrapped_apply_patch_does_not() -> None:
                     fixture.INPUT_FIELD: "text(await tools.apply_patch(patch));",
                 },
             },
-            harness=HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="wrapped-patch-call",
         ),
@@ -121,7 +121,7 @@ def test_codex_batched_apply_patch_calls() -> None:
                     ),
                 },
             },
-            harness=HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="patch-batch-call",
         ),
@@ -149,7 +149,7 @@ def test_codex_apply_patch_wrapper_output() -> None:
                     ],
                 },
             },
-            harness=HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="wrapped-patch-output",
         ),

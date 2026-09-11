@@ -16,6 +16,7 @@ from harness.models.session import (
 )
 from tests.canonical_runtime import ProviderGraph
 from tests.fake_terminal import FakeTerminal
+from tests.harness_names import CLAUDE_CODE_HARNESS, CODEX_HARNESS
 from tests.plugin_tests import (
     control_draft_support,
     control_driver_support,
@@ -102,7 +103,7 @@ def test_live_codex_rename_waits_for_native_title(monkeypatch: pytest.MonkeyPatc
     )
     terminal = FakeTerminal(screen_text=fixture.ASK_CODEX_TO_DO_ANYTHING_TEXT)
 
-    outcome = support_values.controller_of(application.registry.plugin(domain_ids.HarnessName.CODEX)).execute(
+    outcome = support_values.controller_of(application.registry.plugin(CODEX_HARNESS)).execute(
         control_models.RenameSession(
             session.session_id, domain_ids.RequestId(fixture.REQUEST_ONE_ID), fixture.NEW_TITLE_TEXT,
         ),
@@ -126,7 +127,7 @@ def test_live_claude_rename_restores_visual_mode(tmp_path: Path) -> None:
         str(tmp_path),
     )
 
-    outcome = control_driver_support.controller(domain_ids.HarnessName.CLAUDE_CODE).execute(
+    outcome = control_driver_support.controller(CLAUDE_CODE_HARNESS).execute(
         control_models.RenameSession(
             session.session_id, domain_ids.RequestId(fixture.REQUEST_ONE_ID), fixture.NEW_TITLE_TEXT,
         ),
@@ -158,7 +159,7 @@ def test_live_codex_rename_restores_existing(monkeypatch: pytest.MonkeyPatch) ->
         fixture.WORK_PATH,
     )
 
-    outcome = control_driver_support.controller(domain_ids.HarnessName.CODEX).execute(
+    outcome = control_driver_support.controller(CODEX_HARNESS).execute(
         control_models.RenameSession(
             session.session_id, domain_ids.RequestId(fixture.REQUEST_ONE_ID), fixture.NEW_TITLE_TEXT,
         ),

@@ -7,10 +7,10 @@ from typing import TYPE_CHECKING
 
 from domain import (
     event_shell as shell_events,
-    ids as domain_ids,
     outcomes,
 )
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
+from tests.harness_names import CLAUDE_CODE_HARNESS, CODEX_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_events import payloads, raw_event
 
@@ -61,7 +61,7 @@ def claude_background_outcome(status: str) -> outcomes.Outcome:
                     ),
                 },
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id=f"background-completion-{status}",
         ),
@@ -107,7 +107,7 @@ def translate_agent_notification(
     return translator.translate(
         raw_event(
             document,
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id=event_id,
         ),
@@ -123,7 +123,7 @@ def codex_rollout_event(document: JsonValue, source_position: int) -> RawEvent:
     """
     return raw_event(
         document,
-        harness=domain_ids.HarnessName.CODEX,
+        harness=CODEX_HARNESS,
         source_type=fixture.ROLLOUT_SOURCE,
         raw_event_id=f"codex-bg-{source_position}",
         source_position=str(source_position),
@@ -145,7 +145,7 @@ def translate_codex_rollout(
     return translator.translate(
         raw_event(
             document,
-            harness=domain_ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id=raw_event_id,
             source_position=str(source_position),

@@ -4,19 +4,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from domain.event_conversation import MessageCreated, TurnFinished, TurnStarted
-from domain.ids import (
-    HarnessName,
-    TurnId,
-)
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
 from harness.models.raw_events import (
     TranslationResult,
 )
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_events import payloads, raw_event
 from tests.plugin_tests.support_values import JsonValue
+
+if TYPE_CHECKING:
+    from domain.ids import (
+        TurnId,
+    )
 
 type CodexTranslationDecisionCase = tuple[dict[str, JsonValue], str]
 
@@ -40,7 +43,7 @@ def _blocking_feedback_sequence() -> _BlockingFeedbackSequence:
                     fixture.UUID_FIELD: fixture.FIRST_PROMPT_ID,
                     fixture.MESSAGE_FIELD: {fixture.CONTENT_FIELD: "do the work"},
                 },
-                harness=HarnessName.CLAUDE_CODE,
+                harness=CLAUDE_CODE_HARNESS,
                 source_type=fixture.TRANSCRIPT_SOURCE,
                 raw_event_id=fixture.FIRST_PROMPT_ID,
             ),
@@ -51,7 +54,7 @@ def _blocking_feedback_sequence() -> _BlockingFeedbackSequence:
                     fixture.HOOK_EVENT_NAME_FIELD: fixture.STOP_HOOK,
                     fixture.HOOK_EVENT_ID_FIELD: fixture.FIRST_STOP_ID,
                 },
-                harness=HarnessName.CLAUDE_CODE,
+                harness=CLAUDE_CODE_HARNESS,
                 source_type=fixture.HOOK_SOURCE,
                 raw_event_id=fixture.FIRST_STOP_ID,
             ),
@@ -64,7 +67,7 @@ def _blocking_feedback_sequence() -> _BlockingFeedbackSequence:
                     fixture.IS_META: True,
                     fixture.MESSAGE_FIELD: {fixture.CONTENT_FIELD: "Stop hook feedback:\nContinue the work."},
                 },
-                harness=HarnessName.CLAUDE_CODE,
+                harness=CLAUDE_CODE_HARNESS,
                 source_type=fixture.TRANSCRIPT_SOURCE,
                 raw_event_id="stop-feedback",
             ),
@@ -77,7 +80,7 @@ def _blocking_feedback_sequence() -> _BlockingFeedbackSequence:
                     fixture.TOOL_NAME_FIELD: fixture.BASH_TOOL,
                     fixture.TOOL_INPUT_FIELD: {fixture.COMMAND_FIELD: fixture.PRINT_DIRECTORY_COMMAND},
                 },
-                harness=HarnessName.CLAUDE_CODE,
+                harness=CLAUDE_CODE_HARNESS,
                 source_type=fixture.HOOK_SOURCE,
                 raw_event_id="continued-command",
             ),
@@ -85,7 +88,7 @@ def _blocking_feedback_sequence() -> _BlockingFeedbackSequence:
         translator.translate(
             raw_event(
                 {fixture.HOOK_EVENT_NAME_FIELD: fixture.STOP_HOOK, fixture.HOOK_EVENT_ID_FIELD: "final-stop"},
-                harness=HarnessName.CLAUDE_CODE,
+                harness=CLAUDE_CODE_HARNESS,
                 source_type=fixture.HOOK_SOURCE,
                 raw_event_id="final-stop",
             ),

@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from domain.ids import HarnessName
 from inference import (
     audit as inference_audit,
     contract as inference_contract,
@@ -16,6 +15,7 @@ from inference import (
     options as inference_options,
     provider_state,
 )
+from tests.harness_names import CODEX_HARNESS
 from tests.inference_support import Audit, InferenceTerminal, Usage
 
 if TYPE_CHECKING:
@@ -37,7 +37,7 @@ def test_missing_executables_report_config_names() -> None:
     assert not terminal.opened_tabs
     context = cast("inference_audit.ModelUnavailableAudit", audit.errors[0][2])
     assert context.providers[0] == provider_state.ExecutableUnavailable(
-        provider=HarnessName.CODEX,
+        provider=CODEX_HARNESS,
         status="executable unavailable",
-        configuration=model_factory.runtime_configs.for_harness(HarnessName.CODEX).executable,
+        configuration=model_factory.runtime_configs.for_harness(CODEX_HARNESS).executable,
     )

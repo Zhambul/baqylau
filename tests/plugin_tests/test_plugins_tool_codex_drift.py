@@ -16,6 +16,10 @@ from tests.plugin_tests.support_events import payloads, raw_event
 from tests.plugin_tests.support_values import JsonValue
 from tests.plugin_tests.tool_translation_support import codex_translation_decision, completed_codex_item
 
+CODEX_HARNESS = domain_ids.HarnessName("codex")
+CLAUDE_CODE_HARNESS = domain_ids.HarnessName("claude_code")
+
+
 type CodexTranslationDecisionCase = tuple[dict[str, JsonValue], str]
 
 
@@ -34,7 +38,7 @@ def test_claude_child_actor_uses_task_description(tmp_path: Path) -> None:
                 fixture.CWD_FIELD: fixture.WORK_PATH,
                 fixture.MESSAGE_FIELD: {fixture.CONTENT_FIELD: "Find the weather"},
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type="child_transcript",
             raw_event_id=fixture.CHILD_PROMPT_ID,
             source_position=fixture.ZERO_TEXT,
@@ -154,7 +158,7 @@ def test_codex_unknown_field_on_known_record() -> None:
                         fixture.UNKNOWN_RECORD_FIELD: "surprise",
                     },
                 },
-                harness=domain_ids.HarnessName.CODEX,
+                harness=CODEX_HARNESS,
                 source_type=fixture.ROLLOUT_SOURCE,
                 raw_event_id="codex-unknown-field",
             ),
@@ -179,7 +183,7 @@ def test_codex_wrong_typed_field_on_known_record() -> None:
                         fixture.TURN_ID_FIELD: ["not", fixture.LETTER_A, "string"],
                     },
                 },
-                harness=domain_ids.HarnessName.CODEX,
+                harness=CODEX_HARNESS,
                 source_type=fixture.ROLLOUT_SOURCE,
                 raw_event_id="codex-wrong-type",
             ),
@@ -204,7 +208,7 @@ def test_codex_unknown_record_kind_stays_ignored() -> None:
                     "whatever_fields_it_someday_carries": True,
                 },
             },
-            harness=domain_ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="codex-unknown-kind",
         ),

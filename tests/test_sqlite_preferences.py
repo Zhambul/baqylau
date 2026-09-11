@@ -10,10 +10,11 @@ from tests import (
     sqlite_test_shells,
     sqlite_value_dependencies as standard_dependencies,
 )
+from tests.harness_names import CODEX_HARNESS
 
 SESSION = domain_dependencies.domain_ids.SessionId("session-one")
 DISMISSED_TASK = domain_dependencies.domain_ids.TaskId("t")
-HARNESS = domain_dependencies.domain_ids.HarnessName.CODEX
+HARNESS = CODEX_HARNESS
 NEWER_PREFERENCE_TIME = 2.0
 PROJECT_DIRECTORY = "/project"
 FIRST_REQUEST_ID = "request-one"

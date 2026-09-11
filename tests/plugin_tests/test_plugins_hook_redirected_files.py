@@ -14,6 +14,7 @@ from harness.models.session import (
     Session,
 )
 from tests.canonical_runtime import CanonicalRuntime
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import support_hooks, support_runtime, support_storage, vocabulary as fixture
 from tests.plugin_tests.hook_common_support import PRIMARY_SESSION, decoded_output_content
 
@@ -45,7 +46,7 @@ def test_claude_fg_bytes_flow_through_raw_audit(
 
     runtime, interpreter = support_runtime.interpreting_runtime(tmp_path / "application" / fixture.MAIN_DB_PATH)
     runtime.register(
-        domain_ids.HarnessName.CLAUDE_CODE,
+        CLAUDE_CODE_HARNESS,
         Session(
             PRIMARY_SESSION,
             domain_ids.ActorId(fixture.SESSION_ONE_LEAD_ID),
@@ -113,7 +114,7 @@ def _redirected_files_fixture(
     _deliver_redirected_files_hook(tmp_path, first, second)
     runtime, interpreter = support_runtime.interpreting_runtime(application / fixture.MAIN_DB_PATH)
     runtime.register(
-        domain_ids.HarnessName.CLAUDE_CODE,
+        CLAUDE_CODE_HARNESS,
         Session(
             domain_ids.SessionId(fixture.SESSION_ONE_ID),
             domain_ids.ActorId(fixture.SESSION_ONE_LEAD_ID),

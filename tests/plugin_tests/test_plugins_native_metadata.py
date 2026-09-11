@@ -3,10 +3,10 @@
 
 from domain.event_conversation import MessageCreated
 from domain.event_session import SessionTitleChanged
-from domain.ids import HarnessName
 from domain.work_state import TitleOrigin
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
 from harness.impl.codex.canonical.translator import CodexCanonicalTranslator
+from tests.harness_names import CLAUDE_CODE_HARNESS, CODEX_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_events import payloads, raw_event
 
@@ -28,7 +28,7 @@ def test_native_instruction_wrappers_are_canon() -> None:
                     ],
                 },
             },
-            harness=HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="codex-system-message",
         ),
@@ -41,7 +41,7 @@ def test_native_instruction_wrappers_are_canon() -> None:
                 fixture.IS_META: True,
                 fixture.MESSAGE_FIELD: {fixture.CONTENT_FIELD: "Continue from where you left off."},
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="claude-system-message",
         ),
@@ -57,7 +57,7 @@ def test_claude_title_records_preserve_native() -> None:
     custom = translator.translate(
         raw_event(
             {fixture.TYPE_FIELD: "agent-name", "agentName": "Chosen name"},
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="custom-title",
         ),
@@ -65,7 +65,7 @@ def test_claude_title_records_preserve_native() -> None:
     automatic = translator.translate(
         raw_event(
             {fixture.TYPE_FIELD: "ai-title", "aiTitle": "Generated name"},
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="automatic-title",
         ),

@@ -5,9 +5,9 @@ import json
 from dataclasses import dataclass
 
 from domain.event_shell import ShellFinished, ShellInputProvided, ShellProgressed, ShellStarted
-from domain.ids import HarnessName
 from harness.impl.codex.canonical.translator import CodexCanonicalTranslator
 from harness.models.raw_events import TranslationResult
+from tests.harness_names import CODEX_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_events import payloads, raw_event
 from tests.plugin_tests.support_values import text_of
@@ -40,7 +40,7 @@ def test_codex_write_stdin_continues_original() -> None:
                         fixture.INPUT_FIELD: 'tools.exec_command({"cmd":"read value"})',
                     },
                 },
-                harness=HarnessName.CODEX,
+                harness=CODEX_HARNESS,
                 source_type=fixture.ROLLOUT_SOURCE,
                 raw_event_id=fixture.COMMAND_FIELD,
                 source_position=fixture.FORTY_TEXT,
@@ -59,7 +59,7 @@ def test_codex_write_stdin_continues_original() -> None:
                         }),
                     },
                 },
-                harness=HarnessName.CODEX,
+                harness=CODEX_HARNESS,
                 source_type=fixture.ROLLOUT_SOURCE,
                 raw_event_id=fixture.COMMAND_OUTPUT_ID,
                 source_position=fixture.FORTY_ONE_TEXT,
@@ -76,7 +76,7 @@ def test_codex_write_stdin_continues_original() -> None:
                         fixture.INPUT_FIELD: r'tools.write_stdin({session_id:77,chars:"yes\n",yield_time_ms:1000})',
                     },
                 },
-                harness=HarnessName.CODEX,
+                harness=CODEX_HARNESS,
                 source_type=fixture.ROLLOUT_SOURCE,
                 raw_event_id=fixture.STDIN,
                 source_position="42",
@@ -92,7 +92,7 @@ def test_codex_write_stdin_continues_original() -> None:
                         fixture.OUTPUT_FIELD: "accepted\n",
                     },
                 },
-                harness=HarnessName.CODEX,
+                harness=CODEX_HARNESS,
                 source_type=fixture.ROLLOUT_SOURCE,
                 raw_event_id="stdin-output",
                 source_position="43",
@@ -114,7 +114,7 @@ def test_codex_write_stdin_continues_original() -> None:
                         },
                     },
                 },
-                harness=HarnessName.CODEX,
+                harness=CODEX_HARNESS,
                 source_type=fixture.ROLLOUT_SOURCE,
                 raw_event_id="command-finished",
                 source_position="44",
@@ -170,7 +170,7 @@ def test_codex_command_completion_outcome_follows() -> None:
                         fixture.INPUT_FIELD: 'tools.exec_command({"cmd":"run"})',
                     },
                 },
-                harness=HarnessName.CODEX,
+                harness=CODEX_HARNESS,
                 source_type=fixture.ROLLOUT_SOURCE,
                 raw_event_id=f"command-{suffix}",
                 source_position=fixture.FORTY_TEXT,
@@ -189,7 +189,7 @@ def test_codex_command_completion_outcome_follows() -> None:
                         }),
                     },
                 },
-                harness=HarnessName.CODEX,
+                harness=CODEX_HARNESS,
                 source_type=fixture.ROLLOUT_SOURCE,
                 raw_event_id=f"command-output-{suffix}",
                 source_position=fixture.FORTY_ONE_TEXT,
@@ -212,7 +212,7 @@ def test_codex_command_completion_outcome_follows() -> None:
                             },
                         },
                     },
-                    harness=HarnessName.CODEX,
+                    harness=CODEX_HARNESS,
                     source_type=fixture.ROLLOUT_SOURCE,
                     raw_event_id=f"command-finished-{suffix}",
                     source_position="42",

@@ -21,6 +21,7 @@ from tests import (
     control_effect_stores as stores,
     control_effect_values as control_values,
 )
+from tests.harness_names import CODEX_HARNESS
 
 if TYPE_CHECKING:
     from repository.contract.facts import RawEventRepository
@@ -44,7 +45,7 @@ def test_confirmed_resume_launch_reopens_exact() -> None:
     )
 
     recorder.resumed(
-        domain_ids.HarnessName.CODEX,
+        CODEX_HARNESS,
         session.session_id,
         domain_ids.WindowId("window-two"),
     )

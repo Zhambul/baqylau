@@ -11,6 +11,7 @@ from tests import (
     foundation_test_liveness,
     foundation_test_reactions,
 )
+from tests.harness_names import CODEX_HARNESS
 
 MAIN_DATABASE_NAME = "main.db"
 FIXTURE_EVENT_TIME = 10.0
@@ -74,7 +75,7 @@ def registered_runtime(
     harnesses.register(foundation_test_reactions.example_plugin(translation, sources))
     runtime = foundation_test_liveness.build_interpreter(str(tmp_path / MAIN_DATABASE_NAME), harnesses)
     runtime.sessions.save(
-        foundation_dependencies.domain.domain_ids.HarnessName.CODEX, foundation_test_events.example_session(),
+        CODEX_HARNESS, foundation_test_events.example_session(),
     )
     return runtime
 
@@ -132,7 +133,7 @@ def runtime_with_finished_operation(
         foundation_dependencies.domain.domain_ids.ActorId(LEAD_ACTOR_ID_TEXT),
         None,
         None,
-        foundation_dependencies.domain.domain_ids.HarnessName.CODEX,
+        CODEX_HARNESS,
         FIXTURE_EVENT_TIME,
         None,
         None,
@@ -153,6 +154,6 @@ def runtime_with_finished_operation(
     )
     runtime = foundation_test_liveness.build_interpreter(str(tmp_path / MAIN_DATABASE_NAME), harnesses)
     runtime.sessions.save(
-        foundation_dependencies.domain.domain_ids.HarnessName.CODEX, foundation_test_events.example_session(),
+        CODEX_HARNESS, foundation_test_events.example_session(),
     )
     return runtime

@@ -88,7 +88,7 @@ def record_startup_state(
         str(window_id),
         "launch-startup",
         HarnessStartupAudit(
-            harness=HarnessName.CLAUDE_CODE,
+            harness=HarnessName("claude_code"),
             window_id=window_id,
             screen_kind=startup_audit_record.screen_kind,
             outcome=startup_audit_record.outcome,

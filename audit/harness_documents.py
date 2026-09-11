@@ -14,15 +14,6 @@ class HarnessErrorAudit(AuditDocument):
     payload_bytes: int | None = None
 
 
-class HarnessInputAudit(AuditDocument):
-    """Describe invalid input received from a harness."""
-
-    input_text: str
-    error: str
-    kind: str | None = None
-    payload_bytes: int | None = None
-
-
 class HarnessStartupAudit(AuditDocument):
     """Describe the observed result of a harness startup."""
 

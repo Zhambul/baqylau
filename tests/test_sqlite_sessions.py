@@ -13,10 +13,11 @@ from tests import (
     sqlite_test_models,
     sqlite_value_dependencies as standard_dependencies,
 )
+from tests.harness_names import CODEX_HARNESS
 
 SESSION = domain_dependencies.domain_ids.SessionId("session-one")
 ACTOR = domain_dependencies.domain_ids.ActorId("actor-one")
-HARNESS = domain_dependencies.domain_ids.HarnessName.CODEX
+HARNESS = CODEX_HARNESS
 FIRST_TRANSLATION_TIME = 1001.0
 SECOND_TRANSLATION_TIME = 1002.0
 THIRD_TRANSLATION_TIME = 1003.0

@@ -5,8 +5,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
-from domain.ids import HarnessName
 from harness.models.usage import (
     UsageRow,
     UsageWindow,
@@ -17,7 +17,11 @@ from inference import (
     contract as inference_contract,
 )
 from terminal.models import tabs
+from tests.harness_names import CLAUDE_CODE_HARNESS, CODEX_HARNESS
 from tests.inference_support import Audit, InferenceTerminal, Usage, factory
+
+if TYPE_CHECKING:
+    from domain.ids import HarnessName
 
 HIGH_USAGE_PERCENT = 90
 NEARLY_EXHAUSTED_PERCENT = 99
@@ -67,8 +71,8 @@ def test_small_model_prefers_provider_with_more() -> None:
         terminal,
         Usage(
             (
-                usage_row(HarnessName.CODEX, Decimal(HIGH_USAGE_PERCENT)),
-                usage_row(HarnessName.CLAUDE_CODE, Decimal(10)),
+                usage_row(CODEX_HARNESS, Decimal(HIGH_USAGE_PERCENT)),
+                usage_row(CLAUDE_CODE_HARNESS, Decimal(10)),
             ),
         ),
     )
@@ -92,7 +96,7 @@ def test_small_model_prefers_provider_with_more() -> None:
 
 def test_capacity_uses_most_exhausted_known() -> None:
     """Verify capacity uses the most exhausted known window."""
-    codex = usage_row(HarnessName.CODEX, Decimal(5))
+    codex = usage_row(CODEX_HARNESS, Decimal(5))
     codex = replace(
         codex,
         windows=(
@@ -108,7 +112,7 @@ def test_capacity_uses_most_exhausted_known() -> None:
 
     factory(
         terminal,
-        Usage((codex, usage_row(HarnessName.CLAUDE_CODE, Decimal(HIGH_USAGE_PERCENT)))),
+        Usage((codex, usage_row(CLAUDE_CODE_HARNESS, Decimal(HIGH_USAGE_PERCENT)))),
     ).small().send(inference_contract.ModelPromptRequest(MODEL_PROMPT))
 
     assert terminal.opened_tabs[0].command[0] == CLAUDE_EXECUTABLE
@@ -117,7 +121,7 @@ def test_capacity_uses_most_exhausted_known() -> None:
 def test_authentication_failure_excludes_that() -> None:
     """Verify authentication failure excludes that provider."""
     codex = replace(
-        usage_row(HarnessName.CODEX, Decimal(0)),
+        usage_row(CODEX_HARNESS, Decimal(0)),
         authentication_error="authentication failed",
     )
     terminal = InferenceTerminal(('{"title":"Authenticated fallback provider"}',))

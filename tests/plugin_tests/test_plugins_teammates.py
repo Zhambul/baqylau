@@ -16,6 +16,8 @@ from tests.plugin_tests.support_hooks import deliver_hook
 from tests.plugin_tests.support_runtime import interpreting_runtime
 from tests.plugin_tests.support_storage import stored_payloads
 
+CLAUDE_CODE_HARNESS = ids.HarnessName("claude_code")
+
 
 def _write_teammate_transcripts(tmp_path: Path) -> tuple[Path, Path]:
     """Write the lead and teammate transcript fixtures.
@@ -66,7 +68,7 @@ def test_claude_teammate_hook_and_transcript(monkeypatch: pytest.MonkeyPatch, tm
         str(main_path),
         str(tmp_path),
     )
-    runtime.register(ids.HarnessName.CLAUDE_CODE, session)
+    runtime.register(CLAUDE_CODE_HARNESS, session)
     runtime.recorder.record(
         ClaudeTranscriptRawEventSource(
             replace(

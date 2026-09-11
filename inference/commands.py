@@ -104,7 +104,7 @@ def model_environment(
         Result items.
 
     """
-    if harness == HarnessName.CLAUDE_CODE:
+    if harness == HarnessName("claude_code"):
         return _claude_environment(runtime_config)
     return (
         EnvironmentVariable(INTERNAL_MODEL_VARIABLE, "1"),
@@ -137,6 +137,6 @@ def _claude_environment(
 
 
 PROVIDER_CANDIDATES = (
-    ProviderCandidate(HarnessName.CODEX, "codex", codex_command),
-    ProviderCandidate(HarnessName.CLAUDE_CODE, "claude", claude_command),
+    ProviderCandidate(HarnessName("codex"), "codex", codex_command),
+    ProviderCandidate(HarnessName("claude_code"), "claude", claude_command),
 )

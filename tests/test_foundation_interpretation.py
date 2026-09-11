@@ -13,6 +13,7 @@ from tests import (
     foundation_test_reactions,
     foundation_test_sources,
 )
+from tests.harness_names import CODEX_HARNESS
 
 MAIN_DATABASE_NAME = "main.db"
 FIXTURE_SOURCE_IDENTITY = "fixture:source"
@@ -135,7 +136,7 @@ def test_interpreter_pulls_translates_and_commits(
     )
     runtime = foundation_test_liveness.build_interpreter(database_path, harnesses)
     runtime.sessions.save(
-        foundation_dependencies.domain.domain_ids.HarnessName.CODEX, foundation_test_events.example_session(),
+        CODEX_HARNESS, foundation_test_events.example_session(),
     )
     runtime.interpreter.tick()
     committed = runtime.store.page_from(0, 10)
@@ -170,7 +171,7 @@ def test_one_failing_source_neither_stops_its(
     )
     runtime = foundation_test_liveness.build_interpreter(database_path, harnesses, audit=audited)
     runtime.sessions.save(
-        foundation_dependencies.domain.domain_ids.HarnessName.CODEX, foundation_test_events.example_session(),
+        CODEX_HARNESS, foundation_test_events.example_session(),
     )
     runtime.interpreter.tick()
     runtime.interpreter.tick()
@@ -191,11 +192,11 @@ def test_one_pull_cycle_reads_resume_positions(
     harnesses.register(ignored_plugin)
     runtime = foundation_test_liveness.build_interpreter(database_path, harnesses)
     runtime.sessions.save(
-        foundation_dependencies.domain.domain_ids.HarnessName.CODEX,
+        CODEX_HARNESS,
         foundation_test_events.example_session(SESSION_ID_TEXT),
     )
     runtime.sessions.save(
-        foundation_dependencies.domain.domain_ids.HarnessName.CODEX,
+        CODEX_HARNESS,
         foundation_test_events.example_session(SECOND_SESSION_ID_TEXT),
     )
     real_latest_positions = runtime.recorder.latest_positions

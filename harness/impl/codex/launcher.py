@@ -135,7 +135,7 @@ class CodexLauncher(dependencies.contract.HarnessLauncher):
         self._record(window_id, "opened", "terminal tab opened")
         if launch_request.resume_session_id is not None:
             self.launch_effects.resumed(
-                dependencies.ids.HarnessName.CODEX,
+                dependencies.ids.HarnessName("codex"),
                 launch_request.resume_session_id,
                 window_id,
             )
@@ -236,7 +236,7 @@ class CodexLauncher(dependencies.contract.HarnessLauncher):
             str(window_id),
             "launch-startup",
             dependencies.HarnessStartupAudit(
-                harness=dependencies.ids.HarnessName.CODEX,
+                harness=dependencies.ids.HarnessName("codex"),
                 window_id=window_id,
                 screen_kind=screen_kind,
                 outcome=outcome,

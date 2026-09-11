@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from domain import (
     ids as domain_ids,
 )
+from tests.harness_names import CODEX_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_events import raw_event
 
@@ -35,7 +36,7 @@ def session_start_hook_event(session_id: str, source_path: Path) -> raw_event_mo
                 fixture.CWD_FIELD: fixture.WORK_PATH,
                 fixture.HOOK_EVENT_NAME_FIELD: fixture.SESSION_START_HOOK,
             },
-            harness=domain_ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id=f"hook-{session_id}",
         ),
@@ -63,7 +64,7 @@ def codex_hook_event(
                 fixture.HOOK_EVENT_NAME_FIELD: hook_name,
                 fixture.HOOK_EVENT_ID_FIELD: raw_event_id,
             },
-            harness=domain_ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id=raw_event_id,
         ),

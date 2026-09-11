@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, cast
 from domain import ids as domain_ids
 from harness.models.session import Session
 from tests import control_effect_values as control_values
+from tests.harness_names import CLAUDE_CODE_HARNESS, CODEX_HARNESS
 
 if TYPE_CHECKING:
     from harness.contracts import plugin as plugin_contracts
@@ -29,7 +30,7 @@ def codex_session(
         control_values.TEST_WORKING_DIRECTORY,
         plugin=cast(
             "plugin_contracts.HarnessPlugin",
-            SimpleNamespace(harness_info=SimpleNamespace(name=domain_ids.HarnessName.CODEX)),
+            SimpleNamespace(harness_info=SimpleNamespace(name=CODEX_HARNESS)),
         ),
     )
 
@@ -48,6 +49,6 @@ def claude_session(source_name: str) -> Session:
         control_values.TEST_WORKING_DIRECTORY,
         plugin=cast(
             "plugin_contracts.HarnessPlugin",
-            SimpleNamespace(harness_info=SimpleNamespace(name=domain_ids.HarnessName.CLAUDE_CODE)),
+            SimpleNamespace(harness_info=SimpleNamespace(name=CLAUDE_CODE_HARNESS)),
         ),
     )

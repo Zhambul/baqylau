@@ -7,6 +7,7 @@ from tests import (
     canonical_foundation_components as foundation_components,
     foundation_dependencies,
 )
+from tests.harness_names import CODEX_HARNESS
 
 # Keep dependency modules separate from session test helpers.
 # isort: split
@@ -215,7 +216,7 @@ def test_translator_bug_becomes_verdict_and_never(
     harnesses.register(
         foundation_dependencies.engine.harness_contract.HarnessPlugin(
             harness_info=foundation_dependencies.engine.HarnessInfo(
-                foundation_dependencies.domain.domain_ids.HarnessName.CODEX,
+                CODEX_HARNESS,
                 "Example",
                 HARNESS_VERSION,
                 foundation_dependencies.domain.domain_events.SCHEMA_VERSION,
@@ -227,7 +228,7 @@ def test_translator_bug_becomes_verdict_and_never(
     )
     runtime = foundation_test_liveness.build_interpreter(database_path, harnesses)
     runtime.sessions.save(
-        foundation_dependencies.domain.domain_ids.HarnessName.CODEX, foundation_test_events.example_session(),
+        CODEX_HARNESS, foundation_test_events.example_session(),
     )
     runtime.recorder.record((foundation_test_events.raw_observation("raw-bug"),))
     runtime.interpreter.tick()

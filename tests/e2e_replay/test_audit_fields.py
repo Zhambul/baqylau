@@ -9,6 +9,7 @@ from domain.ids import HarnessName, SessionId
 from repository.impl.sqlite.audit_read import SqliteAuditReadRepository
 from tests import http_test_assets, http_test_controls
 from tests.e2e_replay.audit_replay_support import replay
+from tests.harness_names import CLAUDE_CODE_HARNESS, CODEX_HARNESS
 
 
 # Harness limit: claude_code only. These fields are from Claude records.
@@ -21,13 +22,13 @@ from tests.e2e_replay.audit_replay_support import replay
 )
 def test_claude_audit_fields_reach_http(filename: str, route: str, expected: str) -> None:
     """Accept each recorded field and expose its event through HTTP."""
-    _assert_fields(filename, HarnessName.CLAUDE_CODE, "transcript", route, expected)
+    _assert_fields(filename, CLAUDE_CODE_HARNESS, "transcript", route, expected)
 
 
 # Harness limit: codex only. The error field is from a Codex record.
 def test_codex_limit_reaches_http() -> None:
     """Accept the usage-limit field and show the end of the turn."""
-    _assert_fields("audit_codex_limit.jsonl", HarnessName.CODEX, "rollout", "/entries", "turn_finished")
+    _assert_fields("audit_codex_limit.jsonl", CODEX_HARNESS, "rollout", "/entries", "turn_finished")
 
 
 def _assert_fields(filename: str, harness: HarnessName, source_type: str, route: str, expected: str) -> None:

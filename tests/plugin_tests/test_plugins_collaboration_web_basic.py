@@ -8,11 +8,11 @@ from pathlib import Path
 from domain import (
     content as domain_content,
     event_resource,
-    ids as domain_ids,
 )
 from harness.impl.codex.canonical import items as codex_items, rollout as codex_rollout
 from harness.impl.codex.canonical.records import ExecRecord
 from harness.impl.codex.canonical.translator import CodexCanonicalTranslator
+from tests.harness_names import CODEX_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.collaboration_assertion_support import (
     assert_web_search_result,
@@ -54,7 +54,7 @@ def test_codex_web_tool_uses_shared_search(tmp_path: Path) -> None:
             replace(
                 raw_event(
                     json.loads(call),
-                    harness=domain_ids.HarnessName.CODEX,
+                    harness=CODEX_HARNESS,
                     source_type=fixture.ROLLOUT_SOURCE,
                     raw_event_id="web-search",
                     source_position=fixture.ZERO_TEXT,
@@ -84,7 +84,7 @@ def test_codex_web_tool_uses_shared_search(tmp_path: Path) -> None:
                         ],
                     },
                 },
-                harness=domain_ids.HarnessName.CODEX,
+                harness=CODEX_HARNESS,
                 source_type=fixture.ROLLOUT_SOURCE,
                 raw_event_id="web-search-result",
                 source_position=str(len(call.encode())),
@@ -214,7 +214,7 @@ def test_codex_notify_tool_is_known_non_feed() -> None:
                     fixture.INPUT_FIELD: "text(await tools.notify({}));",
                 },
             },
-            harness=domain_ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="notify-call",
         ),
@@ -260,7 +260,7 @@ def test_codex_legacy_direct_web_run_keeps_its() -> None:
                     ),
                 },
             },
-            harness=domain_ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="legacy-web-call",
         ),
@@ -275,7 +275,7 @@ def test_codex_legacy_direct_web_run_keeps_its() -> None:
                     fixture.OUTPUT_FIELD: "Example Domain result",
                 },
             },
-            harness=domain_ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="legacy-web-result",
         ),

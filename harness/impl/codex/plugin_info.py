@@ -28,7 +28,7 @@ MODELS = tuple(
 )
 
 HARNESS_INFO = HarnessInfo(
-    name=HarnessName.CODEX,
+    name=HarnessName("codex"),
     display_name="Codex",
     plugin_version="9",
     canonical_version=SCHEMA_VERSION,

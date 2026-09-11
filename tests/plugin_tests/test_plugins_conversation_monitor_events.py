@@ -12,6 +12,7 @@ from domain import (
     outcomes,
 )
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_events import payloads, raw_event
 from tests.plugin_tests.support_hooks import armed_monitor, monitor_notification
@@ -35,7 +36,7 @@ def test_claude_monitor_hook_accepts_structured() -> None:
                     {fixture.TYPE_FIELD: "tool_reference", fixture.TOOL_NAME_FIELD: fixture.MONITOR_TOOL},
                 ],
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="structured-monitor-response",
         ),
@@ -57,7 +58,7 @@ def test_claude_rejected_monitor_has_no_running() -> None:
                 fixture.TOOL_INPUT_FIELD: {fixture.TASK_ID: "wrong-shape"},
                 fixture.ERROR: "InputValidationError",
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="monitor-rejected-result",
         ),
@@ -83,7 +84,7 @@ def test_claude_agent_hook_does_not_hide_notice() -> None:
                     {fixture.TYPE_FIELD: "tool_reference", fixture.TOOL_NAME_FIELD: fixture.AGENT_TOOL},
                 ],
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="agent-returned",
         ),
@@ -103,7 +104,7 @@ def test_claude_agent_hook_does_not_hide_notice() -> None:
                     ),
                 },
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="agent-notification",
         ),

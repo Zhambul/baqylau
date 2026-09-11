@@ -16,8 +16,10 @@ from tests import http_test_assets, http_test_controls
 from tests.plugin_tests.support_events import raw_event
 from tests.provider_graph import ProviderGraph
 
-
 # Harness limit: claude_code only. These are Claude task-notification records.
+CLAUDE_CODE_HARNESS = HarnessName("claude_code")
+
+
 @pytest.mark.parametrize("stop_first", [False, True])
 @pytest.mark.parametrize("restart", [False, True])
 def test_notification_response_finishes(*, stop_first: bool, restart: bool) -> None:
@@ -60,7 +62,7 @@ def _records() -> Iterator[RawEvent]:
     with path.open("rb") as source:
         while line := source.readline():
             yield replace(raw_event(
-                json.loads(line), harness=HarnessName.CLAUDE_CODE,
+                json.loads(line), harness=CLAUDE_CODE_HARNESS,
                 source_type="transcript", raw_event_id=str(source.tell()),
                 source_position=str(source.tell() - len(line)),
             ), source_name=str(path))
@@ -69,7 +71,7 @@ def _records() -> Iterator[RawEvent]:
 def _stop(application: ProviderGraph, identity: str) -> None:
     application.raw_events.record((raw_event(
         {"hook_event_name": "Stop", "hook_event_id": identity},
-        harness=HarnessName.CLAUDE_CODE, source_type="hook", raw_event_id=f"stop-{identity}",
+        harness=CLAUDE_CODE_HARNESS, source_type="hook", raw_event_id=f"stop-{identity}",
     ),))
     application.provider("interpreter", Interpreter).translation.translate()
     application.reaction_loop.tick()

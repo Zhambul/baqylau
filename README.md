@@ -141,6 +141,21 @@ bin/         the repository's own CLIs (audit, dashboard). Every entry an
              path never crosses a concern boundary
 ```
 
+## Harness discovery
+
+Each harness has one directory under `harness/impl/`. Discovery finds directories
+with `plugin.py` in name order. Each directory must also contain `definition.py`.
+That file exports `DEFINITION`, a `HarnessDefinition` with the directory name and
+a function that returns its default `HarnessRuntimeConfig`.
+
+Keep the declaration small. It must not import or build plugin services.
+`plugin.py` exports `build_plugin`, which receives the runtime configuration and
+shared dependencies. Its returned plugin must use the declared name.
+
+There is no central harness list. Runtime defaults, CLI name checks, and the E2E
+coverage checks use the discovered declarations. Discovery runs at startup; it
+does not watch directories or use a timer. Restart after you add a plugin.
+
 ## Testing
 
 ```sh

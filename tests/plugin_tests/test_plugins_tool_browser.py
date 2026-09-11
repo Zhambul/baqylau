@@ -11,11 +11,9 @@ from domain.content import TextContent
 from domain.event_resource import (
     BrowserInteracted,
 )
-from domain.ids import (
-    HarnessName,
-)
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
 from harness.impl.claude_code.hooks import gateway as claude_hooks
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_events import payloads, raw_event
 from tests.plugin_tests.support_hooks import hook_request
@@ -42,7 +40,7 @@ def test_claude_browser_mcp_result_is_named() -> None:
                     ],
                 },
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="browser-navigate-call",
         ),
@@ -66,7 +64,7 @@ def test_claude_browser_mcp_result_is_named() -> None:
                     },
                 ],
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="browser-navigate-hook-result",
         ),
@@ -98,7 +96,7 @@ def test_claude_browser_mcp_result_is_named() -> None:
                     ],
                 },
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="browser-navigate-result",
         ),
@@ -131,7 +129,7 @@ def test_claude_future_chrome_verb_stays_browser() -> None:
                     ],
                 },
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="browser-future-call",
         ),
@@ -150,7 +148,7 @@ def test_claude_future_chrome_verb_stays_browser() -> None:
                     ],
                 },
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="browser-future-result",
         ),
@@ -178,7 +176,7 @@ def test_claude_accepts_browser_mcp_attribution() -> None:
                 "attributionMcpServer": "claude-in-chrome",
                 "attributionMcpTool": "navigate",
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="browser-attribution",
         ),

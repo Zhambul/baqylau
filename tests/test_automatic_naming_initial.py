@@ -23,6 +23,7 @@ from tests import (
     automatic_naming_session_helper,
     automatic_naming_values,
 )
+from tests.harness_names import CLAUDE_CODE_HARNESS, CODEX_HARNESS
 
 
 def test_first_prompt_enqueues_once_and_restart(naming_jobs: SqliteNamingJobRepository) -> None:
@@ -51,7 +52,7 @@ def test_first_prompt_enqueues_once_and_restart(naming_jobs: SqliteNamingJobRepo
     assert restarted.claim_next() is None
 
 
-@pytest.mark.parametrize("harness", [domain_ids.HarnessName.CODEX, domain_ids.HarnessName.CLAUDE_CODE])
+@pytest.mark.parametrize("harness", [CODEX_HARNESS, CLAUDE_CODE_HARNESS])
 def test_native_initial_naming_never_enqueues(
     naming_jobs: SqliteNamingJobRepository,
     harness: domain_ids.HarnessName,
@@ -63,7 +64,7 @@ def test_native_initial_naming_never_enqueues(
     registry.register(claude_plugin)
 
     AutomaticNamingReaction(registry, repository).react(
-        automatic_naming_prompt_helper.prompt_event(claude=harness == domain_ids.HarnessName.CLAUDE_CODE),
+        automatic_naming_prompt_helper.prompt_event(claude=harness == CLAUDE_CODE_HARNESS),
     )
 
     assert repository.claim_next() is None
@@ -104,7 +105,7 @@ def test_registry_rejects_capability_that(
     registry = harness_registry.HarnessRegistry()
     registry.register(changed_plugin)
     registry.register(
-        claude_plugin if changed_plugin.harness_info.name == domain_ids.HarnessName.CODEX else codex_plugin,
+        claude_plugin if changed_plugin.harness_info.name == CODEX_HARNESS else codex_plugin,
     )
 
     with pytest.raises(harness_registry.HarnessRegistryError):

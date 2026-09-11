@@ -11,10 +11,10 @@ from domain.event_work import (
     PlanResolved,
 )
 from domain.ids import (
-    HarnessName,
     TurnId,
 )
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_events import payloads, raw_event
 from tests.plugin_tests.support_values import JsonValue, text_of
@@ -38,7 +38,7 @@ def test_claude_plan_is_proposed() -> None:
                 fixture.TOOL_NAME_FIELD: "ExitPlanMode",
                 fixture.TOOL_INPUT_FIELD: {"plan": "1. Read it\n2. Change it"},
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="plan-proposed",
         ),
@@ -54,7 +54,7 @@ def test_claude_plan_is_proposed() -> None:
                     "The user doesn't want to proceed. To tell you how to proceed, the user said:\nstart with the tests"
                 ),
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="plan-resolved",
         ),
@@ -87,7 +87,7 @@ def test_claude_enter_plan_mode_is_deliberate() -> None:
                 fixture.TOOL_NAME_FIELD: "EnterPlanMode",
                 fixture.TOOL_INPUT_FIELD: {},
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="enter-plan-started",
         ),
@@ -104,7 +104,7 @@ def test_claude_enter_plan_mode_is_deliberate() -> None:
                     "codebase and designing an implementation approach."
                 ),
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="enter-plan-finished",
         ),
@@ -129,7 +129,7 @@ def test_claude_turn_opens_on_prompt_and_closes() -> None:
                 fixture.UUID_FIELD: fixture.PROMPT_ONE_ID,
                 fixture.MESSAGE_FIELD: {fixture.CONTENT_FIELD: "fix it"},
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id=fixture.PROMPT_KIND,
         ),
@@ -142,7 +142,7 @@ def test_claude_turn_opens_on_prompt_and_closes() -> None:
                 fixture.TOOL_NAME_FIELD: fixture.BASH_TOOL,
                 fixture.TOOL_INPUT_FIELD: {fixture.COMMAND_FIELD: fixture.PRINT_DIRECTORY_COMMAND},
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id=fixture.TOOL_KIND,
         ),
@@ -154,7 +154,7 @@ def test_claude_turn_opens_on_prompt_and_closes() -> None:
                 fixture.UUID_FIELD: "prompt-two",
                 fixture.MESSAGE_FIELD: {fixture.CONTENT_FIELD: "and also this"},
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="injection",
         ),
@@ -162,7 +162,7 @@ def test_claude_turn_opens_on_prompt_and_closes() -> None:
     stop = translator.translate(
         raw_event(
             {fixture.HOOK_EVENT_NAME_FIELD: fixture.STOP_HOOK, fixture.HOOK_EVENT_ID_FIELD: "stop-one"},
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="stop",
         ),
@@ -175,7 +175,7 @@ def test_claude_turn_opens_on_prompt_and_closes() -> None:
                 fixture.TOOL_NAME_FIELD: fixture.BASH_TOOL,
                 fixture.TOOL_INPUT_FIELD: {fixture.COMMAND_FIELD: "ls"},
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="after",
         ),

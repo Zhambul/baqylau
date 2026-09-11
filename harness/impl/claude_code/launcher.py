@@ -139,7 +139,7 @@ class ClaudeCodeLauncher(HarnessLauncher):
         )
         if launch_request.resume_session_id is not None:
             self.launch_effects.resumed(
-                HarnessName.CLAUDE_CODE,
+                HarnessName("claude_code"),
                 launch_request.resume_session_id,
                 window_id,
             )

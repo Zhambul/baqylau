@@ -8,11 +8,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from api.common.mapper import usage as api_usage
-from domain.ids import HarnessName
 from harness.impl.claude_code.usage import live as claude_live_usage
 from harness.impl.claude_code.usage.rows import ClaudeCodeUsage
 from harness.models.usage import UsageWindowSample
 from harness.runtime import HarnessRuntimeConfig, default_harness_runtime_configs
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 
 if TYPE_CHECKING:
@@ -73,7 +73,7 @@ def test_claude_usage_row_maps_fable(
             "profile refresh unavailable",
         ),
     )
-    usage_reader = ClaudeCodeUsage(default_harness_runtime_configs().for_harness(HarnessName.CLAUDE_CODE))
+    usage_reader = ClaudeCodeUsage(default_harness_runtime_configs().for_harness(CLAUDE_CODE_HARNESS))
     row = usage_reader.read()[0]
     response = api_usage.usage_row(row)
 

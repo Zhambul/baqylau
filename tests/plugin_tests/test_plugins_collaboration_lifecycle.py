@@ -13,6 +13,7 @@ from domain import (
     outcomes,
 )
 from harness.impl.codex.canonical.translator import CodexCanonicalTranslator
+from tests.harness_names import CODEX_HARNESS
 from tests.plugin_tests import (
     collaboration_activity_support,
     collaboration_call_support,
@@ -34,7 +35,7 @@ def test_codex_collaboration_lifecycle_uses_child(tmp_path: Path) -> None:
     hook_raw = replace(
         raw_event(
             {fixture.HOOK_EVENT_NAME_FIELD: "SubagentStop", fixture.AGENT_ID_FIELD: fixture.CHILD_ONE_ID},
-            harness=domain_ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="child-stop-hook",
         ),
@@ -98,7 +99,7 @@ def test_codex_actor_message_correlation_survives(tmp_path: Path) -> None:
                     },
                 },
             },
-            harness=domain_ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="send-activity",
             source_position=str(len(call.encode())),
@@ -128,7 +129,7 @@ def test_codex_child_abort_cancels_only_its() -> None:
                     fixture.REASON_FIELD: fixture.INTERRUPTED,
                 },
             },
-            harness=domain_ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.CHILD_ROLLOUT_ID,
             raw_event_id="child-abort",
         ),

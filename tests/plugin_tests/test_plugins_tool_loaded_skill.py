@@ -13,11 +13,9 @@ from domain.event_resource import (
 from domain.event_shell import (
     ShellStarted,
 )
-from domain.ids import (
-    HarnessName,
-)
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
 from harness.impl.codex.canonical.translator import CodexCanonicalTranslator
+from tests.harness_names import CLAUDE_CODE_HARNESS, CODEX_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_events import payloads, raw_event
 from tests.plugin_tests.support_values import JsonValue, text_of
@@ -41,7 +39,7 @@ def test_claude_loaded_skill_text_finishes_skill() -> None:
                 fixture.TOOL_NAME_FIELD: fixture.SKILL_TOOL,
                 fixture.TOOL_INPUT_FIELD: {fixture.SKILL_ARGUMENT: fixture.AUDIT_DEBUG, "args": "proof"},
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="skill-start",
         ),
@@ -55,7 +53,7 @@ def test_claude_loaded_skill_text_finishes_skill() -> None:
                 fixture.TOOL_INPUT_FIELD: {fixture.SKILL_ARGUMENT: fixture.AUDIT_DEBUG, "args": "proof"},
                 fixture.TOOL_RESPONSE_FIELD: "Launching skill: audit-debug",
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="skill-empty-result",
         ),
@@ -75,7 +73,7 @@ def test_claude_loaded_skill_text_finishes_skill() -> None:
                     ],
                 },
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="skill-tool-result",
         ),
@@ -99,7 +97,7 @@ def test_claude_loaded_skill_text_finishes_skill() -> None:
                     ],
                 },
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="skill-output",
         ),
@@ -142,7 +140,7 @@ def test_codex_read_of_non_skill_file_remains() -> None:
                     ),
                 },
             },
-            harness=HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="codex-ordinary-read",
         ),

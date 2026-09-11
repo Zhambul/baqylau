@@ -7,11 +7,12 @@ import shlex
 from itertools import starmap
 from typing import TYPE_CHECKING
 
-from domain.ids import HarnessName
 from terminal.models.tabs import EnvironmentVariable
 from tests.e2e.testkit import journey_session_ids
+from tests.harness_names import CLAUDE_CODE_HARNESS
 
 if TYPE_CHECKING:
+    from domain.ids import HarnessName
     from harness.runtime import HarnessRuntimeConfig
     from sdk.client import SessionRef
     from tests.e2e.testkit.references import SessionSpec
@@ -53,7 +54,7 @@ def launch_arguments(
     """
     arguments = (
         claude_launch_arguments(spec, resume)
-        if harness == HarnessName.CLAUDE_CODE
+        if harness == CLAUDE_CODE_HARNESS
         else codex_launch_arguments(spec, resume, workspace)
     )
     return (*arguments, prompt) if prompt.strip() else arguments
@@ -109,7 +110,7 @@ def launch_environment(
     """
     environment = {launch_value.name: launch_value.content for launch_value in environment_values}
     environment["BAQYLAU_DASHBOARD_PORT"] = str(dashboard_port)
-    if harness == HarnessName.CLAUDE_CODE:
+    if harness == CLAUDE_CODE_HARNESS:
         environment["CLAUDE_CONFIG_DIR"] = str(runtime.configuration_directory)
         if runtime.settings_file is not None:
             environment["CLAUDE_CODE_MANAGED_SETTINGS_PATH"] = str(runtime.settings_file)

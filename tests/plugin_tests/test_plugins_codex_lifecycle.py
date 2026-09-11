@@ -7,9 +7,9 @@ import json
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
-from domain.ids import HarnessName
 from harness.impl.codex.canonical.translator import CodexCanonicalTranslator
 from repository.mapper import facts as mapper
+from tests.harness_names import CODEX_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_events import raw_event
 
@@ -54,7 +54,7 @@ def test_codex_session_start_hook_matches_rollout(tmp_path: Path, monkeypatch: p
                 fixture.CWD_FIELD: fixture.WORK_PATH,
                 fixture.TRANSCRIPT_PATH: str(rollout_path),
             },
-            harness=HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="session-hook",
         ),
@@ -71,7 +71,7 @@ def test_codex_session_start_hook_matches_rollout(tmp_path: Path, monkeypatch: p
                         "forked_from_id": fixture.SESSION_BEFORE_REWIND_ID,
                     },
                 },
-                harness=HarnessName.CODEX,
+                harness=CODEX_HARNESS,
                 source_type=fixture.ROLLOUT_SOURCE,
                 raw_event_id="session-rollout",
                 source_position=fixture.ZERO_TEXT,

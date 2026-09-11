@@ -9,10 +9,8 @@ from domain.content import TextContent
 from domain.event_resource import (
     SearchPerformed,
 )
-from domain.ids import (
-    HarnessName,
-)
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_events import payloads, raw_event
 from tests.plugin_tests.support_values import JsonValue, text_of
@@ -46,7 +44,7 @@ def _claude_search_result_event() -> RawEvent:
                 ],
             },
         },
-        harness=HarnessName.CLAUDE_CODE,
+        harness=CLAUDE_CODE_HARNESS,
         source_type=fixture.TRANSCRIPT_SOURCE,
         raw_event_id="tool-result",
     )
@@ -79,7 +77,7 @@ def test_claude_search_is_one_fact_holding_both() -> None:
                     ],
                 },
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="tool-search",
         ),
@@ -101,7 +99,7 @@ def test_claude_search_is_one_fact_holding_both() -> None:
                     "total_deferred_tools": 34,
                 },
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="tool-search-hook-result",
         ),
@@ -146,7 +144,7 @@ def test_claude_tool_search_keeps_explicit_empty() -> None:
                     "total_deferred_tools": 34,
                 },
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="empty-tool-search-result",
         ),

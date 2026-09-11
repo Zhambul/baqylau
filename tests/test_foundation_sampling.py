@@ -11,6 +11,7 @@ from tests import (
     foundation_test_primitives,
     foundation_test_sources,
 )
+from tests.harness_names import CODEX_HARNESS
 
 SESSION_ID_TEXT = "session-one"
 EXPECTED_TERMINAL_READS = 2
@@ -145,7 +146,7 @@ def test_actor_lifecycle_payload_contract(
         actor_id=foundation_dependencies.domain.domain_ids.ActorId("actor-one"),
         turn_id=None,
         parent_actor_id=None,
-        harness=foundation_dependencies.domain.domain_ids.HarnessName.CODEX,
+        harness=CODEX_HARNESS,
         occurred_at=1.0,
         terminal_window_id=None,
         harness_process_id=None,
@@ -178,7 +179,7 @@ def test_saved_session_row_is_not_yet_canon(
     """Verify a saved session row is not yet a canonical session."""
     sessions = foundation_dependencies.repository.SqliteSessionRepository(database)
     sessions.save(
-        foundation_dependencies.domain.domain_ids.HarnessName.CODEX,
+        CODEX_HARNESS,
         foundation_test_events.example_session("candidate"),
     )
     assert not foundation_dependencies.repository.SqliteCanonicalEventRepository(database).session_ids()
@@ -194,14 +195,14 @@ def test_session_save_writes_identity_once(
     """
     sessions = foundation_dependencies.repository.SqliteSessionRepository(database)
     sessions.save(
-        foundation_dependencies.domain.domain_ids.HarnessName.CODEX,
+        CODEX_HARNESS,
         foundation_dependencies.standard.replace(
             foundation_test_events.example_session(),
             terminal_window_id=foundation_dependencies.domain.domain_ids.WindowId("window-1"),
         ),
     )
     sessions.save(
-        foundation_dependencies.domain.domain_ids.HarnessName.CODEX,
+        CODEX_HARNESS,
         foundation_dependencies.standard.replace(
             foundation_test_events.example_session(),
             working_directory="/elsewhere",

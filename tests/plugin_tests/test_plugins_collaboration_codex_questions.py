@@ -7,9 +7,9 @@ import json
 
 from domain import (
     event_work,
-    ids as domain_ids,
 )
 from harness.impl.codex.canonical.translator import CodexCanonicalTranslator
+from tests.harness_names import CODEX_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_events import payloads, raw_event
 
@@ -40,7 +40,7 @@ def test_codex_question_uses_same_attention() -> None:
                     ),
                 },
             },
-            harness=domain_ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="ask",
         ),
@@ -79,7 +79,7 @@ def test_codex_question_result_records_selected() -> None:
                     ),
                 },
             },
-            harness=domain_ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="ask",
             source_position=fixture.TEN_TEXT,
@@ -97,7 +97,7 @@ def test_codex_question_result_records_selected() -> None:
                     }),
                 },
             },
-            harness=domain_ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="answer",
             source_position=fixture.ELEVEN_TEXT,
@@ -140,7 +140,7 @@ def test_codex_interrupted_question_resolves() -> None:
                     ),
                 },
             },
-            harness=domain_ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="ask-interrupted",
         ),
@@ -155,7 +155,7 @@ def test_codex_interrupted_question_resolves() -> None:
                     fixture.OUTPUT_FIELD: "aborted by user after 32.0s",
                 },
             },
-            harness=domain_ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="answer-interrupted",
         ),
@@ -193,7 +193,7 @@ def test_codex_question_result_replaces_native() -> None:
                     ),
                 },
             },
-            harness=domain_ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="ask-free-text",
             source_position="20",
@@ -220,7 +220,7 @@ def test_codex_question_result_replaces_native() -> None:
                     ),
                 },
             },
-            harness=domain_ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="answer-free-text",
             source_position="21",
@@ -258,7 +258,7 @@ def test_codex_subagent_question_error_resolves() -> None:
                     ),
                 },
             },
-            harness=domain_ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.CHILD_ROLLOUT_ID,
             raw_event_id="ask-child",
             source_position="30",
@@ -274,7 +274,7 @@ def test_codex_subagent_question_error_resolves() -> None:
                     fixture.OUTPUT_FIELD: ("request_user_input can only be used by the root thread"),
                 },
             },
-            harness=domain_ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.CHILD_ROLLOUT_ID,
             raw_event_id="answer-child",
             source_position="31",

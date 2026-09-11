@@ -39,7 +39,7 @@ MODELS = tuple(
 REWIND_MODES = _rewind_modes()
 
 HARNESS_INFO = HarnessInfo(
-    name=HarnessName.CLAUDE_CODE,
+    name=HarnessName("claude_code"),
     display_name="Claude Code",
     plugin_version="3",
     canonical_version=SCHEMA_VERSION,

@@ -39,5 +39,5 @@ def runtime_executable(
         Text result.
 
     """
-    harness = HarnessName.CLAUDE_CODE if name == "claude" else HarnessName.CODEX
+    harness = HarnessName("claude_code") if name == "claude" else HarnessName("codex")
     return configured_executable(runtime_configs.for_harness(harness))

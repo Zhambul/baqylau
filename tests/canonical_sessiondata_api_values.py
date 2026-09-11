@@ -11,6 +11,7 @@ from domain import (
     messaging,
     session_state,
 )
+from tests.harness_names import CLAUDE_CODE_HARNESS
 
 SESSION_ID_TEXT = "session-one"
 WORKING_DIRECTORY = "/work/baqylau"
@@ -55,7 +56,7 @@ NO_UPDATE_WAIT_SECONDS = 0.8
 # what these tests check IS the mapping.
 FACTS = session_state.SessionFacts(
     session_id=SESSION,
-    harness=domain_ids.HarnessName("claude_code"),
+    harness=CLAUDE_CODE_HARNESS,
     state=lifecycle.LifecycleState.RUNNING,
     working_directory=WORKING_DIRECTORY,
     started_at=SESSION_START_TIME,

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from domain.ids import HarnessName
+from harness.impl.definitions import definitions
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -17,7 +17,7 @@ ROOT = Path(__file__).parents[1]
 FEATURES = ROOT / "tests" / "e2e" / "features"
 TEXT_ENCODING = "utf-8"
 SCENARIO = re.compile(r"^  (Scenario(?: Outline)?):\s*(.+)$", re.MULTILINE)
-HARNESSES = frozenset(harness.value for harness in HarnessName)
+HARNESSES = frozenset(str(definition.name) for definition in definitions())
 HARNESS_NAME = "|".join(re.escape(harness) for harness in sorted(HARNESSES))
 HARNESS_ROW = re.compile(rf"^\s*\|\s*({HARNESS_NAME})\s*\|", re.MULTILINE)
 HARNESS_LIMIT = re.compile(

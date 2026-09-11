@@ -14,6 +14,7 @@ from harness.models.session import (
     Session,
 )
 from tests.fake_terminal import FakeTerminal
+from tests.harness_names import CODEX_HARNESS
 from tests.plugin_tests import (
     control_basic_support,
     control_driver_support,
@@ -68,7 +69,7 @@ def test_codex_idle_send_reports_missing_native(monkeypatch: pytest.MonkeyPatch,
         text=fixture.TEST,
     )
 
-    outcome = control_driver_support.controller(domain_ids.HarnessName.CODEX).execute(
+    outcome = control_driver_support.controller(CODEX_HARNESS).execute(
         request,
         support_controls.control_context(
             session,

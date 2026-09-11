@@ -19,6 +19,9 @@ if TYPE_CHECKING:
     from harness.models.raw_events import TranslationResult
 
 
+CODEX_HARNESS = ids.HarnessName("codex")
+
+
 def background_shell_id(translation: TranslationResult) -> ids.ShellId:
     """Verify that the yielded event backgrounds one shell.
 
@@ -128,7 +131,7 @@ def yielded_shell_id(exec_fixture: YieldedExecFixture) -> ids.ShellId:
         replace(
             raw_event(
                 exec_fixture.call,
-                harness=ids.HarnessName.CODEX,
+                harness=CODEX_HARNESS,
                 source_type=fixture.ROLLOUT_SOURCE,
                 raw_event_id=fixture.CALL_BEFORE_RESTART_ID,
                 source_position=exec_fixture.positions[0],
@@ -140,7 +143,7 @@ def yielded_shell_id(exec_fixture: YieldedExecFixture) -> ids.ShellId:
         replace(
             raw_event(
                 exec_fixture.yielded,
-                harness=ids.HarnessName.CODEX,
+                harness=CODEX_HARNESS,
                 source_type=fixture.ROLLOUT_SOURCE,
                 raw_event_id="yield-before-restart",
                 source_position=exec_fixture.positions[1],

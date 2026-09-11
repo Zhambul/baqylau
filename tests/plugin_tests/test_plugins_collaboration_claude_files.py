@@ -15,6 +15,7 @@ from harness.models.session import (
     Session,
 )
 from tests.canonical_runtime import CanonicalRuntime
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.collaboration_file_support import (
     started_file_translators,
@@ -58,7 +59,7 @@ def test_claude_file_facts_converge_from_either() -> None:
                 fixture.TOOL_INPUT_FIELD: {fixture.FILE_PATH_FIELD: fixture.WORK_A_PY_PATH},
                 fixture.TOOL_RESPONSE_FIELD: response,
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="hook-finish",
         ),
@@ -79,7 +80,7 @@ def test_claude_file_facts_converge_from_either() -> None:
                 },
                 fixture.TOOL_USE_RESULT: response,
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="transcript-finish",
         ),
@@ -116,7 +117,7 @@ def test_claude_edit_completion_preserves_native() -> None:
                     ],
                 },
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="edit-finish",
         ),
@@ -142,7 +143,7 @@ def test_claude_write_counts_created_content() -> None:
                 },
                 fixture.TOOL_RESPONSE_FIELD: {fixture.CONTENT_FIELD: "File created successfully"},
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="write-finish",
         ),
@@ -160,7 +161,7 @@ def test_claude_hook_and_transcript_tool_finish(tmp_path: Path) -> None:
 
     store = CanonicalRuntime(str(tmp_path / fixture.MAIN_DB_PATH))
     store.register(
-        domain_ids.HarnessName.CLAUDE_CODE,
+        CLAUDE_CODE_HARNESS,
         Session(
             domain_ids.SessionId(fixture.SESSION_ONE_ID),
             domain_ids.ActorId(fixture.SESSION_ONE_LEAD_ID),
@@ -198,7 +199,7 @@ def test_claude_failed_shell_exit_code_converges() -> None:
                     ],
                 },
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="shell-failed-start",
         ),
@@ -212,7 +213,7 @@ def test_claude_failed_shell_exit_code_converges() -> None:
                 fixture.TOOL_INPUT_FIELD: {fixture.COMMAND_FIELD: "exit 7"},
                 fixture.ERROR: "Exit code 7\nexpected-error",
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="shell-failed-hook",
         ),
@@ -234,7 +235,7 @@ def test_claude_failed_shell_exit_code_converges() -> None:
                 },
                 fixture.TOOL_USE_RESULT: "Error: Exit code 7\nexpected-error",
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="shell-failed-transcript",
         ),

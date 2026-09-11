@@ -21,6 +21,7 @@ from harness.models.session import (
 )
 from tests.canonical_runtime import ProviderGraph
 from tests.fake_terminal import FakeTerminal
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import (
     control_basic_support,
     control_codex_submit_support,
@@ -47,7 +48,7 @@ def test_claude_composer_owns_input_box_grammar() -> None:
 
     terminal = FakeTerminal(screen_text=screen)
 
-    plugin = ProviderGraph().registry.plugin(domain_ids.HarnessName.CLAUDE_CODE)
+    plugin = ProviderGraph().registry.plugin(CLAUDE_CODE_HARNESS)
     state = control_driver_support.read_composer_state(plugin, terminal)
     assert state is not None
 
@@ -61,7 +62,7 @@ def test_claude_empty_vim_composer_is_readable() -> None:
     screen = f"{divider}\n✻ Worked for 4s · done\n{divider}\n-- INSERT --"
     terminal = FakeTerminal(screen_text=screen)
 
-    plugin = ProviderGraph().registry.plugin(domain_ids.HarnessName.CLAUDE_CODE)
+    plugin = ProviderGraph().registry.plugin(CLAUDE_CODE_HARNESS)
     state = control_driver_support.read_composer_state(plugin, terminal)
 
     assert state is not None
@@ -81,7 +82,7 @@ def test_claude_interrupt_control_waits(tmp_path: Path) -> None:
     )
 
     outcome = support_values.controller_of(
-        ProviderGraph().registry.plugin(domain_ids.HarnessName.CLAUDE_CODE),
+        ProviderGraph().registry.plugin(CLAUDE_CODE_HARNESS),
     ).execute(
         control_models.Interrupt(session.session_id, control_state_values.PRIMARY_REQUEST),
         support_controls.control_context(
@@ -114,7 +115,7 @@ def test_claude_signal_killed_shell_is_cancelled() -> None:
                     ],
                 },
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="shell-start",
         ),
@@ -137,7 +138,7 @@ def test_claude_signal_killed_shell_is_cancelled() -> None:
                     ],
                 },
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id=fixture.SHELL_RESULT_ID,
         ),
@@ -227,7 +228,7 @@ def test_claude_active_send_retries_until_native(
         text="queued native prompt",
     )
 
-    outcome = control_driver_support.controller(domain_ids.HarnessName.CLAUDE_CODE).execute(
+    outcome = control_driver_support.controller(CLAUDE_CODE_HARNESS).execute(
         request,
         support_controls.control_context(
             session,

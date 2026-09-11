@@ -22,8 +22,12 @@ def _updated_runtime(
     harness_flag: _HarnessFlag,
 ) -> HarnessRuntimeConfigs:
     harness_value, configured_value = harness_flag.setting.split("=", 1)
-    harness = _harness_name(harness_value)
-    runtime = harness_runtime_configs.for_harness(harness)
+    harness = HarnessName(harness_value)
+    try:
+        runtime = harness_runtime_configs.for_harness(harness)
+    except ValueError as error:
+        message = f"unknown harness: {harness_value}"
+        raise UsageError(message) from error
     if harness_flag.name == "--harness-executable":
         runtime = replace(runtime, executable=configured_value)
     elif harness_flag.name == "--harness-config-dir":
@@ -46,11 +50,3 @@ def _configuration_runtime(
             and configuration_directory == harness_runtime_config.configuration_directory
         ),
     )
-
-
-def _harness_name(harness_value: str) -> HarnessName:
-    try:
-        return HarnessName(harness_value)
-    except ValueError as error:
-        message = f"unknown harness: {harness_value}"
-        raise UsageError(message) from error

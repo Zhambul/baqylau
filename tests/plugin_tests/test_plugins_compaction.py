@@ -4,9 +4,9 @@
 from __future__ import annotations
 
 from domain.event_telemetry import CompactionFinished, CompactionStarted
-from domain.ids import HarnessName
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
 from harness.impl.codex.canonical.translator import CodexCanonicalTranslator
+from tests.harness_names import CLAUDE_CODE_HARNESS, CODEX_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_events import raw_event
 from tests.plugin_tests.support_values import text_of
@@ -27,7 +27,7 @@ def test_codex_encrypted_compaction_maps_unique() -> None:
                 fixture.HOOK_EVENT_NAME_FIELD: "PreCompact",
                 fixture.HOOK_EVENT_ID_FIELD: fixture.COMPACT_ONE_ID,
             },
-            harness=HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="compact-before",
         ),
@@ -38,7 +38,7 @@ def test_codex_encrypted_compaction_maps_unique() -> None:
                 fixture.HOOK_EVENT_NAME_FIELD: "PostCompact",
                 fixture.HOOK_EVENT_ID_FIELD: fixture.COMPACT_ONE_ID,
             },
-            harness=HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="compact-after",
         ),
@@ -67,7 +67,7 @@ def test_codex_encrypted_compaction_maps_unique() -> None:
                     ],
                 },
             },
-            harness=HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id=fixture.COMPACT_BOUNDARY_ID,
         ),
@@ -105,7 +105,7 @@ def test_codex_rollout_compaction_boundary() -> None:
                     },
                 },
             },
-            harness=HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id=fixture.COMPACT_BOUNDARY_ID,
         ),
@@ -146,7 +146,7 @@ def test_claude_compaction_metadata_maps_to_one() -> None:
                     },
                 },
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id=fixture.COMPACT_ONE_ID,
         ),
@@ -163,7 +163,7 @@ def test_claude_compaction_metadata_maps_to_one() -> None:
                     fixture.CONTENT_FIELD: "Compacted summary retains amber circle.",
                 },
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id=fixture.COMPACT_SUMMARY_ID,
         ),
@@ -187,7 +187,7 @@ def test_claude_compaction_hook_and_boundary_map() -> None:
                 fixture.HOOK_EVENT_ID_FIELD: "compact-start",
                 "prompt_id": fixture.COMPACT_ONE_ID,
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="compact-start",
         ),
@@ -199,7 +199,7 @@ def test_claude_compaction_hook_and_boundary_map() -> None:
                 fixture.HOOK_EVENT_ID_FIELD: "compact-hook-finish",
                 "prompt_id": fixture.COMPACT_ONE_ID,
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="compact-hook-finish",
         ),
@@ -216,7 +216,7 @@ def test_claude_compaction_hook_and_boundary_map() -> None:
                     "preTokens": 15182,
                 },
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id=fixture.COMPACT_BOUNDARY_ID,
         ),
@@ -237,7 +237,7 @@ def test_claude_compaction_hook_and_boundary_map() -> None:
                         fixture.CONTENT_FIELD: "The compacted context.",
                     },
                 },
-                harness=HarnessName.CLAUDE_CODE,
+                harness=CLAUDE_CODE_HARNESS,
                 source_type=fixture.TRANSCRIPT_SOURCE,
                 raw_event_id=fixture.COMPACT_SUMMARY_ID,
             ),

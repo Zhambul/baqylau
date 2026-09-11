@@ -4,11 +4,10 @@
 import dataclasses
 
 from audit.recorder import AuditRecorder
-from domain.ids import HarnessName
 from harness.contract import HarnessPlugin, SessionResumeRecorder
-from harness.impl.codex import plugin_info, plugin_runtime
+from harness.impl.codex import definition, plugin_info, plugin_runtime
 from harness.impl.codex.launcher import CodexLauncher
-from harness.runtime import HarnessRuntimeConfig, default_harness_runtime_configs
+from harness.runtime import HarnessRuntimeConfig
 from terminal.contract import TerminalPlugin
 from terminal.models.tabs import EnvironmentVariable
 
@@ -47,5 +46,5 @@ def build_plugin(
 
 
 plugin = build_plugin(
-    default_harness_runtime_configs().for_harness(HarnessName.CODEX),
+    definition.default_runtime_config(),
 )

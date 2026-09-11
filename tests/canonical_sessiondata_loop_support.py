@@ -14,6 +14,7 @@ from tests import (
     canonical_sessiondata_values as session_values,
 )
 from tests.canonical_sessiondata_components import domain as session_domain
+from tests.harness_names import CODEX_HARNESS
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -128,7 +129,7 @@ def record_events(
     for cursor, payload in enumerate(payloads, start=1):
         raw_event = sessiondata_components.harness.raw_events.RawEvent(
             raw_event_id=session_domain.ids.RawEventId(f"raw-{cursor}"),
-            harness=session_domain.ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type="fixture",
             source_name="fixture.jsonl",
             source_position=str(cursor),

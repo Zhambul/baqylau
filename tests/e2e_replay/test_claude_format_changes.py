@@ -6,17 +6,18 @@ from http import HTTPStatus
 from pathlib import Path
 
 from domain.event_conversation import TurnFinished
-from domain.ids import HarnessName, SessionId
+from domain.ids import SessionId
 from engine.interpret.loop import Interpreter
 from tests import http_test_assets, http_test_controls, http_test_pane_models, http_test_preferences
 from tests.e2e_replay.audit_replay_support import replay
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.provider_graph import ProviderGraph
 
 
 # Harness limit: claude_code only. These fields are from Claude records.
 def test_claude_format_changes_reach_http() -> None:
     """Accept rendered attachments and text error details."""
-    application = replay("audit_claude_format_changes.jsonl", HarnessName.CLAUDE_CODE, "transcript")
+    application = replay("audit_claude_format_changes.jsonl", CLAUDE_CODE_HARNESS, "transcript")
     for audit in http_test_pane_models.raw_event_audits(application).audits_for_session(SessionId("session-one")):
         assert audit.interpretation is not None
         assert audit.interpretation.decision != "translation_failed"

@@ -15,6 +15,7 @@ from harness.models.session import (
     Session,
 )
 from tests.canonical_runtime import CanonicalRuntime
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import support_hooks, support_storage, vocabulary as fixture
 from tests.plugin_tests.hook_common_support import PRIMARY_SESSION, encoded_json_document, tick_interpreter
 
@@ -32,7 +33,7 @@ def finish_background_output(
         ids.ActorId(fixture.SESSION_ONE_LEAD_ID),
         None,
         None,
-        ids.HarnessName.CLAUDE_CODE,
+        CLAUDE_CODE_HARNESS,
         fixture.SHELL_SESSION_FINISH_TIME,
         None,
         None,
@@ -105,7 +106,7 @@ def start_foreground_following(
 def register_background_session(runtime: CanonicalRuntime, session_id: str, transcript_path: str) -> None:
     """Register the Claude session for a backgrounding test."""
     runtime.register(
-        ids.HarnessName.CLAUDE_CODE,
+        CLAUDE_CODE_HARNESS,
         Session(
             ids.SessionId(session_id),
             ids.ActorId(f"{session_id}:lead"),

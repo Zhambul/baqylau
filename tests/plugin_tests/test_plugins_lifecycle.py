@@ -19,6 +19,9 @@ if TYPE_CHECKING:
 
     import pytest
 
+CLAUDE_CODE_HARNESS = ids.HarnessName("claude_code")
+
+
 DISTINCT_HOOK_PAYLOAD_COUNT = 2
 
 
@@ -32,7 +35,7 @@ def test_claude_hook_and_child_transcript() -> None:
                 fixture.AGENT_ID_FIELD: fixture.CHILD_ONE_ID,
                 "agent_type": "researcher",
             },
-            harness=ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="child-hook",
         ),
@@ -46,7 +49,7 @@ def test_claude_hook_and_child_transcript() -> None:
                 fixture.UUID_FIELD: fixture.CHILD_PROMPT_ID,
                 fixture.MESSAGE_FIELD: {fixture.CONTENT_FIELD: "inspect"},
             },
-            harness=ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="child-transcript",
             source_position=fixture.ZERO_TEXT,
@@ -72,7 +75,7 @@ def test_claude_subagent_stop_hook_finishes_actor() -> None:
     hook = replace(
         raw_event(
             {fixture.HOOK_EVENT_NAME_FIELD: "SubagentStop", fixture.HOOK_EVENT_ID_FIELD: "child-stop"},
-            harness=ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="child-stop-hook",
         ),
@@ -98,7 +101,7 @@ def test_claude_first_teammate_message_starts() -> None:
                     fixture.CONTENT_FIELD: '<teammate-message teammate_id="worker-one">hello</teammate-message>',
                 },
             },
-            harness=ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type="teammate_transcript",
             raw_event_id="worker-transcript",
             source_position=fixture.ZERO_TEXT,
@@ -124,7 +127,7 @@ def test_claude_later_teammate_message_reuses() -> None:
                 fixture.UUID_FIELD: "first",
                 fixture.MESSAGE_FIELD: {fixture.CONTENT_FIELD: "inspect"},
             },
-            harness=ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type="teammate_transcript",
             raw_event_id="first-record",
             source_position=fixture.ZERO_TEXT,
@@ -142,7 +145,7 @@ def test_claude_later_teammate_message_reuses() -> None:
                     fixture.CONTENT_FIELD: '<teammate-message teammate_id="worker-one">done</teammate-message>',
                 },
             },
-            harness=ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type="teammate_transcript",
             raw_event_id="later-message",
             source_position="500",
@@ -163,7 +166,7 @@ def test_claude_lead_start_uses_first_root_record() -> None:
     plumbing = translator.translate(
         raw_event(
             {fixture.TYPE_FIELD: fixture.QUEUE_OPERATION_ID, fixture.OPERATION_FIELD: fixture.ENQUEUE},
-            harness=ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="queue",
             source_position=fixture.ZERO_TEXT,
@@ -178,7 +181,7 @@ def test_claude_lead_start_uses_first_root_record() -> None:
                 fixture.CWD_FIELD: fixture.WORK_PATH,
                 fixture.MESSAGE_FIELD: {fixture.CONTENT_FIELD: fixture.HELLO},
             },
-            harness=ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="root-record",
             source_position="297",
@@ -190,7 +193,7 @@ def test_claude_lead_start_uses_first_root_record() -> None:
                 fixture.HOOK_EVENT_NAME_FIELD: fixture.SESSION_START_HOOK,
                 fixture.CWD_FIELD: fixture.WORK_PATH,
             },
-            harness=ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="session-hook",
         ),
@@ -212,7 +215,7 @@ def test_claude_queue_remove_accepts_native() -> None:
                 fixture.CONTENT_FIELD: "follow-up",
                 fixture.REASON_FIELD: "absorbed_mid_turn",
             },
-            harness=ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="queue-remove",
         ),

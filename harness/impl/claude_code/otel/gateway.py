@@ -24,7 +24,7 @@ from harness.models.telemetry import (
     TelemetryContext,
 )
 
-HARNESS = HarnessName.CLAUDE_CODE
+HARNESS = HarnessName("claude_code")
 OTLP_KIND = "otlp"
 
 

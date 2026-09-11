@@ -19,6 +19,10 @@ if TYPE_CHECKING:
     import pytest
 
 
+CODEX_HARNESS = HarnessName("codex")
+CLAUDE_CODE_HARNESS = HarnessName("claude_code")
+
+
 def test_launchers_build_native_commands(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -67,7 +71,7 @@ def test_launchers_build_native_commands(
 def test_claude_rejects_legacy_account_selection() -> None:
     """Verify claude rejects legacy account selection."""
     terminal = FakeTerminal()
-    result = _test_launcher(HarnessName.CLAUDE_CODE, terminal).launch(
+    result = _test_launcher(CLAUDE_CODE_HARNESS, terminal).launch(
         launch.LaunchRequest(
             working_directory=fixture.WORK_PATH,
             initial_text=fixture.HELLO,
@@ -88,7 +92,7 @@ def test_harness_that_announces_at_its_first_turn() -> None:
     terminal = FakeTerminal(
         windows=[window(fixture.WINDOW_TWO_ID, tags={SESSION_WINDOW_TAG: fixture.SESSION_ONE_ID})],
     )
-    codex = _test_launcher(HarnessName.CODEX, terminal)
+    codex = _test_launcher(CODEX_HARNESS, terminal)
     empty = launch.LaunchRequest(
         working_directory=fixture.WORK_PATH,
         initial_text="   ",

@@ -12,6 +12,7 @@ from harness.impl.claude_code.hooks import foreground as claude_foreground, gate
 from harness.models.session import (
     Session,
 )
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import (
     support_events,
     support_hooks,
@@ -41,7 +42,7 @@ def test_claude_bg_output_streams_into_operation(monkeypatch: pytest.MonkeyPatch
 
     runtime, interpreter = support_runtime.interpreting_runtime(tmp_path / fixture.DATA_FIELD / fixture.MAIN_DB_PATH)
     runtime.register(
-        domain_ids.HarnessName.CLAUDE_CODE,
+        CLAUDE_CODE_HARNESS,
         Session(
             PRIMARY_SESSION,
             domain_ids.ActorId(fixture.SESSION_ONE_LEAD_ID),
@@ -95,7 +96,7 @@ def test_claude_fg_output_is_canon_append() -> None:
                 "stream": fixture.OUTPUT_FIELD,
                 "content_base64": base64.b64encode(content).decode("ascii"),
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.FOREGROUND_OUTPUT_ID,
             raw_event_id="foreground-one",
         ),
@@ -134,7 +135,7 @@ def test_claude_bg_launch_stub_is_not_progress() -> None:
                     ],
                 },
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="background-stub",
         ),

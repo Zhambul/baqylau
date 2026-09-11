@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 
-from domain.ids import HarnessName
 from harness.models.usage import (
     UsageRow,
 )
@@ -19,6 +18,7 @@ from harness.services.usage import (
     ApplicationUsageState,
     HarnessUsageService,
 )
+from tests.harness_names import CODEX_HARNESS
 from tests.usage_test_support import (
     READS_BEFORE_STOP,
     FirstReadFailureUsageSource,
@@ -77,7 +77,7 @@ def test_app_usage_state_retries_after_transient() -> None:
 def test_app_usage_state_publishes_only_changed() -> None:
     """Verify application usage state publishes only changed rows."""
     row = UsageRow(
-        harness=HarnessName.CODEX,
+        harness=CODEX_HARNESS,
         account_id=None,
         display_name="Default",
         switchable=False,

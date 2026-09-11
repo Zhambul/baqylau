@@ -17,6 +17,9 @@ from repository.impl.sqlite.raw_events import SqliteRawEventRepository
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_events import raw_event
 
+CLAUDE_CODE_HARNESS = domain_ids.HarnessName("claude_code")
+
+
 DEFAULT_CONTROL_WINDOW_ID = domain_ids.WindowId(fixture.WINDOW_ONE_ID)
 
 
@@ -84,7 +87,7 @@ def monitor_notification(uuid: str, body: str) -> raw_event_models.RawEvent:
             fixture.OPERATION_FIELD: fixture.ENQUEUE,
             fixture.CONTENT_FIELD: f"<task-notification>{body}</task-notification>",
         },
-        harness=domain_ids.HarnessName.CLAUDE_CODE,
+        harness=CLAUDE_CODE_HARNESS,
         source_type=fixture.TRANSCRIPT_SOURCE,
         raw_event_id=uuid,
     )
@@ -108,7 +111,7 @@ def armed_monitor(
                 },
                 fixture.TOOL_RESPONSE_FIELD: {"taskId": task_id, "timeoutMs": 300000, "persistent": False},
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id=f"arm-{shell_id}",
         ),

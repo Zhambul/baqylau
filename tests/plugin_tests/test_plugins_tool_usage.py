@@ -6,9 +6,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from domain.ids import (
-    HarnessName,
-)
 from harness.impl.codex import (
     usage as codex_usage,
     usage_rate_limit_documents as codex_usage_documents,
@@ -18,6 +15,7 @@ from harness.impl.codex.usage_rows import CodexUsage
 from harness.runtime import (
     HarnessRuntimeConfig,
 )
+from tests.harness_names import CODEX_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_values import JsonValue
 
@@ -210,6 +208,6 @@ def test_codex_usage_keeps_visible_row_when(
     ).read()
 
     assert len(rows) == 1
-    assert rows[0].harness == HarnessName.CODEX
+    assert rows[0].harness == CODEX_HARNESS
     assert rows[0].windows == ()
     assert rows[0].collection_error == "Codex login was revoked"

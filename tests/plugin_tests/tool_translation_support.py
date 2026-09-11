@@ -5,10 +5,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from domain.ids import (
-    HarnessName,
-)
 from harness.impl.codex.canonical.translator import CodexCanonicalTranslator
+from tests.harness_names import CLAUDE_CODE_HARNESS, CODEX_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_events import raw_event
 from tests.plugin_tests.support_values import JsonValue
@@ -37,7 +35,7 @@ def translate_claude_hook(
     return translator.translate(
         raw_event(
             document,
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id=raw_event_id,
         ),
@@ -58,7 +56,7 @@ def codex_translation_decision(
         .translate(
             raw_event(
                 document,
-                harness=HarnessName.CODEX,
+                harness=CODEX_HARNESS,
                 source_type=fixture.ROLLOUT_SOURCE,
                 raw_event_id=f"codex-{document.get(fixture.TYPE_FIELD)}-{id(document)}",
             ),

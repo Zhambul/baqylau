@@ -236,6 +236,13 @@ class _ClaudeSourceTranslation(_ClaudeTranslatorState):
             self._turns,
             self._selections,
         )
+        if (
+            raw_event.parent_actor_id is None
+            and hook.hook_event_name not in {"SessionStart", "SessionEnd"}
+            and hook.transcript_path
+            and hook.cwd
+        ):
+            events = [*messages.session_events(raw_event, hook), *events]
         if not events:
             return raw_events.TranslationResult(
                 (),

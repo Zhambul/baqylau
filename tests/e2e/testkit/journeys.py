@@ -12,6 +12,7 @@ from domain.ids import HarnessName
 from sdk import client as sdk_client, state as sdk_state, wait_states
 from terminal import launch as terminal_launch, models as terminal_models
 from tests.e2e.testkit import journey_launch, journey_models, references, resume, selector_turns
+from tests.harness_names import CLAUDE_CODE_HARNESS
 
 
 class _JourneyDriverState:
@@ -168,7 +169,7 @@ class _JourneyTerminalLaunch(_JourneyTerminalInput):
                         *journey_launch.launch_arguments(harness, spec, resume, self._workspace, prompt),
                     ),
                 ),
-                title=("Claude Code" if harness == HarnessName.CLAUDE_CODE else "Codex"),
+                title=("Claude Code" if harness == CLAUDE_CODE_HARNESS else "Codex"),
                 environment=environment,
             ),
         )

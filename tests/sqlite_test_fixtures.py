@@ -9,10 +9,11 @@ from tests import (
     sqlite_repository_dependencies as repository_dependencies,
     sqlite_value_dependencies as standard_dependencies,
 )
+from tests.harness_names import CODEX_HARNESS
 
 SESSION = domain_dependencies.domain_ids.SessionId("session-one")
 ACTOR = domain_dependencies.domain_ids.ActorId("actor-one")
-HARNESS = domain_dependencies.domain_ids.HarnessName.CODEX
+HARNESS = CODEX_HARNESS
 PROJECT_DIRECTORY = "/project"
 FIRST_RAW_EVENT_ID = "raw-one"
 FIRST_SOURCE_POSITION = "1"

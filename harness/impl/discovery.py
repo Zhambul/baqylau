@@ -5,14 +5,17 @@ from __future__ import annotations
 
 import importlib
 from dataclasses import dataclass
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from audit.recorder import AuditRecorder
-from domain.ids import HarnessName
 from harness.contract import HarnessPlugin, SessionResumeRecorder
+from harness.impl.definitions import definitions
 from harness.runtime import HarnessRuntimeConfigs, default_harness_runtime_configs
 from terminal.contract import TerminalPlugin
 from terminal.models.tabs import EnvironmentVariable
+
+if TYPE_CHECKING:
+    from harness.models.definition import HarnessDefinition
 
 
 @dataclass(frozen=True)
@@ -47,21 +50,21 @@ def installed(
         launch_environment,
     )
     return tuple(
-        _installed_plugin(descriptor_path, dependencies)
-        for descriptor_path in sorted(Path(__file__).resolve().parent.glob("*/plugin.py"))
+        _installed_plugin(definition, dependencies)
+        for definition in definitions()
     )
 
 
 def _installed_plugin(
-    descriptor_path: Path,
+    harness_definition: HarnessDefinition,
     plugin_build_dependencies: PluginBuildDependencies,
 ) -> HarnessPlugin:
-    package_name = descriptor_path.parent.name
+    package_name = harness_definition.name
     module = importlib.import_module(f"harness.impl.{package_name}.plugin")
     factory = getattr(module, "build_plugin", None)
     descriptor = (
         factory(
-            plugin_build_dependencies.runtime_configs.for_harness(HarnessName(package_name)),
+            plugin_build_dependencies.runtime_configs.for_harness(harness_definition.name),
             plugin_build_dependencies.terminal_plugin,
             plugin_build_dependencies.session_resume_recorder,
             plugin_build_dependencies.audit_recorder,
@@ -73,4 +76,7 @@ def _installed_plugin(
     if not isinstance(descriptor, HarnessPlugin):
         message = f"{module.__name__}.build_plugin must return a HarnessPlugin"
         raise TypeError(message)
+    if descriptor.harness_info.name != harness_definition.name:
+        message = f"{module.__name__} returned a different harness name"
+        raise ValueError(message)
     return descriptor

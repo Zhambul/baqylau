@@ -7,12 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from domain.ids import HarnessName
 from harness.impl.claude_code.otel import gateway as claude_telemetry
 from harness.impl.claude_code.usage import live as claude_live_usage
 from harness.impl.claude_code.usage.rows import ClaudeCodeUsage
 from harness.models.telemetry import HarnessTelemetryRequest
 from harness.runtime import HarnessRuntimeConfig, default_harness_runtime_configs
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import support_launch, vocabulary as fixture
 
 
@@ -51,7 +51,7 @@ def test_daemon_ignores_old_statusline_usage(monkeypatch: pytest.MonkeyPatch) ->
         HarnessTelemetryRequest("statusline", body),
         support_launch.NoSessions(),
     )
-    usage_reader = ClaudeCodeUsage(default_harness_runtime_configs().for_harness(HarnessName.CLAUDE_CODE))
+    usage_reader = ClaudeCodeUsage(default_harness_runtime_configs().for_harness(CLAUDE_CODE_HARNESS))
     rows = usage_reader.read()
     row = rows[0]
 

@@ -11,9 +11,10 @@ from tests import (
     sqlite_test_migrations,
     sqlite_value_dependencies as standard_dependencies,
 )
+from tests.harness_names import CODEX_HARNESS
 
 SESSION = domain_dependencies.domain_ids.SessionId("session-one")
-HARNESS = domain_dependencies.domain_ids.HarnessName.CODEX
+HARNESS = CODEX_HARNESS
 FINISHED_SESSION_TIME = 2.0
 NEWER_PREFERENCE_TIME = 2.0
 FIRST_REQUEST_ID = "request-one"

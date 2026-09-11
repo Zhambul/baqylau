@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal
 
 from tests.e2e import e2e_fixture_dependencies as fixture_dependencies
+from tests.harness_names import CLAUDE_CODE_HARNESS, CODEX_HARNESS
 
 if TYPE_CHECKING:
     from harness.models.usage import UsageRow
@@ -40,10 +41,10 @@ class LiveE2EUsageSource:
     def __init__(self, runtime_configs: fixture_dependencies.harness.harness_runtime.HarnessRuntimeConfigs) -> None:
         """Set up a usage reader for each harness."""
         self.claude = fixture_dependencies.harness.ClaudeCodeUsage(
-            runtime_configs.for_harness(fixture_dependencies.harness.HarnessName.CLAUDE_CODE),
+            runtime_configs.for_harness(CLAUDE_CODE_HARNESS),
         )
         self.codex = fixture_dependencies.harness.CodexUsage(
-            runtime_configs.for_harness(fixture_dependencies.harness.HarnessName.CODEX),
+            runtime_configs.for_harness(CODEX_HARNESS),
         )
 
     def read(self) -> tuple[UsageRow, ...]:

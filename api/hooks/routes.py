@@ -31,14 +31,6 @@ HOOK_RESPONSES = errors(
 )
 
 
-def _harness_name(harness: str) -> HarnessName:
-    try:
-        return HarnessName(harness)
-    except ValueError as error:
-        message = f"unknown hook harness: {harness}"
-        raise hook_gateway.UnknownHookHarnessError(message) from error
-
-
 def _hook_request(request: Request, payload: bytes) -> HarnessHookRequest:
     process_header = (request.headers.get(headers.CLIENT_PROCESS_HEADER) or "").strip()
     return HarnessHookRequest(
@@ -95,18 +87,15 @@ async def record_hook_delivery(
         # The bounded hook client may disappear while this process is
         # descheduled. No complete delivery exists to record or audit.
         return Response(status_code=CLIENT_CLOSED_REQUEST)
-    try:
-        harness_name = _harness_name(harness)
-    except hook_gateway.UnknownHookHarnessError as error:
-        # Raised, not built: every refusal this server sends is rendered by the
-        # one handler in api/app.py, from the one ErrorResponse model.
-        raise HTTPException(status.HTTP_404_NOT_FOUND, str(error)) from error
+    harness_name = HarnessName(harness)
     try:
         output = await concurrency.run_in_threadpool(
             gateway.record,
             harness_name,
             _hook_request(request, payload),
         )
+    except hook_gateway.UnknownHookHarnessError as error:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(error)) from error
     except (KeyError, TypeError, ValueError) as error:
         audit.error(
             "",

@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 
 from domain.event_resource import FileAccessed
-from domain.ids import HarnessName
 from harness.impl.codex.canonical.translator import CodexCanonicalTranslator
+from tests.harness_names import CODEX_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_events import payloads, raw_event
 from tests.plugin_tests.support_values import text_of
@@ -41,7 +41,7 @@ def test_codex_current_file_change_emits_shared() -> None:
                     },
                 },
             },
-            harness=HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="file-change",
         ),
@@ -74,7 +74,7 @@ def test_codex_opaque_exec_output_does_not_create() -> None:
                     fixture.INPUT_FIELD: "const hits = ALL_TOOLS.filter(x => x.name); text(hits);",
                 },
             },
-            harness=HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="opaque-call",
             source_position=fixture.FORTY_TEXT,
@@ -90,7 +90,7 @@ def test_codex_opaque_exec_output_does_not_create() -> None:
                     fixture.OUTPUT_FIELD: "Script completed\nOutput:\n[]",
                 },
             },
-            harness=HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="opaque-output",
             source_position=fixture.FORTY_ONE_TEXT,
@@ -140,7 +140,7 @@ def test_codex_output_recovers_its_call_pairing(
                     fixture.OUTPUT_FIELD: "Script completed\nOutput:\nresult",
                 },
             },
-            harness=HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="restart-output",
             source_position=str(len(call_line.encode())),
@@ -189,7 +189,7 @@ def test_codex_image_tool_output_accepts_text(tmp_path: Path) -> None:
                     ],
                 },
             },
-            harness=HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="image-output",
             source_position=str(len(call_line.encode())),

@@ -21,6 +21,7 @@ from repository.impl.sqlite.raw_events import SqliteRawEventRepository
 if TYPE_CHECKING:
     from pathlib import Path
 
+
 FIRST_DECISION_TIME = 4.0
 SECOND_DECISION_TIME = 5.0
 AUDIT_ERROR_TIME = 6.0

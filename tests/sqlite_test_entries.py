@@ -13,11 +13,12 @@ from tests import (
     sqlite_test_shells,
     sqlite_value_dependencies as standard_dependencies,
 )
+from tests.harness_names import CLAUDE_CODE_HARNESS, CODEX_HARNESS
 
 SESSION = domain_dependencies.domain_ids.SessionId("session-one")
 SESSION_TEXT = str(SESSION)
 ACTOR = domain_dependencies.domain_ids.ActorId("actor-one")
-HARNESS = domain_dependencies.domain_ids.HarnessName.CODEX
+HARNESS = CODEX_HARNESS
 FIRST_TRANSLATION_TIME = 1001.0
 PROJECT_DIRECTORY = "/project"
 FIRST_SOURCE_POSITION = "1"
@@ -226,13 +227,13 @@ def restore_version_seventeen_events(migration: sqlite_test_models.MigrationData
     """Store ignored TaskStop and unrelated hooks with schema version seventeen."""
     task_stop = standard_dependencies.replace(
         sqlite_test_fixtures.a_raw_event("task-stop"),
-        harness=domain_dependencies.domain_ids.HarnessName.CLAUDE_CODE,
+        harness=CLAUDE_CODE_HARNESS,
         source_name="PostToolUse",
         payload=b'{"hook_event_name":"PostToolUse","tool_name":"TaskStop","tool_input":{"task_id":"background-one"}}',
     )
     unrelated = standard_dependencies.replace(
         sqlite_test_fixtures.a_raw_event("unrelated-hook"),
-        harness=domain_dependencies.domain_ids.HarnessName.CODEX,
+        harness=CODEX_HARNESS,
         source_name="PostToolUse",
     )
     test_dependencies.SqliteRawEventRepository(migration.old).record([task_stop, unrelated])
@@ -265,7 +266,7 @@ def restore_version_eighteen_search(migration: sqlite_test_models.MigrationDatab
     """Store legacy ToolSearch facts and read-model rows with schema version eighteen."""
     hook = standard_dependencies.replace(
         sqlite_test_fixtures.a_raw_event("tool-search-result"),
-        harness=domain_dependencies.domain_ids.HarnessName.CLAUDE_CODE,
+        harness=CLAUDE_CODE_HARNESS,
         source_name="PostToolUse",
         payload=b'{"hook_event_name":"PostToolUse","tool_name":"ToolSearch","tool_input":{"query":"select:Monitor"},"tool_response":{"matches":["Monitor"]}}',
     )
@@ -275,7 +276,7 @@ def restore_version_eighteen_search(migration: sqlite_test_models.MigrationDatab
         actor_id=ACTOR,
         turn_id=None,
         parent_actor_id=None,
-        harness=domain_dependencies.domain_ids.HarnessName.CLAUDE_CODE,
+        harness=CLAUDE_CODE_HARNESS,
         occurred_at=1000.0,
         terminal_window_id=None,
         harness_process_id=None,

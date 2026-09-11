@@ -6,9 +6,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from domain import (
-    ids as domain_ids,
-)
 from harness.impl.codex.plugin import build_plugin
 from harness.models import controls as control_models
 from harness.models.session import (
@@ -18,6 +15,7 @@ from harness.runtime import (
     HarnessRuntimeConfig,
 )
 from tests.fake_terminal import FakeTerminal
+from tests.harness_names import CODEX_HARNESS
 from tests.plugin_tests import (
     control_basic_support,
     control_codex_submit_support,
@@ -78,7 +76,7 @@ def test_codex_idle_send_waits_for_native_prompt(monkeypatch: pytest.MonkeyPatch
         control_basic_support.source_name(source),
         control_codex_submit_support.temporary_directory_name(tmp_path),
     )
-    outcome = control_driver_support.controller(domain_ids.HarnessName.CODEX).execute(
+    outcome = control_driver_support.controller(CODEX_HARNESS).execute(
         control_models.SendText(
             session_id=session.session_id,
             request_id=control_state_values.PRIMARY_REQUEST,
@@ -109,7 +107,7 @@ def test_codex_plan_command_waits_for_plan_mode(monkeypatch: pytest.MonkeyPatch,
         control_basic_support.source_name(source),
         str(tmp_path),
     )
-    outcome = control_driver_support.controller(domain_ids.HarnessName.CODEX).execute(
+    outcome = control_driver_support.controller(CODEX_HARNESS).execute(
         control_models.SendText(
             session_id=session.session_id,
             request_id=control_state_values.PRIMARY_REQUEST,

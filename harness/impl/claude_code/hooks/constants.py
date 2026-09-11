@@ -3,6 +3,6 @@
 
 from domain.ids import HarnessName
 
-HARNESS = HarnessName.CLAUDE_CODE
+HARNESS = HarnessName("claude_code")
 CLI_PROCESS_NAME = "claude"
 CHROME_TOOL_PREFIX = "mcp__claude-in-chrome__"

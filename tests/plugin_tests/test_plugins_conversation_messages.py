@@ -11,6 +11,7 @@ from domain import (
 )
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
 from harness.impl.codex.canonical.translator import CodexCanonicalTranslator
+from tests.harness_names import CLAUDE_CODE_HARNESS, CODEX_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.conversation_support import (
     CLAUDE_MESSAGE_ID,
@@ -28,7 +29,7 @@ def test_claude_prompt_and_codex_prompt_share() -> None:
                 fixture.UUID_FIELD: CLAUDE_MESSAGE_ID,
                 fixture.MESSAGE_FIELD: {fixture.CONTENT_FIELD: "fix it"},
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="claude-prompt",
         ),
@@ -42,7 +43,7 @@ def test_claude_prompt_and_codex_prompt_share() -> None:
                     fixture.MESSAGE_FIELD: "fix it",
                 },
             },
-            harness=domain_ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="codex-prompt",
         ),
@@ -76,7 +77,7 @@ def test_codex_user_messages_in_one_turn_keep() -> None:
                     },
                 },
             },
-            harness=domain_ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="codex-prompt-with-turn",
         ),
@@ -95,7 +96,7 @@ def test_codex_user_messages_in_one_turn_keep() -> None:
                     },
                 },
             },
-            harness=domain_ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="codex-second-prompt-with-turn",
         ),
@@ -121,7 +122,7 @@ def test_claude_child_prompt_is_authored() -> None:
                 fixture.UUID_FIELD: fixture.CHILD_PROMPT_ID,
                 fixture.MESSAGE_FIELD: {fixture.CONTENT_FIELD: "inspect it"},
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id=fixture.CHILD_PROMPT_ID,
             source_position=fixture.ONE_TEXT,
@@ -147,7 +148,7 @@ def test_claude_child_final_answer_is_addressed() -> None:
                     fixture.STOP_REASON_FIELD: fixture.END_TURN_ID,
                 },
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="child-answer",
         ),
@@ -178,7 +179,7 @@ def test_claude_child_message_maps_team_lead() -> None:
                     fixture.MESSAGE_FIELD: "CHILD_TO_LEAD_529",
                 },
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="child-message",
         ),

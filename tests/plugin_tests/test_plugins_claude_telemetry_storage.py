@@ -3,9 +3,10 @@
 
 from pathlib import Path
 
-from domain.ids import ActorId, HarnessName, SessionId
+from domain.ids import ActorId, SessionId
 from harness.models.session import Session
 from harness.models.telemetry import HarnessTelemetryRequest
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.claude_telemetry_support import (
     assert_stored_telemetry_usage,
@@ -20,7 +21,7 @@ def test_claude_otel_delivery_records_raw(tmp_path: Path) -> None:
     """Verify claude otel delivery records raw and canonical audit."""
     runtime, interpreter = interpreting_runtime(tmp_path / fixture.MAIN_DB_PATH)
     runtime.register(
-        HarnessName.CLAUDE_CODE,
+        CLAUDE_CODE_HARNESS,
         Session(
             SessionId(fixture.SESSION_ONE_ID),
             ActorId(fixture.SESSION_ONE_LEAD_ID),
@@ -33,14 +34,14 @@ def test_claude_otel_delivery_records_raw(tmp_path: Path) -> None:
     telemetry = telemetry_gateway(runtime)
     assert (
         telemetry.record(
-            HarnessName.CLAUDE_CODE,
+            CLAUDE_CODE_HARNESS,
             HarnessTelemetryRequest("otlp", raw_body),
         )
         == 1
     )
     assert (
         telemetry.record(
-            HarnessName.CLAUDE_CODE,
+            CLAUDE_CODE_HARNESS,
             HarnessTelemetryRequest("otlp", raw_body),
         )
         == 1

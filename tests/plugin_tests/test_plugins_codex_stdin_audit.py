@@ -5,9 +5,10 @@ import json
 from pathlib import Path
 
 from domain.event_shell import ShellInputProvided
-from domain.ids import ActorId, HarnessName, RawEventId, SessionId
+from domain.ids import ActorId, RawEventId, SessionId
 from harness.models.raw_events import RawEventAudit
 from harness.models.session import Session
+from tests.harness_names import CODEX_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_events import raw_event
 from tests.plugin_tests.support_runtime import interpreting_runtime
@@ -17,7 +18,7 @@ def test_codex_write_stdin_records_raw_and_canon(tmp_path: Path) -> None:
     """Verify codex write stdin records raw and canonical audit."""
     runtime, interpreter = interpreting_runtime(tmp_path / fixture.MAIN_DB_PATH)
     runtime.register(
-        HarnessName.CODEX,
+        CODEX_HARNESS,
         Session(
             SessionId(fixture.SESSION_ONE_ID),
             ActorId(fixture.SESSION_ONE_LEAD_ID),
@@ -36,7 +37,7 @@ def test_codex_write_stdin_records_raw_and_canon(tmp_path: Path) -> None:
                     fixture.INPUT_FIELD: 'tools.exec_command({"cmd":"read value"})',
                 },
             },
-            harness=HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id=fixture.COMMAND_FIELD,
             source_position=fixture.FORTY_TEXT,
@@ -53,7 +54,7 @@ def test_codex_write_stdin_records_raw_and_canon(tmp_path: Path) -> None:
                     }),
                 },
             },
-            harness=HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id=fixture.COMMAND_OUTPUT_ID,
             source_position=fixture.FORTY_ONE_TEXT,
@@ -68,7 +69,7 @@ def test_codex_write_stdin_records_raw_and_canon(tmp_path: Path) -> None:
                     fixture.INPUT_FIELD: 'tools.write_stdin({session_id:77,chars:""})',
                 },
             },
-            harness=HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="poll",
             source_position="42",
@@ -83,7 +84,7 @@ def test_codex_write_stdin_records_raw_and_canon(tmp_path: Path) -> None:
                     fixture.INPUT_FIELD: r'tools.write_stdin({session_id:77,chars:"yes\n"})',
                 },
             },
-            harness=HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id=fixture.STDIN,
             source_position="43",

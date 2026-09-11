@@ -5,11 +5,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from domain.ids import HarnessName
 from harness.impl.claude_code.plugin import plugin as claude_plugin
 from harness.impl.codex.plugin import plugin as codex_plugin
 from harness.models.catalog import QueryContext
 from tests.canonical_runtime import ProviderGraph
+from tests.harness_names import CLAUDE_CODE_HARNESS, CODEX_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 
 if TYPE_CHECKING:
@@ -26,8 +26,8 @@ def test_catalogs_expose_only_what_depends_on_dir(tmp_path: Path) -> None:
     application = ProviderGraph()
     context = QueryContext(session_id=None, working_directory=str(tmp_path))
 
-    claude_catalog = application.catalog.read(HarnessName.CLAUDE_CODE, context)
-    codex_catalog = application.catalog.read(HarnessName.CODEX, context)
+    claude_catalog = application.catalog.read(CLAUDE_CODE_HARNESS, context)
+    codex_catalog = application.catalog.read(CODEX_HARNESS, context)
 
     assert {command.command for command in claude_catalog.commands} != {
         command.command for command in codex_catalog.commands

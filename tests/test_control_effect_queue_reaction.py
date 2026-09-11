@@ -13,6 +13,7 @@ from domain import (
     event_conversation,
     ids as domain_ids,
 )
+from tests.harness_names import CODEX_HARNESS
 
 if TYPE_CHECKING:
     from repository.contract.workspace import SessionWorkspaceRepository
@@ -32,7 +33,7 @@ def test_message_queued_fact_updates_reload_safe() -> None:
             actor_id=control_values.TEST_ACTOR_ID,
             turn_id=control_values.TEST_TURN_ID,
             parent_actor_id=None,
-            harness=domain_ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             occurred_at=1.0,
             terminal_window_id=None,
             harness_process_id=None,

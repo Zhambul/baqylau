@@ -100,6 +100,12 @@ class _ToolCallFinishes(_ToolCallStarts):
             self.remember(raw_event, transcript_result.call_id, *recovered)
         native_name = self.recall(raw_event, transcript_result.call_id, None, None)[0]
         kind = runtime_dependencies.tool_classification.tool_kind(native_name)
+        if kind == runtime_dependencies.tool_kind_values.ToolKind.QUESTION and (
+            transcript_result.failed
+            or not isinstance(transcript_result.tool_response, runtime_dependencies.records.ToolResponse)
+            or transcript_result.tool_response.answers is None
+        ):
+            return []
         if kind not in runtime_dependencies.tool_kind_values.TRANSCRIPT_RESULT_KINDS:
             return []
         events: list[domain_dependencies.event_base.CanonicalEvent[domain_dependencies.event_base.EventPayload]] = []

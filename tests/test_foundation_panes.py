@@ -13,6 +13,7 @@ from tests import (
     foundation_test_reactions,
     foundation_test_sources,
 )
+from tests.harness_names import CODEX_HARNESS
 from tests.interrupt_clock import mark_expired
 
 IGNORED_TRANSLATION = foundation_components.raw_events.TranslationResult(
@@ -53,7 +54,7 @@ def test_uncorroborated_interrupt_eventually(
     runtime = foundation_test_liveness.build_interpreter(database_path, harnesses, interrupts=registry)
     reactions = foundation_test_liveness.build_reaction_loop(database_path, harnesses, interrupts=registry)
     runtime.sessions.save(
-        foundation_dependencies.domain.domain_ids.HarnessName.CODEX, foundation_test_events.example_session(),
+        CODEX_HARNESS, foundation_test_events.example_session(),
     )
     runtime.interpreter.tick()
     mark_expired(monkeypatch, registry, PRIMARY_SESSION)
@@ -177,7 +178,7 @@ def test_output_location_directives_run_whole_fg(
     runtime.recorder.record((
         foundation_dependencies.engine.output_location_raw_event(
             context,
-            foundation_dependencies.domain.domain_ids.HarnessName.CODEX,
+            CODEX_HARNESS,
             located,
             payload=foundation_components.documents.encode_document(located),
         ),
@@ -194,7 +195,7 @@ def test_bg_following_survives_operation_finished(
     following = foundation_test_output.started_background_following(tmp_path)
     assert len(following.storage.shell_output.find_for_session(PRIMARY_SESSION)) == 1
     following.storage.sessions.save(
-        foundation_dependencies.domain.domain_ids.HarnessName.CODEX, foundation_test_events.example_session(),
+        CODEX_HARNESS, foundation_test_events.example_session(),
     )
     following.reaction.react(
         foundation_dependencies.standard.replace(

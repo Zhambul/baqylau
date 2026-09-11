@@ -8,11 +8,12 @@ from http import HTTPStatus
 import pytest
 
 from domain.entries import EntryTypeName
-from domain.ids import HarnessName, SessionId
+from domain.ids import SessionId
 from engine.interpret.loop import Interpreter
 from repository.impl.sqlite.audit_read import SqliteAuditReadRepository
 from tests import http_test_assets, http_test_controls
 from tests.e2e_replay.audit_replay_support import command_inputs
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests.support_events import raw_event
 from tests.provider_graph import ProviderGraph
 
@@ -69,7 +70,7 @@ def test_claude_newline_has_no_http_error() -> None:
     application = ProviderGraph()
     application.raw_events.record((raw_event(
         {"content_base64": "Cg==", "shell_id": "newline-shell", "ordinal": 211, "stream": "output"},
-        harness=HarnessName.CLAUDE_CODE,
+        harness=CLAUDE_CODE_HARNESS,
         source_type="foreground_output",
         raw_event_id="audit-newline",
     ),))

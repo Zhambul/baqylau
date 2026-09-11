@@ -10,6 +10,7 @@ from tests import (
     canonical_sessiondata_values as session_values,
 )
 from tests.canonical_sessiondata_components import domain as session_domain
+from tests.harness_names import CODEX_HARNESS
 
 
 class CommittedArguments(typing.TypedDict, total=False):
@@ -43,7 +44,7 @@ def committed(
         actor_id=arguments.get("actor_id", session_values.LEAD),
         turn_id=arguments.get("turn_id"),
         parent_actor_id=arguments.get("parent_actor_id"),
-        harness=session_domain.ids.HarnessName.CODEX,
+        harness=CODEX_HARNESS,
         occurred_at=arguments.get("occurred_at"),
         terminal_window_id=None,
         harness_process_id=None,

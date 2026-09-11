@@ -7,10 +7,10 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from domain.event_telemetry import UsageReported
-from domain.ids import HarnessName
 from domain.references import ModelReference
 from domain.usage import TokenUsage
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_events import payloads, raw_event
 
@@ -88,7 +88,7 @@ def test_claude_otel_translates_raw_usage_once() -> None:
     translation = ClaudeCanonicalTranslator().translate(
         raw_event(
             document,
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type="otel",
             raw_event_id="otel-one",
         ),

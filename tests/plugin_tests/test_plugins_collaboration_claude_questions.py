@@ -5,9 +5,9 @@ from __future__ import annotations
 
 from domain import (
     event_work,
-    ids as domain_ids,
 )
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_events import payloads, raw_event
 
@@ -42,7 +42,7 @@ def test_claude_question_preserves_multiple() -> None:
                     ],
                 },
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="ask",
         ),
@@ -73,7 +73,7 @@ def test_claude_question_resolution_is_canon_not() -> None:
                 },
                 fixture.TOOL_RESPONSE_FIELD: {"vendor_field": "not canonical"},
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="ask-answer",
         ),
@@ -106,7 +106,7 @@ def test_claude_refused_question_resolves() -> None:
                     fixture.QUESTIONS_FIELD: [{fixture.QUESTION_FIELD: "Which approach?", fixture.OPTIONS_FIELD: []}],
                 },
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="ask-refused",
         ),
@@ -134,7 +134,7 @@ def test_claude_refused_question_resolves() -> None:
                     ],
                 },
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="ask-refused-result",
         ),
@@ -150,11 +150,10 @@ def test_claude_refused_question_resolves() -> None:
 
 
 def test_claude_answered_question_leaves() -> None:
-    """Verify claude answered question leaves the transcript result to the hook.
+    """Leave a text-only result to the hook when structured answers are absent.
 
-    The hook's resolution carries the ANSWERS; the transcript's tool_result cannot.
-        Both would converge on one event_id where the first writer wins, so the transcript
-        must stay silent on a question that succeeded.
+    Both sources share one event identity. An empty answer must not replace
+    the structured answer from a later hook.
     """
     translator = ClaudeCanonicalTranslator()
     translator.translate(
@@ -167,7 +166,7 @@ def test_claude_answered_question_leaves() -> None:
                     fixture.QUESTIONS_FIELD: [{fixture.QUESTION_FIELD: "Which approach?", fixture.OPTIONS_FIELD: []}],
                 },
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="ask-answered",
         ),
@@ -189,7 +188,7 @@ def test_claude_answered_question_leaves() -> None:
                     ],
                 },
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="ask-answered-result",
         ),

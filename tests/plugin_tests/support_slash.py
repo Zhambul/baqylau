@@ -5,12 +5,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from domain import event_base, ids as domain_ids
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_events import raw_event
 
 if TYPE_CHECKING:
+    from domain import event_base
     from tests.plugin_tests.support_values import JsonValue
 
 CLAUDE_SLASH_COMMAND_TURN = (
@@ -56,7 +57,7 @@ def _slash_turn_event(
     return translator.translate(
         raw_event(
             document,
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id=f"slash-{event_key}",
         ),

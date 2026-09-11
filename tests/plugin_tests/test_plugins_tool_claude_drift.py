@@ -11,11 +11,11 @@ from domain.event_work import (
 )
 from domain.ids import (
     ActorId,
-    HarnessName,
     TaskId,
 )
 from harness.impl.claude_code.canonical.records import MessageUsage, SystemRecord
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_events import payloads, raw_event
 from tests.plugin_tests.support_values import JsonValue
@@ -40,7 +40,7 @@ def test_claude_unknown_hook_field_fails() -> None:
                     fixture.SESSION_ID_FIELD: fixture.SESSION_ONE_ID,
                     fixture.UNKNOWN_RECORD_FIELD: "surprise",
                 },
-                harness=HarnessName.CLAUDE_CODE,
+                harness=CLAUDE_CODE_HARNESS,
                 source_type=fixture.HOOK_SOURCE,
                 raw_event_id="claude-unknown-field",
             ),
@@ -59,7 +59,7 @@ def test_claude_stop_hook_accepts_cache_status() -> None:
                 "prompt_cache_likely_expired": False,
                 "estimated_cache_write_usd": 0.0325,
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="claude-stop-cache-status",
         ),
@@ -86,7 +86,7 @@ def test_claude_wrong_typed_hook_field_fails() -> None:
                     fixture.TOOL_NAME_FIELD: fixture.BASH_TOOL,
                     "duration_ms": ["not", fixture.LETTER_A, "number"],
                 },
-                harness=HarnessName.CLAUDE_CODE,
+                harness=CLAUDE_CODE_HARNESS,
                 source_type=fixture.HOOK_SOURCE,
                 raw_event_id="claude-wrong-type",
             ),
@@ -105,7 +105,7 @@ def test_claude_task_hooks_accept_complete(hook_name: str) -> None:
                 "task_subject": "Check the dashboard",
                 "task_description": "Read each dashboard section.",
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id=f"claude-{hook_name}",
         ),

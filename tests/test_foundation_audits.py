@@ -12,6 +12,7 @@ from tests import (
     foundation_test_primitives,
     foundation_test_reactions,
 )
+from tests.harness_names import CODEX_HARNESS
 
 INITIAL_WATCHABLE_SESSIONS = 6
 
@@ -39,7 +40,7 @@ def test_accepted_session_finish_releases(database_path: str) -> None:
         foundation_dependencies.domain.domain_ids.ActorId(LEAD_ACTOR_ID_TEXT),
         None,
         None,
-        foundation_dependencies.domain.domain_ids.HarnessName.CODEX,
+        CODEX_HARNESS,
         FIXTURE_EVENT_TIME,
         None,
         None,
@@ -56,7 +57,7 @@ def test_accepted_session_finish_releases(database_path: str) -> None:
     harnesses.register(plugin)
     runtime = foundation_test_liveness.build_interpreter(database_path, harnesses)
     runtime.sessions.save(
-        foundation_dependencies.domain.domain_ids.HarnessName.CODEX, foundation_test_events.example_session(),
+        CODEX_HARNESS, foundation_test_events.example_session(),
     )
     runtime.recorder.record((foundation_test_events.raw_observation(FINISH_RAW_EVENT_ID),))
     runtime.interpreter.tick()
@@ -84,7 +85,7 @@ def test_watchable_is_every_unfinished_session(
         foundation_dependencies.domain.domain_ids.ActorId(LEAD_ACTOR_ID_TEXT),
         None,
         None,
-        foundation_dependencies.domain.domain_ids.HarnessName.CODEX,
+        CODEX_HARNESS,
         FIXTURE_EVENT_TIME,
         None,
         None,
@@ -128,7 +129,7 @@ def test_pid_less_session_is_loud_audited_error(
     harnesses.register(ignored_plugin)
     runtime = foundation_test_liveness.build_interpreter(database_path, harnesses, audit=audited)
     runtime.sessions.save(
-        foundation_dependencies.domain.domain_ids.HarnessName.CODEX,
+        CODEX_HARNESS,
         foundation_dependencies.standard.replace(foundation_test_events.example_session(), harness_process_id=None),
     )
     runtime.interpreter.tick()
@@ -144,7 +145,7 @@ def test_dead_cli_process_becomes_one_session(
     harnesses.register(ignored_plugin)
     runtime = foundation_test_liveness.build_interpreter(database_path, harnesses)
     runtime.sessions.save(
-        foundation_dependencies.domain.domain_ids.HarnessName.CODEX,
+        CODEX_HARNESS,
         foundation_dependencies.standard.replace(
             foundation_test_events.example_session(), harness_process_id=STALE_PROCESS_ID,
         ),
@@ -176,7 +177,7 @@ def test_dead_run_finishes_before_its_rollout(
     )
     runtime = foundation_test_liveness.build_interpreter(database_path, harnesses)
     runtime.sessions.save(
-        foundation_dependencies.domain.domain_ids.HarnessName.CODEX,
+        CODEX_HARNESS,
         foundation_dependencies.standard.replace(
             foundation_test_events.example_session(),
             terminal_window_id=foundation_dependencies.domain.domain_ids.WindowId("stale-window"),
@@ -218,7 +219,7 @@ def test_liveness_source_verifies_process() -> None:
         plugin=foundation_dependencies.standard.replace(
             session.plugin,
             harness_info=foundation_dependencies.engine.HarnessInfo(
-                foundation_dependencies.domain.domain_ids.HarnessName.CODEX,
+                CODEX_HARNESS,
                 "Example",
                 HARNESS_VERSION,
                 foundation_dependencies.domain.domain_events.SCHEMA_VERSION,

@@ -9,6 +9,7 @@ from domain import (
     ids as domain_ids,
 )
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_events import payloads, raw_event
 from tests.plugin_tests.support_values import text_of
@@ -29,7 +30,7 @@ def test_claude_clear_does_not_hold_next_prompt() -> None:
                     "<command-args></command-args>"
                 ),
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="slash-clear",
         ),
@@ -41,7 +42,7 @@ def test_claude_clear_does_not_hold_next_prompt() -> None:
                 fixture.UUID_FIELD: fixture.PROMPT_AFTER_CLEAR_ID,
                 fixture.MESSAGE_FIELD: {fixture.CONTENT_FIELD: "answer after clear"},
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id=fixture.PROMPT_AFTER_CLEAR_ID,
         ),
@@ -71,7 +72,7 @@ def test_claude_prompt_quoting_command_envelope() -> None:
                     fixture.UUID_FIELD: "quote",
                     fixture.MESSAGE_FIELD: {fixture.CONTENT_FIELD: content},
                 },
-                harness=domain_ids.HarnessName.CLAUDE_CODE,
+                harness=CLAUDE_CODE_HARNESS,
                 source_type=fixture.TRANSCRIPT_SOURCE,
                 raw_event_id=f"quote-{content_prefix}",
             ),

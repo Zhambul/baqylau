@@ -13,6 +13,7 @@ from core.work_queue import WorkKind, WorkQueue
 from domain import ids, shells, work_state
 from repository.impl.sqlite.databases import main_database
 from repository.impl.sqlite.shell_output import SqliteShellOutputRepository
+from tests.harness_names import CODEX_HARNESS
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -61,7 +62,7 @@ def test_output_expires_without_active_session(tmp_path: Path) -> None:
             shells.ShellOutputFollowing(
                 session_id=ids.SessionId("closed"),
                 shell_id=ids.ShellId(str(created_at)),
-                harness=ids.HarnessName.CODEX,
+                harness=CODEX_HARNESS,
                 actor_id=ids.ActorId("lead"),
                 parent_actor_id=None,
                 source_path=str(tmp_path / str(created_at)),

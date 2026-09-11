@@ -13,6 +13,7 @@ from tests import (
     control_effect_native_payload as native_payload,
     control_effect_resume as control_resume,
 )
+from tests.harness_names import CLAUDE_CODE_HARNESS
 
 
 def native_start_sequence() -> native_model.NativeStartSequence:
@@ -23,7 +24,7 @@ def native_start_sequence() -> native_model.NativeStartSequence:
 
     """
     raw_events = control_resume.resumed_raw_events(
-        domain_ids.HarnessName.CLAUDE_CODE,
+        CLAUDE_CODE_HARNESS,
         "/transcripts/session-one.jsonl",
         domain_ids.WindowId("window-two"),
     )

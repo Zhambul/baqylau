@@ -22,6 +22,7 @@ from harness.models.session import (
 )
 from tests.canonical_runtime import ProviderGraph
 from tests.fake_terminal import FakeTerminal
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import (
     control_basic_support,
     control_driver_support,
@@ -66,7 +67,7 @@ def test_claude_active_send_is_not_called_queued(
         text="unconfirmed prompt",
     )
 
-    outcome = control_driver_support.controller(domain_ids.HarnessName.CLAUDE_CODE).execute(
+    outcome = control_driver_support.controller(CLAUDE_CODE_HARNESS).execute(
         request,
         support_controls.control_context(
             session,
@@ -216,7 +217,7 @@ def test_claude_question_discussion_is_delivered(monkeypatch: pytest.MonkeyPatch
     )
 
     outcome = support_values.controller_of(
-        ProviderGraph().registry.plugin(domain_ids.HarnessName.CLAUDE_CODE),
+        ProviderGraph().registry.plugin(CLAUDE_CODE_HARNESS),
     ).execute(
         control_models.AnswerQuestion(
             session_id=session.session_id,
@@ -275,7 +276,7 @@ def test_claude_attachment_delivery_keeps_prompt(
     )
 
     outcome = support_values.controller_of(
-        ProviderGraph().registry.plugin(domain_ids.HarnessName.CLAUDE_CODE),
+        ProviderGraph().registry.plugin(CLAUDE_CODE_HARNESS),
     ).execute(
         request,
         support_controls.control_context(

@@ -26,7 +26,7 @@ from harness.models.raw_events import (
     RawEvent,
 )
 
-HARNESS = HarnessName.CODEX
+HARNESS = HarnessName("codex")
 CLI_PROCESS_NAME = "codex"
 
 

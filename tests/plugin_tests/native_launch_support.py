@@ -4,7 +4,6 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from domain.ids import HarnessName
 from harness.contract import HarnessPlugin
 from harness.impl.discovery import installed
 from harness.models.controls import AttachmentReference
@@ -12,6 +11,7 @@ from harness.models.launch import LaunchRequest, LaunchResult
 from harness.runtime import HarnessRuntimeConfig, HarnessRuntimeConfigs, HarnessRuntimeEntry
 from terminal.models.tabs import EnvironmentVariable
 from tests.fake_terminal import FakeTerminal
+from tests.harness_names import CLAUDE_CODE_HARNESS, CODEX_HARNESS
 from tests.plugin_tests import support_audit, vocabulary as fixture
 
 
@@ -19,11 +19,11 @@ def _native_runtime_configs() -> HarnessRuntimeConfigs:
     return HarnessRuntimeConfigs(
         (
             HarnessRuntimeEntry(
-                HarnessName.CLAUDE_CODE,
+                CLAUDE_CODE_HARNESS,
                 HarnessRuntimeConfig(fixture.CLAUDE, Path(fixture.WORK_CLAUDE_HOME_PATH)),
             ),
             HarnessRuntimeEntry(
-                HarnessName.CODEX,
+                CODEX_HARNESS,
                 HarnessRuntimeConfig(fixture.CODEX_HARNESS, Path(fixture.WORK_CODEX_HOME_PATH)),
             ),
         ),

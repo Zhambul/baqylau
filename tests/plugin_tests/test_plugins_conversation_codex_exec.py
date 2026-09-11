@@ -7,10 +7,10 @@ from typing import TYPE_CHECKING
 
 from domain import (
     event_shell as shell_events,
-    ids as domain_ids,
     outcomes,
 )
 from harness.impl.codex.canonical.translator import CodexCanonicalTranslator
+from tests.harness_names import CODEX_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.conversation_support import (
     translate_codex_rollout,
@@ -38,7 +38,7 @@ def test_codex_fast_exec_uses_authoritative_item() -> None:
                     fixture.INPUT_FIELD: 'const r = await tools.exec_command({cmd:"exit 7"}); text(r.output);',
                 },
             },
-            harness=domain_ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="fast-call",
         ),
@@ -62,7 +62,7 @@ def test_codex_fast_exec_uses_authoritative_item() -> None:
                     },
                 },
             },
-            harness=domain_ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="fast-item",
         ),
@@ -77,7 +77,7 @@ def test_codex_fast_exec_uses_authoritative_item() -> None:
                     fixture.OUTPUT_FIELD: "Script completed\nOutput:\nfailed\n",
                 },
             },
-            harness=domain_ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="fast-output",
         ),
@@ -248,7 +248,7 @@ def test_codex_dynamic_exec_uses_authoritative() -> None:
                     ),
                 },
             },
-            harness=domain_ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="dynamic-wrapper",
         ),
@@ -276,7 +276,7 @@ def test_codex_dynamic_exec_uses_authoritative() -> None:
                     },
                 },
             },
-            harness=domain_ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="dynamic-completed",
         ),

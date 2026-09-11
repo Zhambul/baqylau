@@ -12,9 +12,9 @@ import pytest
 
 from api.runtime import ApplicationConfig
 from dashboard import cli_forwarding, cli_options
-from domain.ids import HarnessName
 from sdk.client import BaqylauClient
 from tests.e2e.testkit.process import ApplicationProcess
+from tests.harness_names import CLAUDE_CODE_HARNESS
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -26,13 +26,13 @@ def test_dashboard_flags_build_one_runtime_config(tmp_path: Path) -> None:
     configuration_directory = tmp_path / "profile"
     arguments = [
         "--harness-executable",
-        f"{HarnessName.CLAUDE_CODE}={executable}",
+        f"{CLAUDE_CODE_HARNESS}={executable}",
         "--harness-config-dir",
-        f"{HarnessName.CLAUDE_CODE}={configuration_directory}",
+        f"{CLAUDE_CODE_HARNESS}={configuration_directory}",
     ]
 
     options = cli_options.launch_options(arguments)
-    runtime = options.harness_runtime_configs.for_harness(HarnessName.CLAUDE_CODE)
+    runtime = options.harness_runtime_configs.for_harness(CLAUDE_CODE_HARNESS)
 
     assert runtime.executable == str(executable)
     assert runtime.configuration_directory == configuration_directory

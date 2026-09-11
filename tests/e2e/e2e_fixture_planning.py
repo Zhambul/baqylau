@@ -12,6 +12,7 @@ from tests.e2e import (
     e2e_fixture_usage,
     e2e_fixture_work,
 )
+from tests.harness_names import CLAUDE_CODE_HARNESS, CODEX_HARNESS
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Iterator
@@ -97,17 +98,17 @@ def isolated_harness_runtime_configs(
     installed = fixture_dependencies.harness.harness_runtime.default_harness_runtime_configs()
     return fixture_dependencies.harness.harness_runtime.HarnessRuntimeConfigs((
         fixture_dependencies.harness.harness_runtime.HarnessRuntimeEntry(
-            fixture_dependencies.harness.HarnessName.CLAUDE_CODE,
+            CLAUDE_CODE_HARNESS,
             fixture_dependencies.harness.harness_runtime.HarnessRuntimeConfig(
-                installed.for_harness(fixture_dependencies.harness.HarnessName.CLAUDE_CODE).executable,
+                installed.for_harness(CLAUDE_CODE_HARNESS).executable,
                 isolated_claude_home,
                 isolated_claude_home / "managed-settings.json",
             ),
         ),
         fixture_dependencies.harness.harness_runtime.HarnessRuntimeEntry(
-            fixture_dependencies.harness.HarnessName.CODEX,
+            CODEX_HARNESS,
             fixture_dependencies.harness.harness_runtime.HarnessRuntimeConfig(
-                installed.for_harness(fixture_dependencies.harness.HarnessName.CODEX).executable, isolated_codex_home,
+                installed.for_harness(CODEX_HARNESS).executable, isolated_codex_home,
             ),
         ),
     ))

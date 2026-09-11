@@ -5,8 +5,9 @@ from __future__ import annotations
 
 import threading
 import time
+from typing import TYPE_CHECKING
 
-from domain.ids import HarnessName
+from harness.impl.claude_code import definition
 from harness.impl.claude_code.usage import (
     live_documents,
     live_models,
@@ -14,7 +15,9 @@ from harness.impl.claude_code.usage import (
     probe_request,
     windows as usage_windows,
 )
-from harness.runtime import HarnessRuntimeConfig, default_harness_runtime_configs
+
+if TYPE_CHECKING:
+    from harness.runtime import HarnessRuntimeConfig
 
 LiveUsageWindow = live_documents.LiveUsageWindow
 LiveModelScopedWindow = live_documents.LiveModelScopedWindow
@@ -49,7 +52,7 @@ _cache_lock = threading.Lock()
 
 
 def _default_runtime_config() -> HarnessRuntimeConfig:
-    return default_harness_runtime_configs().for_harness(HarnessName.CLAUDE_CODE)
+    return definition.default_runtime_config()
 
 
 def collect(

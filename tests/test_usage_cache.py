@@ -7,13 +7,13 @@ from dataclasses import replace
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from domain.ids import HarnessName
 from harness.models.usage import UsageRow
 from harness.services.usage import (
     USAGE_CACHE_DOCUMENT,
     SharedUsageCache,
     UsageCacheDocument,
 )
+from tests.harness_names import CLAUDE_CODE_HARNESS, CODEX_HARNESS
 from tests.usage_test_support import RecordingUsageSource
 
 if TYPE_CHECKING:
@@ -29,7 +29,7 @@ EXPECTED_SOURCE_READS = 1
 def test_shared_usage_cache_runs_one_probe(tmp_path: Path) -> None:
     """Verify the shared cache runs one probe for multiple readers."""
     usage_row = UsageRow(
-        harness=HarnessName.CODEX,
+        harness=CODEX_HARNESS,
         account_id=None,
         display_name="Default",
         switchable=False,
@@ -54,7 +54,7 @@ def test_shared_usage_cache_retries_failed(tmp_path: Path, monkeypatch: pytest.M
     """Verify the shared cache retries a failed snapshot quickly."""
     cache_path = tmp_path / "usage.json"
     failed_row = UsageRow(
-        harness=HarnessName.CLAUDE_CODE,
+        harness=CLAUDE_CODE_HARNESS,
         account_id=None,
         display_name="Default",
         switchable=False,

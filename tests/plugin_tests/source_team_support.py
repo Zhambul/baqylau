@@ -16,6 +16,7 @@ from harness.impl.claude_code.canonical.sources import (
 from harness.models.session import (
     Session,
 )
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_runtime import interpreting_runtime
 
@@ -81,7 +82,7 @@ def claude_team_message_audit(
         fixture.WORK_PATH,
     )
     runtime, interpreter = interpreting_runtime(tmp_path / fixture.DATA_FIELD / fixture.MAIN_DB_PATH)
-    runtime.register(domain_ids.HarnessName.CLAUDE_CODE, session)
+    runtime.register(CLAUDE_CODE_HARNESS, session)
     context = replace(
         session.source_context,
         actor_id=domain_ids.ActorId(message_case.source_actor_id),

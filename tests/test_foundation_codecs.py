@@ -10,6 +10,7 @@ from tests import (
     foundation_test_liveness,
     foundation_test_reactions,
 )
+from tests.harness_names import CODEX_HARNESS
 
 SESSION_ID_TEXT = "session-one"
 UPDATED_PROCESS_ID = 2
@@ -36,7 +37,7 @@ def test_codec_rejects_invalid_payload() -> None:
 def test_stable_event_id_names_same_fact() -> None:
     """Verify stable event identifier names the same fact and distinguishes its phase."""
     identity = foundation_dependencies.domain.domain_ids.CanonicalEventIdentity(
-        harness=foundation_dependencies.domain.domain_ids.HarnessName.CODEX,
+        harness=CODEX_HARNESS,
         session_id=PRIMARY_SESSION,
         actor_id=foundation_dependencies.domain.domain_ids.ActorId(LEAD_ACTOR_ID_TEXT),
         subject_type="operation",
@@ -105,7 +106,7 @@ def test_session_is_born_by_reaction_to_its_own(
         WORKING_DIRECTORY,
         SESSION_WINDOW_ID,
         FIXTURE_PROCESS_ID,
-        session_start_harnesses.plugin(foundation_dependencies.domain.domain_ids.HarnessName.CODEX),
+        session_start_harnesses.plugin(CODEX_HARNESS),
     )
     assert not runtime.recorder.unverdicted(10)
 
@@ -138,7 +139,7 @@ def test_later_delivery_updates_live_columns(
     """
     sessions = foundation_dependencies.repository.SqliteSessionRepository(database)
     sessions.save(
-        foundation_dependencies.domain.domain_ids.HarnessName.CODEX,
+        CODEX_HARNESS,
         foundation_dependencies.standard.replace(
             foundation_test_events.example_session(),
             terminal_window_id=foundation_dependencies.domain.domain_ids.WindowId("old-window"),
@@ -170,7 +171,7 @@ def test_file_start_does_not_erase_pid_from_hook(
     """Verify a file start does not erase the pid from the hook start."""
     sessions = foundation_dependencies.repository.SqliteSessionRepository(database)
     sessions.save(
-        foundation_dependencies.domain.domain_ids.HarnessName.CODEX,
+        CODEX_HARNESS,
         foundation_dependencies.standard.replace(
             foundation_test_events.example_session(),
             terminal_window_id=foundation_dependencies.domain.domain_ids.WindowId("session-window"),

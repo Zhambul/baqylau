@@ -17,7 +17,7 @@ from harness.models import raw_events as raw_event_models
 if TYPE_CHECKING:
     from harness.models import session as session_models
 
-HARNESS = domain_ids.HarnessName.CLAUDE_CODE
+HARNESS = domain_ids.HarnessName("claude_code")
 TEXT_ENCODING = "utf-8"
 
 

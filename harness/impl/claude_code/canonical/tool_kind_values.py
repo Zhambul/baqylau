@@ -77,6 +77,7 @@ SEARCH_QUERY_FIELDS = ("pattern", "query")
 
 TRANSCRIPT_RESULT_KINDS = frozenset(
     (
+        ToolKind.QUESTION,
         ToolKind.SHELL,
         ToolKind.FILE,
         ToolKind.SEARCH,

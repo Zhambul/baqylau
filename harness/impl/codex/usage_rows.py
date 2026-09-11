@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
     from harness.runtime import HarnessRuntimeConfig
 
-HARNESS = HarnessName.CODEX
+HARNESS = HarnessName("codex")
 WINDOW_LABELS: Mapping[int, str] = MappingProxyType({300: "5h", 10080: "7d"})
 
 

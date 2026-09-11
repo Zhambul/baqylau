@@ -29,6 +29,9 @@ if TYPE_CHECKING:
     from tests.plugin_tests.support_values import JsonValue
 
 
+CODEX_HARNESS = domain_ids.HarnessName("codex")
+
+
 def test_codex_exec_that_outlives_its_yield() -> None:
     """Verify codex exec that outlives its yield is announced as background once.
 
@@ -130,7 +133,7 @@ def test_codex_yielded_exec_closes_original_shell(
         replace(
             raw_event(
                 exec_fixture.completed,
-                harness=domain_ids.HarnessName.CODEX,
+                harness=CODEX_HARNESS,
                 source_type=fixture.ROLLOUT_SOURCE,
                 raw_event_id="completion-after-restart",
                 source_position=exec_fixture.positions[2],
@@ -188,7 +191,7 @@ def test_codex_fg_exec_closes_original_shell(
         replace(
             raw_event(
                 call,
-                harness=domain_ids.HarnessName.CODEX,
+                harness=CODEX_HARNESS,
                 source_type=fixture.ROLLOUT_SOURCE,
                 raw_event_id="codex-call-before-restart",
                 source_position=fixture.ZERO_TEXT,
@@ -200,7 +203,7 @@ def test_codex_fg_exec_closes_original_shell(
         replace(
             raw_event(
                 completed,
-                harness=domain_ids.HarnessName.CODEX,
+                harness=CODEX_HARNESS,
                 source_type=fixture.ROLLOUT_SOURCE,
                 raw_event_id="codex-completion-after-restart",
                 source_position=str(len(f"{json.dumps(call)}\n".encode())),

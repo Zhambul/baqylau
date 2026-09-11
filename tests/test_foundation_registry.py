@@ -13,6 +13,7 @@ from tests import (
     foundation_test_reactions,
     foundation_test_sources,
 )
+from tests.harness_names import CLAUDE_CODE_HARNESS, CODEX_HARNESS
 
 IGNORED_TRANSLATION = foundation_components.raw_events.TranslationResult(
     (), foundation_dependencies.domain.domain_records.RecordedTranslationDecision.IGNORED_NONSEMANTIC,
@@ -42,7 +43,7 @@ def test_sessions_carry_their_plugin_only_when(
     plugin = ignored_plugin
     harnesses.register(plugin)
     foundation_dependencies.repository.SqliteSessionRepository(database).save(
-        foundation_dependencies.domain.domain_ids.HarnessName.CODEX, foundation_test_events.example_session(),
+        CODEX_HARNESS, foundation_test_events.example_session(),
     )
     recorder_side = foundation_dependencies.repository.SqliteSessionRepository(database).find(PRIMARY_SESSION)
     server_side = foundation_dependencies.repository.SqliteSessionRepository(database, harnesses).find(PRIMARY_SESSION)
@@ -76,14 +77,14 @@ def test_harness_registry_rejects_multiple_launch() -> None:
     """Verify harness registry rejects multiple launch defaults."""
     registry = foundation_dependencies.engine.harness_registry.HarnessRegistry()
     for name in (
-        foundation_dependencies.domain.domain_ids.HarnessName.CODEX,
-        foundation_dependencies.domain.domain_ids.HarnessName.CLAUDE_CODE,
+        CODEX_HARNESS,
+        CLAUDE_CODE_HARNESS,
     ):
         plugin = foundation_dependencies.standard.replace(
             foundation_test_reactions.example_plugin(IGNORED_TRANSLATION, name=name),
             harness_info=foundation_dependencies.engine.HarnessInfo(
                 name,
-                name.value.title(),
+                str(name).title(),
                 "1",
                 foundation_dependencies.domain.domain_events.SCHEMA_VERSION,
                 OWN_PROCESS_NAME,
@@ -91,7 +92,7 @@ def test_harness_registry_rejects_multiple_launch() -> None:
             ),
             launcher=foundation_test_sources.NullLauncher(),
         )
-        if name == foundation_dependencies.domain.domain_ids.HarnessName.CODEX:
+        if name == CODEX_HARNESS:
             registry.register(plugin)
         else:
             with foundation_dependencies.standard.pytest.raises(
@@ -160,7 +161,7 @@ def test_codec_decodes_rows_written() -> None:
         actor_id=foundation_dependencies.domain.domain_ids.ActorId("actor-one"),
         turn_id=None,
         parent_actor_id=None,
-        harness=foundation_dependencies.domain.domain_ids.HarnessName.CODEX,
+        harness=CODEX_HARNESS,
         occurred_at=1.0,
         terminal_window_id=None,
         harness_process_id=None,

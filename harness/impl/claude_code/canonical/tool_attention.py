@@ -7,14 +7,17 @@ from harness.impl.claude_code import ids as claude_ids
 from harness.impl.claude_code.canonical import records
 
 
-def attention_answers(arguments: records.ToolArguments) -> tuple[AttentionAnswer, ...]:
+def attention_answers(
+    arguments: records.ToolArguments,
+    response_answers: records.QuestionAnswers | None = None,
+) -> tuple[AttentionAnswer, ...]:
     """Return canonical attention answers.
 
     Returns:
         The answers.
 
     """
-    native_answers = arguments.answers
+    native_answers = arguments.answers if response_answers is None else response_answers
     if native_answers is None:
         return ()
     answers: list[AttentionAnswer] = []

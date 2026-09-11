@@ -3,7 +3,6 @@
 
 import hashlib
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import NewType
 
 SessionId = NewType("SessionId", str)
@@ -29,11 +28,7 @@ TaskListId = NewType("TaskListId", str)
 QuestionId = NewType("QuestionId", str)
 
 
-class HarnessName(StrEnum):
-    """Identify a supported agent harness."""
-
-    CLAUDE_CODE = "claude_code"
-    CODEX = "codex"
+HarnessName = NewType("HarnessName", str)
 
 
 @dataclass(frozen=True, slots=True)

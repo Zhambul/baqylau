@@ -8,9 +8,9 @@ from typing import TYPE_CHECKING
 from domain.event_conversation import MessageCreated, ReasoningCreated
 from domain.event_session import ModelChanged
 from domain.event_telemetry import ContextReported, UsageReported
-from domain.ids import HarnessName
 from domain.usage import TokenUsage
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_events import payloads, raw_event
 from tests.plugin_tests.support_values import JsonValue, text_of
@@ -34,7 +34,7 @@ def _assistant_message_phases(
                     fixture.STOP_REASON_FIELD: stop_reason,
                 },
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id=f"assistant-{stop_reason}-{len(blocks)}",
         ),
@@ -67,7 +67,7 @@ def test_claude_assistant_preserves_reasoning() -> None:
                     },
                 },
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id=fixture.ASSISTANT,
         ),

@@ -24,12 +24,15 @@ if TYPE_CHECKING:
     from terminal.adapter import TerminalAdapter
 
 
+CODEX_HARNESS = domain_ids.HarnessName("codex")
+
+
 def _session_data(session_id_text: str) -> SessionLead:
     session_id = domain_ids.SessionId(session_id_text)
     return SessionLead(
         session=session_state.SessionFacts(
             session_id=session_id,
-            harness=domain_ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             state=lifecycle.LifecycleState.RUNNING,
             working_directory="/work",
             started_at=1.0,

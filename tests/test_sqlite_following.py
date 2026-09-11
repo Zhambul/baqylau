@@ -12,9 +12,10 @@ from tests import (
     sqlite_test_models,
     sqlite_value_dependencies as standard_dependencies,
 )
+from tests.harness_names import CODEX_HARNESS
 
 SESSION = domain_dependencies.domain_ids.SessionId("session-one")
-HARNESS = domain_dependencies.domain_ids.HarnessName.CODEX
+HARNESS = CODEX_HARNESS
 OTHER_SESSION_START_TIME = 3.0
 OTHER_SESSION_FINISH_TIME = 3.5
 NEWEST_SESSION_START_TIME = 4.0

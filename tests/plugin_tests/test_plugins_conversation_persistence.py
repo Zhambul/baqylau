@@ -14,6 +14,7 @@ from domain import (
     ids as domain_ids,
 )
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_events import payloads, raw_event
 from tests.plugin_tests.support_values import JsonValue, text_of
@@ -66,7 +67,7 @@ def test_claude_resumed_child_assignment(tmp_path: Path) -> None:
     notification_raw = replace(
         raw_event(
             notification_document,
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id=fixture.RESUMED_TASK_NOTIFICATION_ID,
             source_position=str(len(launch_result.encode())),
@@ -121,7 +122,7 @@ def test_claude_fg_shell_completion_survives(tmp_path: Path) -> None:
         replace(
             raw_event(
                 call,
-                harness=domain_ids.HarnessName.CLAUDE_CODE,
+                harness=CLAUDE_CODE_HARNESS,
                 source_type=fixture.TRANSCRIPT_SOURCE,
                 raw_event_id="claude-call-before-restart",
                 source_position=fixture.ZERO_TEXT,
@@ -133,7 +134,7 @@ def test_claude_fg_shell_completion_survives(tmp_path: Path) -> None:
         replace(
             raw_event(
                 result,
-                harness=domain_ids.HarnessName.CLAUDE_CODE,
+                harness=CLAUDE_CODE_HARNESS,
                 source_type=fixture.TRANSCRIPT_SOURCE,
                 raw_event_id="claude-result-after-restart",
                 source_position=str(len(f"{json.dumps(call)}\n".encode())),
@@ -213,7 +214,7 @@ def test_claude_turn_completion_survives(tmp_path: Path) -> None:
         replace(
             raw_event(
                 documents[-1],
-                harness=domain_ids.HarnessName.CLAUDE_CODE,
+                harness=CLAUDE_CODE_HARNESS,
                 source_type=fixture.TRANSCRIPT_SOURCE,
                 raw_event_id="claude-answer-after-restart",
                 source_position=str(

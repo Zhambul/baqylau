@@ -11,6 +11,7 @@ from tests import (
     canonical_sessiondata_values as session_values,
 )
 from tests.canonical_sessiondata_components import domain as session_domain
+from tests.harness_names import CODEX_HARNESS
 
 
 def test_actor_is_born_once_and_reopens_rather() -> None:
@@ -100,7 +101,7 @@ def test_harness_namer_settles_display_at_fold() -> None:
     """
     writer = sessiondata_components.engine.actors.ActorWriter(
         sessiondata_components.engine.naming.ModelNaming({
-            session_domain.ids.HarnessName.CODEX: sessiondata_components.harness.model_names.display_model,
+            CODEX_HARNESS: sessiondata_components.harness.model_names.display_model,
         }),
     )
     state = sessiondata_components.engine.contract.AggregateState()

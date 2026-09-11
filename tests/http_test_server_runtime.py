@@ -13,6 +13,7 @@ from tests import (
     http_test_pane_models,
     http_value_dependencies as standard_dependencies,
 )
+from tests.harness_names import CODEX_HARNESS
 
 SESSION_ID_TEXT = "session-one"
 FIXTURE_SOURCE = "fixture"
@@ -94,7 +95,7 @@ def application() -> contract_dependencies.canonical_runtime.ProviderGraph:
     """
     application = contract_dependencies.canonical_runtime.ProviderGraph()
     application.sessions.save(
-        runtime_dependencies.domain_ids.HarnessName.CODEX,
+        CODEX_HARNESS,
         contract_dependencies.Session(SESSION_ID, ACTOR_ID, FIXTURE_SOURCE, WORKING_DIRECTORY),
     )
     events = (
@@ -120,7 +121,7 @@ def application() -> contract_dependencies.canonical_runtime.ProviderGraph:
             application,
             runtime_dependencies.raw_event_models.RawEvent(
                 runtime_dependencies.domain_ids.RawEventId(f"raw-{index}"),
-                runtime_dependencies.domain_ids.HarnessName.CODEX,
+                CODEX_HARNESS,
                 FIXTURE_SOURCE,
                 FIXTURE_SOURCE,
                 str(index),

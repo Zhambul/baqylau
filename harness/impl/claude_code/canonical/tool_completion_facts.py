@@ -27,7 +27,7 @@ def finished_tool_facts(
     if finished_tool_identity.kind == kind_values.ToolKind.SKILL:
         return skill_finished_fact(raw_event, finished_tool_identity, finished_tool_result)
     if finished_tool_identity.kind == kind_values.ToolKind.QUESTION:
-        return [question_answered_fact(raw_event, finished_tool_identity)]
+        return [question_answered_fact(raw_event, finished_tool_identity, finished_tool_result)]
     if finished_tool_identity.kind == kind_values.ToolKind.PLAN:
         return [plan_resolved_fact(raw_event, finished_tool_identity, finished_tool_result)]
     if finished_tool_identity.kind == kind_values.ToolKind.FILE:
@@ -87,6 +87,7 @@ def skill_finished_fact(
 def question_answered_fact(
     raw_event: raw_events.RawEvent,
     finished_tool_identity: FinishedToolIdentity,
+    finished_tool_result: FinishedToolResult,
 ) -> dependencies.event_base.CanonicalEvent[dependencies.event_base.EventPayload]:
     """Build a question answer from the recorded tool arguments.
 
@@ -97,7 +98,10 @@ def question_answered_fact(
     attention_id = dependencies.ids.attention_id_from_claude_code_call(finished_tool_identity.call_id)
     payload = dependencies.event_work.QuestionAnswered(
         attention_id,
-        tool_attention.attention_answers(finished_tool_identity.arguments),
+        tool_attention.attention_answers(
+            finished_tool_identity.arguments,
+            finished_tool_result.response.answers,
+        ),
         None,
     )
     draft = dependencies.support.CanonicalEventDraft(

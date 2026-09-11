@@ -9,6 +9,7 @@ from domain import (
     ids as domain_ids,
 )
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.conversation_support import (
     translate_agent_notification,
@@ -108,7 +109,7 @@ def test_claude_task_notices_are_counted_once() -> None:
                 fixture.PROMPT_SOURCE_FIELD: fixture.SYSTEM,
                 fixture.MESSAGE_FIELD: {fixture.CONTENT_FIELD: f"<task-notification>{body}</task-notification>"},
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="delivered-tick-1",
         ),
@@ -157,7 +158,7 @@ def test_claude_absorbed_monitor_notices_end() -> None:
                     fixture.TIMESTAMP_FIELD: "2026-08-26T05:10:30.584Z",
                 },
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="absorbed-end-attachment",
         ),

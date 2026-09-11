@@ -13,11 +13,9 @@ from domain.event_shell import (
     ShellFinished,
     ShellStarted,
 )
-from domain.ids import (
-    HarnessName,
-)
 from domain.outcomes import Outcome
 from harness.impl.codex.canonical.translator import CodexCanonicalTranslator
+from tests.harness_names import CODEX_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_events import payloads, raw_event
 from tests.plugin_tests.support_values import JsonValue, text_of
@@ -57,7 +55,7 @@ def test_codex_loaded_skill_has_shared_skill() -> None:
                     },
                 },
             },
-            harness=HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id="codex-skill",
         ),
@@ -107,7 +105,7 @@ def test_codex_subagent_skill_read_has_shared() -> None:
                     },
                 },
             },
-            harness=HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.CHILD_ROLLOUT_ID,
             raw_event_id="codex-child-skill-start",
         ),
@@ -122,7 +120,7 @@ def test_codex_subagent_skill_read_has_shared() -> None:
                     fixture.OUTPUT_FIELD: '{"output":"skill instructions","exit_code":0}',
                 },
             },
-            harness=HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.CHILD_ROLLOUT_ID,
             raw_event_id="codex-child-skill-finish",
         ),

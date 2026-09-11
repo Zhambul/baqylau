@@ -32,13 +32,15 @@ from tests.plugin_tests import (
     vocabulary as fixture,
 )
 
+CLAUDE_CODE_HARNESS = domain_ids.HarnessName("claude_code")
+
 
 def test_claude_registers_no_auto_account() -> None:
     # A rate limit must not relaunch the CLI: the resumed run's
     # `session.started` deduplicates against the first run's, so the first
     # run's `session.finished` would keep the session out of `watchable()`.
     """Verify claude registers no automatic account migration reactor."""
-    reactors = ProviderGraph().registry.plugin(domain_ids.HarnessName.CLAUDE_CODE).reactors
+    reactors = ProviderGraph().registry.plugin(CLAUDE_CODE_HARNESS).reactors
 
     assert [type(reactor).__name__ for reactor in reactors] == [
         "ClaudeOtelCanonicalEventReactor",
@@ -50,7 +52,7 @@ def test_claude_stop_failure_rate_limit_yields() -> None:
     translation = ClaudeCanonicalTranslator().translate(
         plugin_support.raw_event(
             {fixture.HOOK_EVENT_NAME_FIELD: "StopFailure", fixture.ERROR: "rate_limit"},
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="stop-failure",
         ),
@@ -58,7 +60,7 @@ def test_claude_stop_failure_rate_limit_yields() -> None:
     unrelated = ClaudeCanonicalTranslator().translate(
         plugin_support.raw_event(
             {fixture.HOOK_EVENT_NAME_FIELD: "StopFailure", fixture.ERROR: "network"},
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="stop-network",
         ),

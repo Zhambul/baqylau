@@ -12,6 +12,7 @@ from tests import (
     http_test_response_helpers,
     http_value_dependencies as standard_dependencies,
 )
+from tests.harness_names import CODEX_HARNESS
 
 SESSION_ID_TEXT = "session-one"
 FIXTURE_SOURCE = "fixture"
@@ -162,7 +163,7 @@ def record_agent_message(application: contract_dependencies.canonical_runtime.Pr
         actor_id=runtime_dependencies.domain_ids.ActorId("actor-two"),
         turn_id=None,
         parent_actor_id=ACTOR_ID,
-        harness=runtime_dependencies.domain_ids.HarnessName.CODEX,
+        harness=CODEX_HARNESS,
         occurred_at=AGENT_MESSAGE_EVENT_TIME,
         terminal_window_id=None,
         harness_process_id=None,
@@ -178,7 +179,7 @@ def record_agent_message(application: contract_dependencies.canonical_runtime.Pr
         application,
         runtime_dependencies.raw_event_models.RawEvent(
             runtime_dependencies.domain_ids.RawEventId("raw-agent"),
-            runtime_dependencies.domain_ids.HarnessName.CODEX,
+            CODEX_HARNESS,
             FIXTURE_SOURCE,
             FIXTURE_SOURCE,
             "9",

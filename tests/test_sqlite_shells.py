@@ -9,6 +9,7 @@ from tests import (
     sqlite_test_dependencies as test_dependencies,
     sqlite_value_dependencies as standard_dependencies,
 )
+from tests.harness_names import CODEX_HARNESS
 
 # Keep dependency modules separate from migration helpers.
 # isort: split
@@ -23,7 +24,7 @@ from tests import (
 
 SESSION = domain_dependencies.domain_ids.SessionId("session-one")
 SESSION_TEXT = str(SESSION)
-HARNESS = domain_dependencies.domain_ids.HarnessName.CODEX
+HARNESS = CODEX_HARNESS
 
 
 def test_version_nine_builds_pending_raw_event(migration: sqlite_test_models.MigrationDatabase) -> None:

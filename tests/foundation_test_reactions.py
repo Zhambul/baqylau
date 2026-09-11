@@ -9,6 +9,7 @@ from tests import (
     foundation_test_events,
     foundation_test_primitives,
 )
+from tests.harness_names import CODEX_HARNESS
 
 HARNESS_VERSION = "1.0"
 OWN_PROCESS_NAME = foundation_dependencies.standard.Path(
@@ -84,7 +85,7 @@ def example_plugin(
     translation: foundation_components.raw_events.TranslationResult | foundation_components.raw_events.TranslationError,
     sources: tuple[foundation_dependencies.engine.harness_contract.HarnessRawEventSource, ...] = (),
     name: foundation_dependencies.domain.domain_ids.HarnessName = (
-        foundation_dependencies.domain.domain_ids.HarnessName.CODEX
+        CODEX_HARNESS
     ),
 ) -> foundation_dependencies.engine.harness_contract.HarnessPlugin:
     """Create a test plugin with fixed translation and source services.
@@ -96,7 +97,7 @@ def example_plugin(
     return foundation_dependencies.engine.harness_contract.HarnessPlugin(
         harness_info=foundation_dependencies.engine.HarnessInfo(
             name,
-            name.value.title(),
+            str(name).title(),
             HARNESS_VERSION,
             foundation_dependencies.domain.domain_events.SCHEMA_VERSION,
             OWN_PROCESS_NAME,
@@ -120,7 +121,7 @@ def save_example_sessions(sessions: foundation_dependencies.repository.SqliteSes
     """Save the requested number of test sessions with distinct identifiers."""
     for session_number in range(count):
         sessions.save(
-            foundation_dependencies.domain.domain_ids.HarnessName.CODEX,
+            CODEX_HARNESS,
             foundation_test_events.example_session(f"session-{session_number}"),
         )
 

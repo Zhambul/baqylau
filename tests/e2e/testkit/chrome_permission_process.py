@@ -10,9 +10,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from api.runtime import ApplicationConfig
-from domain.ids import HarnessName
 from harness import runtime as harness_runtime
 from tests.e2e.testkit.process import ApplicationProcess
+from tests.harness_names import CLAUDE_CODE_HARNESS, CODEX_HARNESS
 
 if TYPE_CHECKING:
     import pytest
@@ -75,16 +75,16 @@ class ChromeApplicationFactory:
             harness_runtime_configs=harness_runtime.HarnessRuntimeConfigs(
                 (
                     harness_runtime.HarnessRuntimeEntry(
-                        HarnessName.CLAUDE_CODE,
+                        CLAUDE_CODE_HARNESS,
                         harness_runtime.HarnessRuntimeConfig(
                             str(wrapper),
                             self.temporary_path / "claude",
                         ),
                     ),
                     harness_runtime.HarnessRuntimeEntry(
-                        HarnessName.CODEX,
+                        CODEX_HARNESS,
                         harness_runtime.default_harness_runtime_configs().for_harness(
-                            HarnessName.CODEX,
+                            CODEX_HARNESS,
                         ),
                     ),
                 ),

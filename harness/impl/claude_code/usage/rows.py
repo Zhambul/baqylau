@@ -19,7 +19,7 @@ from harness.models.usage import (
 if TYPE_CHECKING:
     from harness.runtime import HarnessRuntimeConfig
 
-HARNESS = HarnessName.CLAUDE_CODE
+HARNESS = HarnessName("claude_code")
 DISPLAY_NAME = "claude"
 
 

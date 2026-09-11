@@ -9,13 +9,13 @@ from typing import TYPE_CHECKING
 from domain import (
     event_base,
     event_shell,
-    ids as domain_ids,
 )
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
 from harness.models.raw_events import (
     RawEvent,
     TranslationResult,
 )
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_events import encoded_event, payloads, raw_event
 
@@ -55,7 +55,7 @@ def started_file_translators() -> tuple[
         translator.translate(
             raw_event(
                 call,
-                harness=domain_ids.HarnessName.CLAUDE_CODE,
+                harness=CLAUDE_CODE_HARNESS,
                 source_type=fixture.TRANSCRIPT_SOURCE,
                 raw_event_id="start",
             ),
@@ -106,7 +106,7 @@ def tool_finish_evidence() -> ToolFinishEvidence:
                 fixture.TOOL_NAME_FIELD: fixture.BASH_TOOL,
                 fixture.TOOL_INPUT_FIELD: {fixture.COMMAND_FIELD: fixture.PRINT_DIRECTORY_COMMAND},
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="hook-start",
         ),
@@ -119,7 +119,7 @@ def tool_finish_evidence() -> ToolFinishEvidence:
             fixture.TOOL_INPUT_FIELD: {fixture.COMMAND_FIELD: fixture.PRINT_DIRECTORY_COMMAND},
             fixture.TOOL_RESPONSE_FIELD: fixture.OUTPUT_FIELD,
         },
-        harness=domain_ids.HarnessName.CLAUDE_CODE,
+        harness=CLAUDE_CODE_HARNESS,
         source_type=fixture.HOOK_SOURCE,
         raw_event_id="hook-finish",
     )
@@ -137,7 +137,7 @@ def tool_finish_evidence() -> ToolFinishEvidence:
                 ],
             },
         },
-        harness=domain_ids.HarnessName.CLAUDE_CODE,
+        harness=CLAUDE_CODE_HARNESS,
         source_type=fixture.TRANSCRIPT_SOURCE,
         raw_event_id="transcript-finish",
     )

@@ -16,7 +16,7 @@ from harness.impl.claude_code import ids as claude_ids
 from harness.impl.claude_code.canonical import transcript, transcript_sources
 from harness.models import raw_events as raw_event_models
 
-HARNESS = domain_ids.HarnessName.CLAUDE_CODE
+HARNESS = domain_ids.HarnessName("claude_code")
 TEXT_ENCODING = "utf-8"
 TRANSCRIPT_SUFFIX = ".jsonl"
 

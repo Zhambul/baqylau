@@ -24,6 +24,9 @@ from tests.fake_terminal import FakeTerminal, window
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_audit import silent_audit
 
+CODEX_HARNESS = domain_ids.HarnessName("codex")
+CLAUDE_CODE_HARNESS = domain_ids.HarnessName("claude_code")
+
 
 class NoSessions:
     """A telemetry context for a delivery that names no session."""
@@ -76,7 +79,7 @@ def _test_launcher(harness: domain_ids.HarnessName, terminal: FakeTerminal) -> h
     runtime_configs = HarnessRuntimeConfigs(
         (
             HarnessRuntimeEntry(
-                domain_ids.HarnessName.CLAUDE_CODE,
+                CLAUDE_CODE_HARNESS,
                 HarnessRuntimeConfig(
                     fixture.CLAUDE,
                     Path(fixture.WORK_CLAUDE_HOME_PATH),
@@ -84,7 +87,7 @@ def _test_launcher(harness: domain_ids.HarnessName, terminal: FakeTerminal) -> h
                 ),
             ),
             HarnessRuntimeEntry(
-                domain_ids.HarnessName.CODEX,
+                CODEX_HARNESS,
                 HarnessRuntimeConfig(fixture.CODEX_HARNESS, Path(fixture.WORK_CODEX_HOME_PATH)),
             ),
         ),

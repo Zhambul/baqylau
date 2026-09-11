@@ -8,7 +8,7 @@ from typing import Annotated
 from pydantic import BaseModel, Field
 
 from harness.impl.claude_code.canonical.record_common import FOREIGN, OPEN_FOREIGN, ForeignMetadata, PermissionUpdate
-from harness.impl.claude_code.canonical.record_questions import ShellArguments, ToolArguments
+from harness.impl.claude_code.canonical.record_questions import QuestionAnswers, ShellArguments, ToolArguments
 from harness.impl.claude_code.canonical.record_tool_response_base import (
     PatchHunk,
     ToolResponseBlocks,
@@ -41,6 +41,7 @@ class ToolResponse(BaseModel):
     """
 
     model_config = OPEN_FOREIGN
+    answers: QuestionAnswers | None = None
     content: str | ToolResponseBlocks | None = None
     result: str | ToolResponseBlocks | None = None
     file: ToolResponseFile | None = None

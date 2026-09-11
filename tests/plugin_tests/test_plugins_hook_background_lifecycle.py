@@ -10,13 +10,13 @@ from domain.event_shell import (
     ShellOutputFinished,
 )
 from domain.ids import (
-    HarnessName,
     ShellId,
 )
 from domain.outcomes import Outcome
 from harness.impl.claude_code.canonical.records import HookPayload
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
 from harness.impl.claude_code.hooks import foreground as claude_foreground
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import support_events, support_terminal, vocabulary as fixture
 from tests.plugin_tests.hook_common_support import receive_claude_hook
 
@@ -95,7 +95,7 @@ def test_claude_task_stop_cancels_bg_shell_output() -> None:
                     fixture.RUN_IN_BACKGROUND_FIELD: True,
                 },
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="background-start",
         ),
@@ -112,7 +112,7 @@ def test_claude_task_stop_cancels_bg_shell_output() -> None:
                 },
                 fixture.TOOL_RESPONSE_FIELD: {fixture.BACKGROUND_TASK_ID_FIELD: fixture.NATIVE_TASK_ONE_ID},
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="background-launched",
         ),
@@ -131,7 +131,7 @@ def test_claude_task_stop_cancels_bg_shell_output() -> None:
                     "task_type": "local_bash",
                 },
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="background-stopped",
         ),
@@ -171,7 +171,7 @@ def test_claude_task_stop_recovers_its_bg_shell(tmp_path: Path) -> None:
                 fixture.TOOL_INPUT_FIELD: {fixture.TASK_ID: fixture.NATIVE_TASK_ONE_ID},
                 fixture.TOOL_RESPONSE_FIELD: {fixture.TASK_ID: fixture.NATIVE_TASK_ONE_ID},
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="background-stopped-after-restart",
         ),

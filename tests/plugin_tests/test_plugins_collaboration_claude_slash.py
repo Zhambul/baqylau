@@ -13,6 +13,7 @@ from domain import (
     ids as domain_ids,
 )
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_events import payloads, raw_event
 from tests.plugin_tests.support_slash import _slash_turn_events
@@ -54,7 +55,7 @@ def test_claude_slash_effort_reports_selection() -> None:
                     fixture.CONTENT_FIELD: "<command-name>/effort</command-name><command-args>high</command-args>",
                 },
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="slash-effort",
         ),
@@ -77,7 +78,7 @@ def test_claude_subagent_hook_reports_its_own() -> None:
                     fixture.HOOK_EVENT_ID_FIELD: fixture.CHILD_START_ID,
                     fixture.AGENT_ID_FIELD: fixture.CHILD_ONE_ID,
                 },
-                harness=domain_ids.HarnessName.CLAUDE_CODE,
+                harness=CLAUDE_CODE_HARNESS,
                 source_type=fixture.HOOK_SOURCE,
                 raw_event_id="child-start-hook",
             ),
@@ -96,7 +97,7 @@ def test_claude_subagent_hook_reports_its_own() -> None:
                     fixture.TOOL_INPUT_FIELD: {fixture.FILE_PATH_FIELD: fixture.WORK_A_PY_PATH},
                     fixture.EFFORT: {"level": fixture.HIGH},
                 },
-                harness=domain_ids.HarnessName.CLAUDE_CODE,
+                harness=CLAUDE_CODE_HARNESS,
                 source_type=fixture.HOOK_SOURCE,
                 raw_event_id="child-pretool-hook",
             ),
@@ -123,7 +124,7 @@ def test_claude_pretool_without_effort_reports_no() -> None:
                 fixture.TOOL_NAME_FIELD: fixture.READ_TOOL,
                 fixture.TOOL_INPUT_FIELD: {fixture.FILE_PATH_FIELD: "/work/b.py"},
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="no-effort-hook",
         ),
@@ -141,7 +142,7 @@ def test_claude_argless_slash_command_settles_no() -> None:
                 fixture.UUID_FIELD: "bare",
                 fixture.MESSAGE_FIELD: {fixture.CONTENT_FIELD: "<command-name>/model</command-name>"},
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="slash-bare",
         ),
@@ -167,7 +168,7 @@ def test_claude_rename_is_only_separate_title(arguments: str) -> None:
                     f"<command-args>{arguments}</command-args>"
                 ),
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id=f"slash-rename-{rename_target}",
         ),

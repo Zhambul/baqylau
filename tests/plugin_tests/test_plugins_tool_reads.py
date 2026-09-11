@@ -10,10 +10,8 @@ from domain.event_resource import (
     FileAccessed,
     SearchPerformed,
 )
-from domain.ids import (
-    HarnessName,
-)
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_events import payloads, raw_event
 from tests.plugin_tests.support_values import JsonValue
@@ -32,7 +30,7 @@ def test_claude_read_accepts_native_token_cap() -> None:
                 fixture.TOOL_NAME_FIELD: fixture.READ_TOOL,
                 fixture.TOOL_INPUT_FIELD: {fixture.FILE_PATH_FIELD: fixture.WORK_LARGE_TXT_PATH},
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="read-truncated-call",
         ),
@@ -57,7 +55,7 @@ def test_claude_read_accepts_native_token_cap() -> None:
                     },
                 },
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="read-truncated-result",
         ),
@@ -86,7 +84,7 @@ def test_claude_read_accepts_native_image_sidecar() -> None:
                     ],
                 },
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="read-image-call",
         ),
@@ -129,7 +127,7 @@ def test_claude_read_accepts_native_image_sidecar() -> None:
                     },
                 },
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="read-image-result",
         ),
@@ -152,7 +150,7 @@ def test_claude_filename_search_hook_keeps(native_name: str) -> None:
                 fixture.TOOL_NAME_FIELD: native_name,
                 fixture.TOOL_INPUT_FIELD: {"pattern": "*.py"},
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id=f"{native_name}-call",
         ),
@@ -171,7 +169,7 @@ def test_claude_filename_search_hook_keeps(native_name: str) -> None:
                     "truncated": False,
                 },
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id=f"{native_name}-result",
         ),
@@ -192,7 +190,7 @@ def test_claude_bg_result_reader_is_known() -> None:
                 fixture.TOOL_NAME_FIELD: "TaskOutput",
                 fixture.TOOL_INPUT_FIELD: {fixture.TASK_ID: "native-task", "block": True},
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="task-output-call",
         ),

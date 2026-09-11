@@ -6,8 +6,8 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-from domain.ids import HarnessName
 from tests.e2e.testkit import failure_values
+from tests.harness_names import CLAUDE_CODE_HARNESS
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -38,7 +38,7 @@ def claude_profile_line(entry: HarnessRuntimeEntry) -> str | None:
         The profile report line, or ``None`` for another harness.
 
     """
-    if entry.harness != HarnessName.CLAUDE_CODE:
+    if entry.harness != CLAUDE_CODE_HARNESS:
         return None
     profile = entry.config.configuration_directory / ".claude.json"
     try:

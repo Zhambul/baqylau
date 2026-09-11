@@ -9,6 +9,7 @@ from pathlib import Path
 from domain.ids import HarnessName
 from engine.interpret.loop import Interpreter
 from harness.models.raw_events import RawEvent
+from tests.harness_names import CLAUDE_CODE_HARNESS, CODEX_HARNESS
 from tests.plugin_tests.support_events import raw_event
 from tests.provider_graph import ProviderGraph
 
@@ -22,7 +23,7 @@ def replay(filename: str, harness: HarnessName, source_type: str) -> ProviderGra
     """
     application = ProviderGraph()
     path = Path(__file__).parents[1] / "e2e" / "fixtures" / filename
-    if harness == HarnessName.CLAUDE_CODE:
+    if harness == CLAUDE_CODE_HARNESS:
         application.raw_events.record((raw_event(
             {
                 "hook_event_name": "SessionStart",
@@ -59,7 +60,7 @@ def command_inputs(filename: str = "audit_command_batch.jsonl") -> Iterator[RawE
         while line := source.readline():
             yield replace(raw_event(
                 json.loads(line),
-                harness=HarnessName.CODEX,
+                harness=CODEX_HARNESS,
                 source_type="rollout",
                 raw_event_id=f"audit-batch-{source.tell()}",
                 source_position=str(source.tell() - len(line)),

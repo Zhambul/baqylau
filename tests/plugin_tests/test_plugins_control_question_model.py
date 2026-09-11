@@ -19,6 +19,7 @@ from harness.models.session import (
 )
 from tests.canonical_runtime import ProviderGraph
 from tests.fake_terminal import FakeTerminal
+from tests.harness_names import CLAUDE_CODE_HARNESS, CODEX_HARNESS
 from tests.plugin_tests import (
     control_driver_support,
     control_state_values,
@@ -57,7 +58,7 @@ def test_codex_question_discussion_declines(monkeypatch: pytest.MonkeyPatch) -> 
     terminal = FakeTerminal()
 
     outcome = support_values.controller_of(
-        ProviderGraph().registry.plugin(domain_ids.HarnessName.CODEX),
+        ProviderGraph().registry.plugin(CODEX_HARNESS),
     ).execute(
         control_models.AnswerQuestion(
             session_id=session.session_id,
@@ -97,7 +98,7 @@ def test_claude_model_control_resolves_native(monkeypatch: pytest.MonkeyPatch, t
     )
     request = control_models.SelectModel(session.session_id, domain_ids.RequestId(fixture.REQUEST_ONE_ID), "opus")
 
-    outcome = support_values.controller_of(application.registry.plugin(domain_ids.HarnessName.CLAUDE_CODE)).execute(
+    outcome = support_values.controller_of(application.registry.plugin(CLAUDE_CODE_HARNESS)).execute(
         request,
         support_controls.control_context(session, FakeTerminal().plugin()),
     )

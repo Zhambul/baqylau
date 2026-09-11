@@ -8,10 +8,8 @@ from domain.event_resource import (
     SearchPerformed,
     WebFetched,
 )
-from domain.ids import (
-    HarnessName,
-)
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_events import payloads, raw_event
 from tests.plugin_tests.support_values import JsonValue
@@ -41,7 +39,7 @@ def test_claude_web_search_hook_and_transcript() -> None:
                     ],
                 },
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="web-search-call",
         ),
@@ -72,7 +70,7 @@ def test_claude_web_search_hook_and_transcript() -> None:
                 fixture.TOOL_INPUT_FIELD: {fixture.QUERY_FIELD: "IANA Example Domain reserved"},
                 fixture.TOOL_RESPONSE_FIELD: response,
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="web-search-hook-result",
         ),
@@ -92,7 +90,7 @@ def test_claude_web_search_hook_and_transcript() -> None:
                 },
                 fixture.TOOL_USE_RESULT: response,
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="web-search-transcript-result",
         ),
@@ -129,7 +127,7 @@ def test_claude_web_fetch_hook_and_transcript() -> None:
                     ],
                 },
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="web-fetch-call",
         ),
@@ -154,7 +152,7 @@ def test_claude_web_fetch_hook_and_transcript() -> None:
                 },
                 fixture.TOOL_RESPONSE_FIELD: response,
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="web-fetch-hook-result",
         ),
@@ -174,7 +172,7 @@ def test_claude_web_fetch_hook_and_transcript() -> None:
                 },
                 fixture.TOOL_USE_RESULT: response,
             },
-            harness=HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="web-fetch-transcript-result",
         ),

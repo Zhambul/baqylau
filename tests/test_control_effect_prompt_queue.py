@@ -13,6 +13,7 @@ from domain import (
     outcomes,
 )
 from tests import control_effect_stores as stores, control_effect_values as control_values
+from tests.harness_names import CODEX_HARNESS
 
 QUEUED_PROMPT_COUNT = 2
 
@@ -30,7 +31,7 @@ def test_each_native_prompt_consumes_only_one() -> None:
                 actor_id=control_values.TEST_ACTOR_ID,
                 turn_id=domain_ids.TurnId(f"turn-{ordinal}"),
                 parent_actor_id=None,
-                harness=domain_ids.HarnessName.CODEX,
+                harness=CODEX_HARNESS,
                 occurred_at=float(ordinal),
                 terminal_window_id=None,
                 harness_process_id=None,
@@ -59,7 +60,7 @@ def test_turn_finish_does_not_submit_queued() -> None:
             actor_id=control_values.TEST_ACTOR_ID,
             turn_id=control_values.TEST_TURN_ID,
             parent_actor_id=None,
-            harness=domain_ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             occurred_at=control_values.SHELL_ENTRY_TIME,
             terminal_window_id=None,
             harness_process_id=None,

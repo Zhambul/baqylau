@@ -12,9 +12,10 @@ from tests import (
     sqlite_test_preferences,
     sqlite_value_dependencies as standard_dependencies,
 )
+from tests.harness_names import CODEX_HARNESS
 
 SESSION = domain_dependencies.domain_ids.SessionId("session-one")
-HARNESS = domain_dependencies.domain_ids.HarnessName.CODEX
+HARNESS = CODEX_HARNESS
 EXPIRY_CHECK_TIME = 2000.0
 MAIN_DATABASE_NAME = "main.db"
 LEAD_ACTOR_ID_TEXT = "lead"

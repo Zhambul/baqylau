@@ -5,9 +5,9 @@ from __future__ import annotations
 
 import os
 import time
+from typing import TYPE_CHECKING
 
-from domain.ids import HarnessName
-from harness.impl.codex import usage_cache, usage_normalization, usage_process
+from harness.impl.codex import definition, usage_cache, usage_normalization, usage_process
 from harness.impl.codex.usage_models import (
     CacheEntry as CacheEntry,
     NormalizedRateLimits as NormalizedRateLimits,
@@ -16,7 +16,9 @@ from harness.impl.codex.usage_models import (
     ProbeResult as ProbeResult,
     RateLimitsCollection as RateLimitsCollection,
 )
-from harness.runtime import HarnessRuntimeConfig, default_harness_runtime_configs
+
+if TYPE_CHECKING:
+    from harness.runtime import HarnessRuntimeConfig
 
 REQUEST_TIMEOUT_SECONDS = 6.0
 RATE_LIMIT_RESPONSE_ID = 2
@@ -25,7 +27,7 @@ rate_limit_cache_store = usage_cache.RateLimitCacheStore()
 
 
 def _default_runtime_config() -> HarnessRuntimeConfig:
-    return default_harness_runtime_configs().for_harness(HarnessName.CODEX)
+    return definition.default_runtime_config()
 
 
 def subprocess_environment(

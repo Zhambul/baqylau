@@ -4,9 +4,10 @@
 from __future__ import annotations
 
 from tests import canonical_foundation_components as foundation_components, foundation_dependencies
+from tests.harness_names import CODEX_HARNESS
 
 FIXTURE_SOURCE_IDENTITY = "fixture:source"
-EXAMPLE_HARNESS = foundation_dependencies.domain.domain_ids.HarnessName.CODEX
+EXAMPLE_HARNESS = CODEX_HARNESS
 FIXTURE_EVENT_TIME = 10.0
 SESSION_ID_TEXT = "session-one"
 LEAD_ACTOR_ID_TEXT = "actor-lead"
@@ -86,7 +87,7 @@ def session_started_event(
         PRIMARY_LEAD_ACTOR,
         None,
         None,
-        foundation_dependencies.domain.domain_ids.HarnessName.CODEX,
+        CODEX_HARNESS,
         FIXTURE_EVENT_TIME,
         terminal_window_id,
         harness_process_id,

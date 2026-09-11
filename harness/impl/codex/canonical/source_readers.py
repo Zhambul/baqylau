@@ -13,7 +13,7 @@ from harness.impl.codex.canonical import source_catalog, title as native_title, 
 from harness.models import directives, raw_events
 from repository.mapper import documents
 
-HARNESS = domain_ids.HarnessName.CODEX
+HARNESS = domain_ids.HarnessName("codex")
 EVENT_BATCH_SIZE = 100
 ROLLOUT_OBSERVATION_VERSION = 4
 

@@ -13,7 +13,7 @@ from starlette.requests import ClientDisconnect
 from api.common.models.fields import HarnessNamePath
 from api.common.models.replies.recorded_response import RecordedResponse
 from app import provider_audit_storage, provider_harness_sessions
-from audit.harness_documents import HarnessErrorAudit, HarnessInputAudit
+from audit.harness_documents import HarnessErrorAudit
 from domain.ids import HarnessName
 from harness.models.telemetry import (
     TELEMETRY_KIND_HEADER,
@@ -58,20 +58,7 @@ async def record_telemetry_delivery(
         kind=(request.headers.get(TELEMETRY_KIND_HEADER) or "").strip(),
         payload=payload,
     )
-    try:
-        harness_name = HarnessName(harness)
-    except ValueError as error:
-        audit.error(
-            "",
-            "telemetry delivery",
-            HarnessInputAudit(
-                input_text=harness,
-                kind=delivery.kind,
-                error=repr(error),
-                payload_bytes=len(payload),
-            ),
-        )
-        return RecordedResponse(recorded=False)
+    harness_name = HarnessName(harness)
     try:
         # On a worker thread, like the hook endpoint beside it: `record` writes
         # to the store, and this handler is `async` (it awaits the raw body), so

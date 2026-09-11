@@ -3,28 +3,16 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from itertools import starmap
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from domain.ids import HarnessName
+from harness.impl.definitions import definitions
+from harness.models.runtime import HarnessRuntimeConfig as HarnessRuntimeConfig
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
-
-CODEX_EXECUTABLE = "codex"
-
-
-@dataclass(frozen=True)
-class HarnessRuntimeConfig:
-    """Represent harness runtime config."""
-
-    executable: str
-    configuration_directory: Path
-    settings_file: Path | None = None
-    use_vendor_default_configuration: bool = False
 
 
 @dataclass(frozen=True)
@@ -102,69 +90,14 @@ class HarnessRuntimeConfigs:
         )
 
 
-def _installed_executable(candidates: tuple[str, ...], fallback: str) -> str:
-    for candidate in candidates:
-        if Path(candidate).is_file() and os.access(candidate, os.X_OK):
-            return candidate
-    return fallback
-
-
 def default_harness_runtime_configs() -> HarnessRuntimeConfigs:
-    """Return the default harness runtime configs.
+    """Read runtime defaults declared by installed plugins.
 
     Returns:
-        Default harness runtime configs.
+        The runtime configuration for every installed plugin.
 
     """
-    home = Path.home()
-    native_codex_candidates = tuple(
-        str(candidate)
-        for candidate in sorted(
-            (
-                home
-                / ".hermes"
-                / "node"
-                / "lib"
-                / "node_modules"
-                / "@openai"
-                / CODEX_EXECUTABLE
-                / "node_modules"
-                / "@openai"
-            ).glob("codex-*/vendor/*/bin/codex"),
-        )
-    )
     return HarnessRuntimeConfigs(
-        (
-            HarnessRuntimeEntry(
-                HarnessName.CLAUDE_CODE,
-                HarnessRuntimeConfig(
-                    _installed_executable(
-                        (
-                            str(home / ".local" / "bin" / "claude"),
-                            "/opt/homebrew/bin/claude",
-                            "/usr/local/bin/claude",
-                        ),
-                        "claude",
-                    ),
-                    home / ".claude",
-                    use_vendor_default_configuration=True,
-                ),
-            ),
-            HarnessRuntimeEntry(
-                HarnessName.CODEX,
-                HarnessRuntimeConfig(
-                    _installed_executable(
-                        (
-                            *native_codex_candidates,
-                            str(home / ".hermes" / "node" / "bin" / CODEX_EXECUTABLE),
-                            "/opt/homebrew/bin/codex",
-                            "/usr/local/bin/codex",
-                            str(home / ".local" / "bin" / CODEX_EXECUTABLE),
-                        ),
-                        CODEX_EXECUTABLE,
-                    ),
-                    home / ".codex",
-                ),
-            ),
-        ),
+        HarnessRuntimeEntry(definition.name, definition.default_runtime_config())
+        for definition in definitions()
     )

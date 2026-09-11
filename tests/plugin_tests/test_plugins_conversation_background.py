@@ -10,6 +10,7 @@ from domain import (
     ids as domain_ids,
 )
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.conversation_support import (
     claude_background_outcome,
@@ -43,7 +44,7 @@ def test_claude_bg_completion_is_output_finish() -> None:
                     ),
                 },
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="background-completion",
         ),
@@ -86,7 +87,7 @@ def test_claude_bg_completion_can_arrive_only() -> None:
                     "</task-notification>"
                 ),
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="background-completion-queue",
         ),
@@ -113,7 +114,7 @@ def test_claude_queued_prompt_is_not_agent() -> None:
                 fixture.OPERATION_FIELD: fixture.ENQUEUE,
                 fixture.CONTENT_FIELD: "No create off fresh master",
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.TRANSCRIPT_SOURCE,
             raw_event_id="queued-user-prompt",
         ),
@@ -157,7 +158,7 @@ def test_claude_command_backgrounded_mid_run_says() -> None:
                 fixture.TOOL_INPUT_FIELD: {fixture.COMMAND_FIELD: "sleep 30; echo done"},
                 fixture.TOOL_RESPONSE_FIELD: {fixture.BACKGROUND_TASK_ID_FIELD: "btk9y72c9"},
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="post-tool-use-backgrounded",
         ),
@@ -191,7 +192,7 @@ def test_claude_bg_launch_is_not_mid_run() -> None:
                 },
                 fixture.TOOL_RESPONSE_FIELD: {fixture.BACKGROUND_TASK_ID_FIELD: "btk9y72c9"},
             },
-            harness=domain_ids.HarnessName.CLAUDE_CODE,
+            harness=CLAUDE_CODE_HARNESS,
             source_type=fixture.HOOK_SOURCE,
             raw_event_id="post-tool-use-native-background",
         ),

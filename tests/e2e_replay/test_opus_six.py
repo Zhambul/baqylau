@@ -1,10 +1,11 @@
 # Copyright (c) 2026 Zhambyl Yermagambet
 """Check replies and context from Opus 4.6 records."""
 
-from domain.ids import HarnessName, SessionId
+from domain.ids import SessionId
 from harness.impl.claude_code import plugin_info
 from tests import http_test_assets, http_test_controls, http_test_pane_models
 from tests.e2e_replay.audit_replay_support import replay
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.provider_graph import ProviderGraph
 
 CONTEXT_TOKENS = 600
@@ -14,7 +15,7 @@ CONTEXT_WINDOW = 1_000_000
 # Harness limit: claude_code only. These fields are from Claude records.
 def test_opus_six_reply_and_context_reach_http() -> None:
     """Keep replies and usage when Claude adds wire metadata."""
-    application = replay("audit_claude_opus_six.jsonl", HarnessName.CLAUDE_CODE, "transcript")
+    application = replay("audit_claude_opus_six.jsonl", CLAUDE_CODE_HARNESS, "transcript")
     _assert_translated(application)
     state = application.session_data.read(SessionId("session-one"))
     assert state is not None

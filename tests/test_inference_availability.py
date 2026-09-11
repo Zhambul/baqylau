@@ -4,16 +4,20 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 import pytest
 
-from domain.ids import HarnessName
 from harness.models.usage import UsageRow, UsageWindow, UsageWindowScope
 from inference import (
     contract as inference_contract,
     errors as inference_errors,
 )
+from tests.harness_names import CLAUDE_CODE_HARNESS, CODEX_HARNESS
 from tests.inference_support import Audit, InferenceTerminal, Usage, factory
+
+if TYPE_CHECKING:
+    from domain.ids import HarnessName
 
 TEST_SESSION_ID = "session-one"
 MODEL_PROMPT = "name this"
@@ -69,8 +73,8 @@ def test_exhausted_known_quotas_do_not_open_any() -> None:
     terminal = InferenceTerminal(())
     exhausted = Usage(
         (
-            usage_row(HarnessName.CODEX, Decimal(100)),
-            usage_row(HarnessName.CLAUDE_CODE, Decimal(100)),
+            usage_row(CODEX_HARNESS, Decimal(100)),
+            usage_row(CLAUDE_CODE_HARNESS, Decimal(100)),
         ),
     )
     with pytest.raises(inference_errors.ModelUnavailableError):

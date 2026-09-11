@@ -15,6 +15,7 @@ from tests import (
     frontend_fixture_values as fixture,
 )
 from tests.frontend_fixture_support import FixtureEventArguments, FixturePhaseContext, FixtureRepositoryQueries
+from tests.harness_names import CODEX_HARNESS
 
 REPOSITORY_ROOT = system.Path(__file__).resolve().parents[1]
 PORT = int(system.os.environ.get("BAQYLAU_E2E_PORT", "8794"))
@@ -654,7 +655,7 @@ class _FixtureSeed(_FixtureFactPhases, _FixtureObservationPhase):
     def _initialize_identity(self) -> None:
         """Initialize stable fixture identities."""
         self._now = 1_700_000_000.0
-        self._harness = domain_ids.HarnessName.CODEX
+        self._harness = CODEX_HARNESS
         self._active_session = domain_ids.SessionId("fixture-active")
         self._active_lead = domain_ids.ActorId("fixture-active:lead")
         self._child_actor = domain_ids.ActorId("fixture-active:researcher")

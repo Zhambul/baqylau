@@ -10,6 +10,7 @@ from tests import (
     sqlite_test_dependencies as test_dependencies,
     sqlite_value_dependencies as standard_dependencies,
 )
+from tests.harness_names import CODEX_HARNESS
 
 # Keep dependency modules separate from test helpers.
 # isort: split
@@ -26,7 +27,7 @@ from tests import (
 SESSION = domain_dependencies.domain_ids.SessionId("session-one")
 SESSION_TEXT = str(SESSION)
 ACTOR = domain_dependencies.domain_ids.ActorId("actor-one")
-HARNESS = domain_dependencies.domain_ids.HarnessName.CODEX
+HARNESS = CODEX_HARNESS
 FIRST_TRANSLATION_TIME = 1001.0
 FIRST_SOURCE_POSITION = "1"
 SECOND_SOURCE_POSITION = "2"

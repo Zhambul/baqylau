@@ -23,6 +23,9 @@ if TYPE_CHECKING:
     from tests.plugin_tests.support_values import JsonValue
 
 
+CODEX_HARNESS = domain_ids.HarnessName("codex")
+
+
 def translate_codex_rollout_from_path(
     translator: CodexCanonicalTranslator,
     rollout_path: Path,
@@ -39,7 +42,7 @@ def translate_codex_rollout_from_path(
     event = replace(
         raw_event(
             document,
-            harness=domain_ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.ROLLOUT_SOURCE,
             raw_event_id=raw_event_id,
             source_position=source_position,
@@ -63,7 +66,7 @@ def codex_child_rollout_event(
     return replace(
         raw_event(
             document,
-            harness=domain_ids.HarnessName.CODEX,
+            harness=CODEX_HARNESS,
             source_type=fixture.CHILD_ROLLOUT_ID,
             raw_event_id=raw_event_id,
         ),

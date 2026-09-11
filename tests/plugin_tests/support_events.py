@@ -9,6 +9,7 @@ import typing
 from domain import event_base, ids as domain_ids
 from harness.models import raw_events as raw_event_models
 from repository.mapper import facts as mapper
+from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 
 if typing.TYPE_CHECKING:
@@ -95,7 +96,7 @@ def committed[PayloadType: event_base.EventPayload](
         domain_ids.ActorId(fixture.SESSION_ONE_LEAD_ID),
         None,
         parent_actor_id,
-        domain_ids.HarnessName.CLAUDE_CODE,
+        CLAUDE_CODE_HARNESS,
         fixture.FIXTURE_EVENT_TIME,
         None,
         None,
