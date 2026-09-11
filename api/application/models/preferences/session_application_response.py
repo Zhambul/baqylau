@@ -18,6 +18,7 @@ class SessionPreferencesResponse(BaseModel):
     view_mode: ViewMode
     notifications_muted: bool
     tasks_hidden: bool
+    goal_hidden: bool
 
 
 class ApplicationErrorResponse(BaseModel):

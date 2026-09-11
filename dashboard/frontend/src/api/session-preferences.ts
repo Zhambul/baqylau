@@ -74,6 +74,18 @@ export async function saveTasksHidden(
   );
 }
 
+export async function dismissGoal(
+  sessionId: SessionId,
+  objective: string,
+): Promise<void> {
+  await execute(() =>
+    apiClient.POST('/api/sessions/{session_id}/application/dismiss-goal', {
+      params: { path: { session_id: sessionId } },
+      body: { objective },
+    }),
+  );
+}
+
 export async function saveDialogDraft(
   sessionId: SessionId,
   attentionId: string,

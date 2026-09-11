@@ -602,6 +602,10 @@ export class SessionViewState {
             ? application
             : {
                 ...current,
+                preferences: {
+                  ...current.preferences,
+                  goalHidden: application.preferences.goalHidden,
+                },
                 composer: {
                   ...current.composer,
                   draft: application.composer.draft,

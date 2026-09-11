@@ -127,6 +127,7 @@ describe('stream decoder', () => {
           view_mode: 'default',
           notifications_muted: false,
           tasks_hidden: false,
+          goal_hidden: false,
         },
         composer: {
           draft: { text: 'test', origin: 'terminal', sequence: 1000 },

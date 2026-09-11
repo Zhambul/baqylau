@@ -13,6 +13,7 @@ from app import (
     session_application_resources as resources,
 )
 from app.injection import singleton
+from app.provider_goal_dismissals import GoalDismissals
 from dashboard.services import workspace as workspace_service
 
 
@@ -49,6 +50,7 @@ SessionCore = Annotated[
 def session_application_rules(
     settings: storage_providers.NotificationSettings,
     hidden_tasks: storage_providers.Dismissals,
+    hidden_goals: GoalDismissals,
     terminal_gate: support_providers.TerminalGate,
 ) -> resources.SessionApplicationRules:
     """Return rules for session application state.
@@ -60,6 +62,7 @@ def session_application_rules(
     return resources.SessionApplicationRules(
         settings,
         hidden_tasks,
+        hidden_goals,
         terminal_gate,
     )
 

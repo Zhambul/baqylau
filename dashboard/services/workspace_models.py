@@ -15,6 +15,7 @@ class SessionPreferences:
     view_mode: preferences.ViewMode
     notifications_muted: bool
     tasks_hidden: bool
+    goal_hidden: bool = False
 
 
 @dataclass(frozen=True)

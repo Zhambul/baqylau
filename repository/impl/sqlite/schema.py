@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from types import MappingProxyType
 
-MAIN_SCHEMA_VERSION = 24
+MAIN_SCHEMA_VERSION = 25
 AUDIT_SCHEMA_VERSION = 1
 TOOL_COUNTS_REPAIR_VERSION = 15
 FIRST_REPEATED_REPAIR_VERSION = 21
@@ -681,6 +681,15 @@ MAIN_MIGRATIONS = _repeat_repairs({
           AND json_type(payload, '$.statistics.tool_counts[0]') = 'array'
         """,
     ),
+    25: (
+        """
+        CREATE TABLE IF NOT EXISTS goal_dismissals(
+            session_id TEXT PRIMARY KEY,
+            objective TEXT NOT NULL,
+            dismissed_cursor INTEGER NOT NULL
+        )
+        """,
+    ),
 })
 
 _SCHEMA_VERSION_TABLE = """
@@ -992,6 +1001,12 @@ CREATE TABLE IF NOT EXISTS task_dismissals(
     task_id TEXT NOT NULL,
     dismissed_at REAL NOT NULL,
     PRIMARY KEY(session_id, task_id)
+);
+
+CREATE TABLE IF NOT EXISTS goal_dismissals(
+    session_id TEXT PRIMARY KEY,
+    objective TEXT NOT NULL,
+    dismissed_cursor INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS push_subscriptions(

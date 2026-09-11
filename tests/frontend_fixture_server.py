@@ -536,6 +536,14 @@ class _FixtureFactPhases(FixturePhaseContext):
             seconds_ago=fixture.PARKED_TITLE_AGE_SECONDS,
         )
         self._events.add(
+            "parked-goal",
+            operations.event_work.GoalChanged(
+                "Completed goal marker", conversation.work_state.GoalState.COMPLETED, None,
+            ),
+            session_id=self._parked_session,
+            actor_id=self._parked_lead,
+        )
+        self._events.add(
             "parked-message",
             conversation.event_conversation.MessageCreated(
                 domain_ids.MessageId("parked-message"),

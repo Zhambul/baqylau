@@ -7,6 +7,7 @@ import time
 from typing import TYPE_CHECKING
 
 from domain.entries import ENTRY_TYPES
+from repository.impl.sqlite import goal_dismissals
 from repository.mapper.documents import encode_document
 
 if TYPE_CHECKING:
@@ -45,6 +46,7 @@ def apply_changes(
             ),
         )
     if session_data_changes.session is not None:
+        goal_dismissals.expire(connection, session_id, session_data_changes.session.goal, canonical_cursor)
         connection.execute(
             "INSERT INTO session_data(session_id, revision, payload) VALUES(?, ?, ?) "
             "ON CONFLICT(session_id) DO UPDATE SET revision=excluded.revision, payload=excluded.payload",

@@ -49,6 +49,10 @@ class SessionApplicationContext(Protocol):
 class SessionPreferenceOperations:
     """Provide session preference write operations."""
 
+    def dismiss_goal(self: SessionApplicationContext, session_id: SessionId, objective: str) -> None:
+        """Hide the matching completed goal."""
+        self.rules.goal_dismissal_repository.dismiss(session_id, objective)
+
     def set_view_mode(self: SessionApplicationContext, session_id: SessionId, view_mode: str) -> None:
         """Set the session view mode.
 
@@ -174,6 +178,7 @@ class SessionSnapshotOperations(SessionApplicationContext):
             view_mode=self.core.view_mode_repository.view_mode(session_id) or preferences.DEFAULT_VIEW_MODE,
             notifications_muted=session_id in self.rules.notification_setting_repository.muted_session_ids(),
             tasks_hidden=bool(tasks) and dismissed == {task.task_id for task in tasks},
+            goal_hidden=self.rules.goal_dismissal_repository.hidden(session_id),
         )
 
     def _state(

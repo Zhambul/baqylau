@@ -11,12 +11,27 @@ from harness.services.terminal_gate import SessionTerminalGate
 from tests import terminal_draft_support
 
 if TYPE_CHECKING:
+    from domain.ids import SessionId
     from repository.contract import (
         audit as audit_contract,
         preferences as preference_contract,
         session_data as session_data_contract,
         workspace as workspace_contract,
     )
+    from repository.contract.goal_dismissals import GoalDismissalRepository
+
+
+class GoalDismissals:
+    """Return default goal visibility."""
+
+    def hidden(self, _session_id: SessionId) -> bool:
+        """Read visibility.
+
+        Returns:
+            False for these tests.
+
+        """
+        return False
 
 
 def service(
@@ -45,6 +60,7 @@ def service(
                 terminal_draft_support.NotificationSettings(),
             ),
             cast("preference_contract.TaskDismissalRepository", terminal_draft_support.TaskDismissals()),
+            cast("GoalDismissalRepository", GoalDismissals()),
             SessionTerminalGate(),
         ),
         clock=lambda: times.pop(0),

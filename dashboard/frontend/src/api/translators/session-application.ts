@@ -12,6 +12,7 @@ export function translateSessionApplication(
       viewMode: wire.preferences.view_mode,
       notificationsMuted: wire.preferences.notifications_muted,
       tasksHidden: wire.preferences.tasks_hidden,
+      goalHidden: wire.preferences.goal_hidden,
     },
     composer: {
       draft:

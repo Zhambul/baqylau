@@ -115,6 +115,7 @@ def session_application(
             view_mode=session_application_snapshot.preferences.view_mode,
             notifications_muted=session_application_snapshot.preferences.notifications_muted,
             tasks_hidden=session_application_snapshot.preferences.tasks_hidden,
+            goal_hidden=session_application_snapshot.preferences.goal_hidden,
         ),
         composer=composer_state(session_application_snapshot.composer),
         dialog=dialog_state(session_application_snapshot.dialog),

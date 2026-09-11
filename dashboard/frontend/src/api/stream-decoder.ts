@@ -134,6 +134,7 @@ function decodeSessionApplication(
       view_mode: viewMode(preferences, 'view_mode'),
       notifications_muted: booleanValue(preferences, 'notifications_muted'),
       tasks_hidden: booleanValue(preferences, 'tasks_hidden'),
+      goal_hidden: booleanValue(preferences, 'goal_hidden'),
     },
     composer: {
       draft:

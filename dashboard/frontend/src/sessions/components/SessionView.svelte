@@ -50,7 +50,10 @@
 
   {#if route.tab === 'mirror'}
     {#if route.actorId === undefined}
-      <GoalTasks session={view.session} />
+      <GoalTasks
+        session={view.session}
+        hidden={view.application?.preferences.goalHidden ?? false}
+      />
       {#if view.attention.plan !== null}
         <PlanCard entry={view.attention.plan} {view} />
       {/if}

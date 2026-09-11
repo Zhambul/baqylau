@@ -7,6 +7,7 @@ export type SessionApplication = {
     readonly viewMode: ViewMode;
     readonly notificationsMuted: boolean;
     readonly tasksHidden: boolean;
+    readonly goalHidden: boolean;
   };
   readonly composer: {
     readonly draft: {

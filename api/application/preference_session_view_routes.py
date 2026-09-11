@@ -5,6 +5,7 @@ from http import HTTPStatus
 
 from fastapi import APIRouter, HTTPException
 
+from api.application.models.preferences.dismiss_goal_request import DismissGoalRequest
 from api.application.models.preferences.notifications_muted_request import NotificationsMutedRequest
 from api.application.models.preferences.tasks_hidden_request import TasksHiddenRequest
 from api.application.models.preferences.view_mode_request import ViewModeRequest
@@ -14,6 +15,28 @@ from app.provider_session_application import SessionApplication
 from domain.ids import SessionId
 
 router = APIRouter()
+
+
+@router.post("/api/sessions/{session_id}/application/dismiss-goal")
+def dismiss_goal(
+    session_id: SessionIdPath,
+    dismiss_goal_request: DismissGoalRequest,
+    workspace: SessionApplication,
+) -> SavedResponse:
+    """Hide a completed goal on all clients.
+
+    Returns:
+        The saved response.
+
+    Raises:
+        HTTPException: If the goal changed or is not complete.
+
+    """
+    try:
+        workspace.dismiss_goal(SessionId(session_id), dismiss_goal_request.objective)
+    except ValueError as error:
+        raise HTTPException(HTTPStatus.CONFLICT, str(error)) from error
+    return SavedResponse()
 
 
 @router.post("/api/sessions/{session_id}/application/view-mode")

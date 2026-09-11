@@ -1,14 +1,17 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
 
+  import { dismissGoal } from '../../api/session-preferences';
+
   import type { Session } from '../model';
 
   const CONFIRM_MILLISECONDS = 4_000;
-  let { session }: { session: Session } = $props();
-  let dismissedObjective = $state<string | null>(null);
+  let { session, hidden = false }: { session: Session; hidden?: boolean } =
+    $props();
+  let saving = $state(false);
+  let failure = $state<string | null>(null);
   let armedGoal = $state<string | null>(null);
   let confirmTimer: ReturnType<typeof setTimeout> | null = null;
-  const storageKey = $derived(`baqylau.dismissed-goal.${session.sessionId}`);
   const goalKey = $derived(
     JSON.stringify([session.sessionId, session.goal?.objective]),
   );
@@ -26,6 +29,7 @@
   }
 
   function requestDismiss(): void {
+    if (saving) return;
     if (armedGoal !== goalKey) {
       resetConfirmation();
       armedGoal = goalKey;
@@ -33,31 +37,19 @@
       return;
     }
     resetConfirmation();
-    dismissGoal();
+    void saveDismissal();
   }
 
-  $effect(() => {
-    const goal = session.goal;
-    try {
-      if (
-        !goal?.completed ||
-        localStorage.getItem(storageKey) !== goal.objective
-      )
-        localStorage.removeItem(storageKey);
-      dismissedObjective = localStorage.getItem(storageKey);
-    } catch {
-      // The card still works when browser storage is not available.
-      dismissedObjective = null;
-    }
-  });
-
-  function dismissGoal(): void {
+  async function saveDismissal(): Promise<void> {
     if (!session.goal?.completed || !session.goal.objective) return;
-    dismissedObjective = session.goal.objective;
+    saving = true;
+    failure = null;
     try {
-      localStorage.setItem(storageKey, dismissedObjective);
+      await dismissGoal(session.sessionId, session.goal.objective);
     } catch {
-      // Keep this dismissal for the current view.
+      failure = 'Could not hide the goal. Try again.';
+    } finally {
+      saving = false;
     }
   }
 
@@ -110,7 +102,7 @@
   }
 </script>
 
-{#if session.goal?.objective && !(session.goal.completed && dismissedObjective === session.goal.objective)}
+{#if session.goal?.objective && !(session.goal.completed && hidden)}
   <div class="goalwrap">
     <div class:met={session.goal.completed} class="goalcard">
       <div class="goalhead">
@@ -121,6 +113,8 @@
           <button
             type="button"
             class="taskshide"
+            disabled={saving}
+            aria-busy={saving}
             class:arm={armedGoal === goalKey}
             aria-label={armedGoal === goalKey
               ? 'Confirm dismiss completed goal'
@@ -130,11 +124,16 @@
               if (event.key === 'Escape') resetConfirmation();
             }}
             onclick={requestDismiss}
-            >{armedGoal === goalKey ? 'hide?' : '✕'}</button
+            >{saving
+              ? 'hiding…'
+              : armedGoal === goalKey
+                ? 'hide?'
+                : '✕'}</button
           >
         {/if}
       </div>
       <div class="goalcond">{session.goal.objective}</div>
+      {#if failure}<div role="alert">{failure}</div>{/if}
       {#if session.goal.reason}
         <div class="goalreason">{session.goal.reason}</div>
       {/if}

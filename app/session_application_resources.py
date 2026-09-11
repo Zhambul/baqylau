@@ -10,6 +10,7 @@ from harness.models.probe import (
 )
 from harness.services.terminal_gate import SessionTerminalGate
 from repository.contract import audit, preferences, session_data, workspace
+from repository.contract.goal_dismissals import GoalDismissalRepository
 
 
 class TerminalSessionReader(Protocol):
@@ -37,4 +38,5 @@ class SessionApplicationRules:
 
     notification_setting_repository: preferences.NotificationSettingRepository
     task_dismissal_repository: preferences.TaskDismissalRepository
+    goal_dismissal_repository: GoalDismissalRepository
     terminal_gate: SessionTerminalGate

@@ -69,6 +69,7 @@ def test_only_daemon_and_audit_cli_build_repos() -> None:
         "app/provider_auxiliary_storage.py",
         "app/provider_databases.py",
         "app/provider_fact_storage.py",
+        "app/provider_goal_dismissals.py",
         "app/provider_harness_launch.py",
         "app/provider_harness_sessions.py",
         "app/provider_preference_storage.py",

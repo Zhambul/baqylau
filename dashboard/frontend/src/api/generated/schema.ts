@@ -54,7 +54,6 @@ export interface paths {
          *
          *     Raises:
          *         HTTPException: If the request cannot be completed.
-         *         UnknownHookHarnessError: If no harness owns the hook.
          */
         post: operations["record_hook_delivery_api_harnesses__harness__hooks_post"];
         delete?: never;
@@ -217,6 +216,9 @@ export interface paths {
         /**
          * Session Stream
          * @description Return the session stream response.
+         *
+         *     Returns:
+         *         The session stream response.
          */
         get: operations["session_stream_sessionData__session_id__stream_get"];
         put?: never;
@@ -237,6 +239,9 @@ export interface paths {
         /**
          * Global Stream
          * @description Return the global stream response.
+         *
+         *     Returns:
+         *         The global stream response.
          */
         get: operations["global_stream_sessionData_stream_get"];
         put?: never;
@@ -1000,6 +1005,32 @@ export interface paths {
          *         The saved response.
          */
         post: operations["save_dialog_draft_api_sessions__session_id__application_dialog_draft_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{session_id}/application/dismiss-goal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dismiss Goal
+         * @description Hide a completed goal on all clients.
+         *
+         *     Returns:
+         *         The saved response.
+         *
+         *     Raises:
+         *         HTTPException: If the goal changed or is not complete.
+         */
+        post: operations["dismiss_goal_api_sessions__session_id__application_dismiss_goal_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2049,6 +2080,14 @@ export interface components {
             working_directory?: string | null;
         };
         /**
+         * DismissGoalRequest
+         * @description Require the objective shown on the requesting client.
+         */
+        DismissGoalRequest: {
+            /** Objective */
+            objective: string;
+        };
+        /**
          * EffortChangeBodyResponse
          * @description Represent an effort-change entry body.
          */
@@ -3093,6 +3132,8 @@ export interface components {
             notifications_muted: boolean;
             /** Tasks Hidden */
             tasks_hidden: boolean;
+            /** Goal Hidden */
+            goal_hidden: boolean;
         };
         /**
          * SessionResponse
@@ -5606,6 +5647,50 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["DialogDraftRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    dismiss_goal_api_sessions__session_id__application_dismiss_goal_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DismissGoalRequest"];
             };
         };
         responses: {
