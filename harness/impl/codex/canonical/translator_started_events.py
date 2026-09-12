@@ -6,7 +6,10 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
-from harness.impl.codex.canonical import translator_dependencies as dependencies
+from harness.impl.codex.canonical import (
+    translator_call_recovery,
+    translator_dependencies as dependencies,
+)
 from harness.impl.codex.canonical.translator_core_values import (
     SHELL_SUBJECT,
     SKILL_SUBJECT,
@@ -165,9 +168,11 @@ def call_from_line(
 
     """
     try:
-        record = dependencies.translator_codex_dependencies.rollout.parse_line(line.decode())
+        record = translator_call_recovery.requested_call(line, call_id)
     except (UnicodeDecodeError, dependencies.translator_service_dependencies.ValidationError):
         return None
+    if isinstance(record, dependencies.record_canonical_namespaces.record_actor_records.ToolBatchRecord):
+        return translator_call_recovery.batch_call(record, call_id)
     if (
         not isinstance(
             record,

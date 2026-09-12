@@ -92,8 +92,8 @@ class _CodexToolResultTranslator(_CodexToolCallTranslator):
             return []
         continued_shell = self._continuation_shells.get((source_key, call_id))
         if continued_shell is not None:
-            return self._continued_shell_result(record_source, source_key, continued_shell, record)
-        if self._collaboration_call(record_source.raw_event, call_id) is not None:
+            return self._continued_command_result(record_source, continued_shell, record)
+        if (source_key, call_id) in self._collaboration_calls:
             return []
         call_record = self._call_record(record_source.raw_event, call_id)
         if call_record is None:
@@ -101,6 +101,30 @@ class _CodexToolResultTranslator(_CodexToolCallTranslator):
         return typing.cast("_CodexRecordTailTranslator", self)._known_call_result(  # noqa: SLF001 -- The cast still refers to self.
             record_source, call_id, call_record, record,
         )
+
+    def _continued_command_result(
+        self,
+        source: finish_dependencies.translator_state_models.RecordSource,
+        shell_id: dependencies.translator_type_dependencies.ids.ShellId,
+        record: dependencies.record_canonical_namespaces.record_tool_records.ExecResultRecord,
+    ) -> list[
+        dependencies.translator_type_dependencies.event_base.CanonicalEvent[
+            dependencies.translator_type_dependencies.event_base.EventPayload
+        ]
+    ]:
+        if record.exit is None:
+            return self._continued_shell_result(source, source.source_key, shell_id, record)
+        if finish_dependencies.translator_identity.SourceShellKey(source.source_key, shell_id) in self._finished_shells:
+            return []
+        context = finish_dependencies.translator_state_models.ShellResultContext(
+            source, source.source_key, shell_id, None,
+        )
+        process = finish_dependencies.translator_state_models.ShellProcess(
+            dependencies.translator_codex_dependencies.support.exit_code(record.exit),
+            dependencies.translator_id_dependencies.ids_session_types.CodexShellId(""),
+            yielded_with_identity=False,
+        )
+        return self._finished_shell_result(context, process, record)
 
     def _command_completed(
         self,
@@ -124,9 +148,11 @@ class _CodexToolResultTranslator(_CodexToolCallTranslator):
         self,
         context: finish_dependencies.translator_state_models.CommandCompletion,
     ) -> finish_dependencies.translator_state_models.ResolvedCompletedShell | None:
-        shell_id = self._process_shell(context.source.raw_event, context.record.process_id)
+        shell_id = self._process_shell(context.source.raw_event, context.record.process_id, recover=False)
         if shell_id is None:
             shell_id = self._pending_exec_shell_for_command(context.source.raw_event, context.record.command)
+        if shell_id is None:
+            shell_id = self._process_shell(context.source.raw_event, context.record.process_id)
         if shell_id is None:
             shell_id = self._only_pending_exec_shell(context.source_key)
         if shell_id is None:

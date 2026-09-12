@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import contextlib
 import pathlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import BinaryIO
 
 from harness.impl.codex.canonical import translator_batch_results, translator_dependencies as dependencies
@@ -129,6 +129,9 @@ def command_texts(native_command: tuple[str, ...]) -> set[str]:
 class _PendingExecRecovery:
     command_texts: set[str]
     pending: list[dependencies.record_canonical_namespaces.record_tool_records.ExecRecord]
+    batches: list[dependencies.record_canonical_namespaces.record_actor_records.ToolBatchRecord] = field(
+        default_factory=list,
+    )
 
     def read(self, source: BinaryIO, end_position: int) -> None:
         """Read complete records up to the requested byte position."""
@@ -142,12 +145,15 @@ class _PendingExecRecovery:
         self,
         record: dependencies.record_canonical_namespaces.record_terminal_records.RolloutRecord | None,
     ) -> None:
+        if isinstance(record, dependencies.record_canonical_namespaces.record_actor_records.ToolBatchRecord):
+            self._observe_batch(record)
+            return
         if isinstance(record, dependencies.record_canonical_namespaces.record_tool_records.ExecRecord):
             if read_skill_name(record.cmd) is None and record.cmd in self.command_texts:
                 self.pending.append(record)
             return
         if isinstance(record, dependencies.record_canonical_namespaces.record_tool_records.ExecResultRecord):
-            self._remove_result(record)
+            self._observe_result(record)
             return
         if (
             isinstance(
@@ -157,6 +163,26 @@ class _PendingExecRecovery:
             and record.command
         ) and self.command_texts & command_texts(record.command) and self.pending:
             self.pending.pop(0)
+
+    def _observe_batch(
+        self, record: dependencies.record_canonical_namespaces.record_actor_records.ToolBatchRecord,
+    ) -> None:
+        if record.call_id is not None:
+            self.batches.append(record)
+        for action in record.actions:
+            self.observe(action)
+
+    def _observe_result(
+        self, record: dependencies.record_canonical_namespaces.record_tool_records.ExecResultRecord,
+    ) -> None:
+        for batch in self.batches:
+            if batch.call_id != record.call_id:
+                continue
+            self.batches.remove(batch)
+            for nested in translator_batch_results.command_results(batch, record):
+                self.observe(nested)
+            break
+        self._remove_result(record)
 
     def _observe_line(self, line: bytes) -> None:
         try:

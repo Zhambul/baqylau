@@ -257,6 +257,8 @@ class _CodexPendingShells(_CodexTranslationLifecycle):
         self,
         raw_event: dependencies.translator_service_dependencies.raw_events.RawEvent,
         process_id: dependencies.translator_id_dependencies.ids_session_types.CodexShellId,
+        *,
+        recover: bool = True,
     ) -> dependencies.translator_type_dependencies.ids.ShellId | None:
         """Resolve a Codex process after the application restarts.
 
@@ -274,6 +276,8 @@ class _CodexPendingShells(_CodexTranslationLifecycle):
         try:
             return self._process_shells[source_key, process_id]
         except KeyError:
+            if not recover:
+                return None
             end_position = runtime_dependencies.translator_tool_paths.source_position(raw_event.source_position)
             if end_position is None:
                 return None
@@ -1253,10 +1257,9 @@ class _CodexToolCallTranslator(_CodexActivityTranslator):
             dependencies.translator_type_dependencies.event_base.EventPayload
         ]
     ]:
-        if (
-            runtime_dependencies.translator_indexes.has_shell(self._finished_shells, source_key, shell_id)
-            or not record.output
-        ):
+        if runtime_dependencies.translator_indexes.has_shell(self._finished_shells, source_key, shell_id):
+            return []
+        if not record.output:
             return []
         ordinal = int(source.raw_event.source_position)
         payload = dependencies.translator_domain_events.event_shell.ShellProgressed(
