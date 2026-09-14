@@ -228,6 +228,7 @@ agents_states  # records.py CollabAgentToolCallItem
 image_url  # records.py ContentPart
 queries  # records.py WebSearchAction / WebSearchCallAction
 author  # records.py CompactedHistoryItem
+retained_context  # records.py CompactedPayload foreign metadata
 workdir  # records.py ExecArguments
 yield_time_ms  # records.py ExecArguments / StdinArguments
 max_output_tokens  # records.py ExecArguments / StdinArguments

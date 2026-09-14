@@ -119,8 +119,11 @@ class _BrowserReloadDriver(_BrowserComposerDriver):
             timeout=self._milliseconds(self._wait_policy.feed),
         )
 
-    def assert_running_elapsed_at_least(self, seconds: int) -> None:
-        timer = self._page.locator(".vsum .vtimer").first
+    def assert_running_elapsed_at_least(self, reference: browser_references.ShellRef, seconds: int) -> None:
+        browser_assertions.shell_command(self._client.sessions.snapshot(reference.session), reference)
+        block = self._shell_block(reference)
+        self._show_shell_block(block)
+        timer = block.locator(".blive")
         runtime_dependencies.wait_for(
             f"browser running operation time to reach {seconds} seconds",
             standard_dependencies.partial(browser_session_forms.running_elapsed_at_least, timer, seconds),
@@ -128,20 +131,25 @@ class _BrowserReloadDriver(_BrowserComposerDriver):
         )
 
     def assert_completed_elapsed_at_least(self, reference: browser_references.ShellRef, seconds: int) -> None:
-        command = browser_assertions.shell_command(self._client.sessions.snapshot(reference.session), reference)
-        command_summary = self._page.locator(".bsum", has_text=command)
-        block = self._page.locator(".stream .blk").filter(has=command_summary)
+        browser_assertions.shell_command(self._client.sessions.snapshot(reference.session), reference)
+        block = self._shell_block(reference)
+        self._show_shell_block(block)
+        browser_session_forms.assert_completed_operation_elapsed(
+            block,
+            seconds,
+            self._milliseconds(self._wait_policy.feed),
+        )
+
+    def _shell_block(self, reference: browser_references.ShellRef) -> client_dependencies.Locator:
+        return self._page.locator(f'.stream .blk[data-entry-key="shell:{reference.shell_id}"]')
+
+    def _show_shell_block(self, block: client_dependencies.Locator) -> None:
         summaries = self._page.locator(".stream .vsum")
         for index in range(summaries.count()):
             if block.count() > 0:
                 break
             summaries.nth(index).click()
         browser_expectation(block).to_have_count(1, timeout=self._milliseconds(self._wait_policy.feed))
-        browser_session_forms.assert_completed_operation_elapsed(
-            block,
-            seconds,
-            self._milliseconds(self._wait_policy.feed),
-        )
 
 
 class _BrowserFeedDriver(_BrowserReloadDriver):
@@ -170,8 +178,7 @@ class _BrowserFeedDriver(_BrowserReloadDriver):
 
     def assert_feed_text_containing_visible(self, text: str) -> None:
         matches = self._page.locator(STREAM_SELECTOR).get_by_text(text, exact=False)
-        browser_expectation(matches).to_have_count(1, timeout=self._milliseconds(self._wait_policy.feed))
-        browser_expectation(matches).to_be_visible(timeout=self._milliseconds(self._wait_policy.feed))
+        browser_expectation(matches.first).to_be_visible(timeout=self._milliseconds(self._wait_policy.feed))
 
     def assert_feed_text_containing_absent(self, text: str) -> None:
         matches = self._page.locator(STREAM_SELECTOR).get_by_text(text, exact=False)

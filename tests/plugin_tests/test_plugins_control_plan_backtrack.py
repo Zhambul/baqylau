@@ -22,6 +22,22 @@ from tests.plugin_tests.control_driver_support import (
     CursorScreenDriver,
 )
 
+IMPLEMENTATION_CONFIRM_KEY_COUNT = 2
+
+
+class _ImplementationPromptDriver(CursorScreenDriver):
+    def send_key(self, window: domain_ids.WindowId, *pressed: str) -> bool:
+        """Clear the implementation prompt after the second Enter key.
+
+        Returns:
+            True.
+
+        """
+        delivered = super().send_key(window, *pressed)
+        if len(self.keys) == IMPLEMENTATION_CONFIRM_KEY_COUNT:
+            self.screen = "Working"
+        return delivered
+
 
 @pytest.mark.parametrize(
     (fixture.SCREEN, "keys"),
@@ -61,6 +77,26 @@ def test_claude_plan_decision_uses_cursor(
 
     assert outcome == plan_models.Decided("Yes, and bypass permissions")
     assert driver.keys == keys
+
+
+def test_claude_plan_submits_confirmation() -> None:
+    """Verify Claude submits the new implementation confirmation prompt."""
+    driver = _ImplementationPromptDriver(
+        "Would you like to proceed?\n\u276f 1. Yes, and bypass permissions",
+        {
+            (fixture.ENTER,): "\u276f Implement the plan.",
+        },
+    )
+
+    plandialog.decide(
+        driver,
+        domain_ids.WindowId(fixture.WINDOW_ONE_ID),
+        fixture.ONE_TEXT,
+        "Yes, and bypass permissions",
+        sleep=lambda _seconds: None,
+    )
+
+    assert driver.keys == [fixture.ENTER, fixture.ENTER]
 
 
 def test_claude_plan_feedback_uses_cursor() -> None:

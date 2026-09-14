@@ -3,6 +3,7 @@
 
 from harness.impl.claude_code.canonical import records
 from harness.impl.claude_code.canonical.transcript_commands import (
+    bare_compact_command as _bare_compact_command,
     command_caveat as _command_caveat,
     command_standard_output as _command_standard_output,
     command_text as _command_text,
@@ -79,6 +80,9 @@ def _ordinary_user_text(
     command_name, command_arguments = _command_wrapper(content)
     if command_name:
         return SlashCommandTranscriptRecord(command_name, command_arguments, _command_text(content))
+    command_name, command_arguments = _bare_compact_command(content)
+    if command_name:
+        return SlashCommandTranscriptRecord(command_name, command_arguments, content.strip())
     if _command_caveat(content) or _command_standard_output(content):
         return None
     injected = _injected(user_record, content)

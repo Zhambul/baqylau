@@ -112,7 +112,7 @@ def _late_status(
         return assignment_state
     if isinstance(payload, event_telemetry.CompactionStarted):
         return aggregate_state.with_actor(replace(actor, status=actor_state.ActorStatus.WORKING))
-    if _is_finished_work(payload):
+    if isinstance(payload, event_telemetry.CompactionFinished) or _is_finished_work(payload):
         return aggregate_state.with_actor(
             replace(actor, status=_status_after_work_settled(actor)),
         )

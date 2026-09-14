@@ -58,7 +58,7 @@ def slash_command(
     """
     name = record.name.lstrip("/").strip().lower()
     selection = record.arguments.strip()
-    if name in {"clear", "rename"}:
+    if name in {"clear", "compact", "rename"}:
         return []
     if _is_selection_command(name, selection):
         return _selection_command_events(source, name, selection, semantics)

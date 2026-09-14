@@ -42,8 +42,8 @@ class ProcessTree:
 
         """
         children: dict[int, list[WindowProcess]] = {}
-        for process in psutil.process_iter(PROCESS_FIELDS):
-            with suppress(psutil.Error, OSError):
+        for process in psutil.process_iter():
+            with suppress(psutil.Error, OSError, SystemError):
                 _record(children, process)
         return cls(children)
 
@@ -70,7 +70,7 @@ class ProcessTree:
 
 
 def _record(children: dict[int, list[WindowProcess]], process: psutil.Process) -> None:
-    described = process.info
+    described = process.as_dict(attrs=PROCESS_FIELDS)
     parent_id = int(described["ppid"] or 0)
     command = tuple(described["cmdline"] or ())
     found = WindowProcess(int(described["pid"]), command)

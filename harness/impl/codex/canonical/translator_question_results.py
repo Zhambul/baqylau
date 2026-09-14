@@ -33,11 +33,11 @@ def question_result(
     attention_id = dependencies.translator_id_dependencies.ids_conversation.attention_id_from_codex_call(
         ask_record.call_id,
     )
-    if exec_result_record.interrupted:
-        answers: tuple[dependencies.translator_domain_events.attention.AttentionAnswer, ...] = ()
-    else:
+    answers: tuple[dependencies.translator_domain_events.attention.AttentionAnswer, ...] = ()
+    if not exec_result_record.interrupted:
         document = _ask_result_document(exec_result_record.output)
-        answers = () if document is None else _question_answers(ask_record, document)
+        if document is not None and document.answers.root:
+            answers = _question_answers(ask_record, document)
     payload = dependencies.translator_domain_values.event_work.QuestionAnswered(attention_id, answers, None)
     return [
         dependencies.translator_codex_dependencies.support.event(

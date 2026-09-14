@@ -87,9 +87,7 @@ class FakeRemoteScreen:
     """Provide screen operations for a fake remote."""
 
     tree: list[dict[str, JsonValue]] | None
-    focused: bool
     screen_text: str
-    _focus_trees: list[list[KittyOSWindow] | None]
     _read_requests: list[tuple[WindowId, str, bool]]
 
     def ls(self) -> list[KittyOSWindow] | None:
@@ -102,16 +100,6 @@ class FakeRemoteScreen:
         if self.tree is None:
             return None
         return TypeAdapter(list[KittyOSWindow]).validate_python(self.tree)
-
-    def app_focused(self, tree: list[KittyOSWindow] | None = None) -> bool:
-        """Return the configured focus state.
-
-        Returns:
-            The configured focus state.
-
-        """
-        self._focus_trees.append(tree)
-        return self.focused
 
     def read_text(
         self,
@@ -139,10 +127,8 @@ class FakeRemote(FakeRemoteInput, FakeRemoteScreen, KittyRemote):
         self.raw_calls: list[tuple[str, KittyRcPayload, bool]] = []
         self.tree: list[dict[str, JsonValue]] | None = None if tree is None else list(tree)
         self.printed = printed
-        self.focused = False
         self.screen_text = "screen text"
         self._capture_timeouts: list[float | None] = []
-        self._focus_trees: list[list[KittyOSWindow] | None] = []
         self._read_requests: list[tuple[WindowId, str, bool]] = []
         self._raw_timeouts: list[float | None] = []
 

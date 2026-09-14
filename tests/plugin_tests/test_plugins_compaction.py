@@ -92,6 +92,11 @@ def test_codex_rollout_compaction_boundary() -> None:
                     "guardian_history": [
                         {fixture.TYPE_FIELD: fixture.MESSAGE_FIELD, "role": "user", "content": []},
                     ],
+                    "retained_context": {
+                        "verified_answers": [],
+                        "use_defaults": True,
+                        "next_order": 0,
+                    },
                     "compaction_response_id": "compact-response",
                     "latest_token_usage_record": {
                         "thread_id": "thread-one",

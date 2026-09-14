@@ -166,6 +166,62 @@ def test_codex_interrupted_question_resolves() -> None:
     assert answer.feedback is None
 
 
+def test_codex_empty_question_result_resolves() -> None:
+    """Verify an empty codex question result resolves without answers."""
+    translator = CodexCanonicalTranslator()
+    translator.translate(
+        raw_event(
+            {
+                fixture.TYPE_FIELD: fixture.RESPONSE_ITEM,
+                fixture.PAYLOAD_FIELD: {
+                    fixture.TYPE_FIELD: fixture.FUNCTION_CALL_ID,
+                    fixture.NAME_FIELD: fixture.REQUEST_USER_INPUT_ID,
+                    fixture.CALL_ID_FIELD: "ask-dismissed",
+                    fixture.ARGUMENTS_FIELD: json.dumps(
+                        {
+                            fixture.QUESTIONS_FIELD: [
+                                {
+                                    fixture.ID_FIELD: "scope",
+                                    fixture.HEADER_FIELD: "Scope",
+                                    fixture.QUESTION_FIELD: "Which scope?",
+                                    fixture.OPTIONS_FIELD: [
+                                        {
+                                            fixture.LABEL_FIELD: "Full",
+                                            fixture.DESCRIPTION_FIELD: "Use the full scope",
+                                        },
+                                    ],
+                                },
+                            ],
+                        },
+                    ),
+                },
+            },
+            harness=CODEX_HARNESS,
+            source_type=fixture.ROLLOUT_SOURCE,
+            raw_event_id="ask-dismissed",
+        ),
+    )
+    resolved = translator.translate(
+        raw_event(
+            {
+                fixture.TYPE_FIELD: fixture.RESPONSE_ITEM,
+                fixture.PAYLOAD_FIELD: {
+                    fixture.TYPE_FIELD: fixture.FUNCTION_CALL_OUTPUT_ID,
+                    fixture.CALL_ID_FIELD: "ask-dismissed",
+                    fixture.OUTPUT_FIELD: json.dumps({fixture.ANSWERS_FIELD: {}}),
+                },
+            },
+            harness=CODEX_HARNESS,
+            source_type=fixture.ROLLOUT_SOURCE,
+            raw_event_id="answer-dismissed",
+        ),
+    )
+
+    answer = payloads(resolved, event_work.QuestionAnswered)[0].payload
+    assert answer.answers == ()
+    assert answer.feedback is None
+
+
 def test_codex_question_result_replaces_native() -> None:
     """Verify codex question result replaces native free text labels."""
     translator = CodexCanonicalTranslator()

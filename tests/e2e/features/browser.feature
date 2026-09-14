@@ -234,7 +234,8 @@ Feature: the browser controls real harness sessions
     And browser session form "parked session picker" offers session "primary"
     When I resume session "primary" from browser session form "parked session picker" as turn "after browser resume" with prompt
       """
-      If you remember browser-resume-824, reply only with BROWSER_RESUMED.
+      Read the earlier user prompt in this resumed conversation. It contains
+      the marker browser-resume-824. Reply only with BROWSER_RESUMED.
       """
     Then turn "after browser resume" completes
     And turn "after browser resume" has final answer 'BROWSER_RESUMED'
@@ -299,9 +300,9 @@ Feature: the browser controls real harness sessions
       """
     And I name the only running command in turn "timed work" containing '<release_marker>' "timed command"
     And I open session "primary" in the browser
-    Then the browser running operation time is at least 3 seconds
+    Then the browser running operation time for command "timed command" is at least 3 seconds
     When I reload browser session "primary"
-    Then the browser running operation time is at least 3 seconds
+    Then the browser running operation time for command "timed command" is at least 3 seconds
     When I release active browser work in session "primary" with marker "<release_marker>"
     Then turn "timed work" completes
     And turn "timed work" has final answer 'BROWSER_TIMED_DONE'

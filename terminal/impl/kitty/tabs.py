@@ -52,8 +52,7 @@ class KittyTabs(TerminalTabs):
 
         """
         arguments = ["launch", "--type=tab", "--cwd", tab_open_request.working_directory]
-        if self.kitty_remote.app_focused():
-            arguments.append("--keep-focus")
+        arguments.append("--keep-focus")
         for environment_variable in tab_open_request.environment:
             arguments.extend(("--env", f"{environment_variable.name}={environment_variable.content}"))
         printed = self.kitty_remote.capture(*arguments, *tab_open_request.command)

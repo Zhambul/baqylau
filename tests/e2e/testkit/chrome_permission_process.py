@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 from api.runtime import ApplicationConfig
 from harness import runtime as harness_runtime
 from tests.e2e.testkit.process import ApplicationProcess
-from tests.harness_names import CLAUDE_CODE_HARNESS, CODEX_HARNESS
+from tests.harness_names import CLAUDE_CODE_HARNESS
 
 if TYPE_CHECKING:
     import pytest
@@ -72,21 +72,11 @@ class ChromeApplicationFactory:
             terminal="pty",
             notify_telegram=False,
             notify_webpush=False,
-            harness_runtime_configs=harness_runtime.HarnessRuntimeConfigs(
-                (
-                    harness_runtime.HarnessRuntimeEntry(
-                        CLAUDE_CODE_HARNESS,
-                        harness_runtime.HarnessRuntimeConfig(
-                            str(wrapper),
-                            self.temporary_path / "claude",
-                        ),
-                    ),
-                    harness_runtime.HarnessRuntimeEntry(
-                        CODEX_HARNESS,
-                        harness_runtime.default_harness_runtime_configs().for_harness(
-                            CODEX_HARNESS,
-                        ),
-                    ),
+            harness_runtime_configs=harness_runtime.default_harness_runtime_configs().updated(
+                CLAUDE_CODE_HARNESS,
+                harness_runtime.HarnessRuntimeConfig(
+                    str(wrapper),
+                    self.temporary_path / "claude",
                 ),
             ),
             base_environment=environment,

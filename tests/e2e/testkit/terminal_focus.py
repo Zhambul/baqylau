@@ -25,9 +25,15 @@ def current_focus(windows: tuple[WindowInfo, ...], current_window_id: WindowId |
     if current_window_id is None:
         msg = "the E2E process has no terminal window"
         raise AssertionError(msg)
+    focused = next(
+        (window for window in windows if window.tab_is_focused and window.is_active_in_tab),
+        None,
+    )
+    if focused is not None:
+        return TerminalFocus(str(focused.window_id), str(focused.tab_id), kitty_focused=True)
     window_id = str(current_window_id)
     found = window_by_id(windows, window_id)
     if found is None:
         msg = f"terminal window {window_id!r} is not on screen"
         raise AssertionError(msg)
-    return TerminalFocus(window_id, str(found.tab_id), found.tab_is_focused)
+    return TerminalFocus(window_id, str(found.tab_id), kitty_focused=False)

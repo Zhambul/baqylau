@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from domain.event_shell import ShellInputProvided
+from domain.event_shell import ShellInputProvided, ShellStarted
 from harness.impl.codex.canonical.translator import CodexCanonicalTranslator
 from harness.models.raw_events import TranslationError
 from tests.harness_names import CODEX_HARNESS
@@ -114,6 +114,69 @@ def test_codex_write_stdin_requires_known_process() -> None:
                 raw_event_id=fixture.STDIN,
             ),
         )
+
+
+def test_codex_write_stdin_links_deferred_process() -> None:
+    """Verify stdin links a deferred process to the one open command."""
+    translator = CodexCanonicalTranslator()
+    started = translator.translate(
+        raw_event(
+            {
+                fixture.TYPE_FIELD: fixture.RESPONSE_ITEM,
+                fixture.PAYLOAD_FIELD: {
+                    fixture.TYPE_FIELD: fixture.CUSTOM_TOOL_CALL_ID,
+                    fixture.NAME_FIELD: fixture.EXEC,
+                    fixture.CALL_ID_FIELD: fixture.COMMAND_ONE,
+                    fixture.INPUT_FIELD: (
+                        'const r=await tools.exec_command({cmd:"read value",yield_time_ms:30000});'
+                        'if(r.session_id) text(await tools.write_stdin({session_id:r.session_id,chars:""}));'
+                    ),
+                },
+            },
+            harness=CODEX_HARNESS,
+            source_type=fixture.ROLLOUT_SOURCE,
+            raw_event_id=fixture.COMMAND_FIELD,
+        ),
+    )
+    translator.translate(
+        raw_event(
+            {
+                fixture.TYPE_FIELD: fixture.RESPONSE_ITEM,
+                fixture.PAYLOAD_FIELD: {
+                    fixture.TYPE_FIELD: fixture.CUSTOM_TOOL_CALL_OUTPUT_ID,
+                    fixture.CALL_ID_FIELD: fixture.COMMAND_ONE,
+                    fixture.OUTPUT_FIELD: "Script running with cell ID 1\nWall time 31.0 seconds\nOutput:\n",
+                },
+            },
+            harness=CODEX_HARNESS,
+            source_type=fixture.ROLLOUT_SOURCE,
+            raw_event_id=fixture.COMMAND_OUTPUT_ID,
+            source_position=fixture.ELEVEN_TEXT,
+        ),
+    )
+
+    provided = translator.translate(
+        raw_event(
+            {
+                fixture.TYPE_FIELD: fixture.RESPONSE_ITEM,
+                fixture.PAYLOAD_FIELD: {
+                    fixture.TYPE_FIELD: fixture.CUSTOM_TOOL_CALL_ID,
+                    fixture.NAME_FIELD: fixture.EXEC,
+                    fixture.CALL_ID_FIELD: fixture.INPUT_ONE_ID,
+                    fixture.INPUT_FIELD: r'tools.write_stdin({session_id:85766,chars:"yes\n"})',
+                },
+            },
+            harness=CODEX_HARNESS,
+            source_type=fixture.ROLLOUT_SOURCE,
+            raw_event_id=fixture.STDIN,
+            source_position=fixture.TWELVE_TEXT,
+        ),
+    )
+
+    shell_id = payloads(started, ShellStarted)[0].payload.shell_id
+    input_payload = payloads(provided, ShellInputProvided)[0].payload
+    assert input_payload.shell_id == shell_id
+    assert text_of(input_payload.content) == "yes\n"
 
 
 def test_codex_late_write_stdin_does_not_reopen() -> None:

@@ -36,17 +36,12 @@ def test_rgb_rejects_invalid_color_bytes(hexadecimal: str) -> None:
 
 
 def test_tab_launch_focus() -> None:
-    """Verify a tab launch keeps focus only for focused kitty."""
-    background = FakeRemote(printed="7")
-    kitty_plugin(background).tabs.open_tab(TabOpenRequest("/work", ("claude",), ""))
-    focused = FakeRemote(printed="8")
-    focused.focused = True
-    kitty_plugin(focused).tabs.open_tab(TabOpenRequest("/work", ("claude",), ""))
+    """Verify a tab launch always keeps the current focus."""
+    remote = FakeRemote(printed="7")
+    kitty_plugin(remote).tabs.open_tab(TabOpenRequest("/work", ("claude",), ""))
 
-    background_launch = next(call for call in background.calls if call[0] == "launch")
-    focused_launch = next(call for call in focused.calls if call[0] == "launch")
-    assert "--keep-focus" not in background_launch
-    assert "--keep-focus" in focused_launch
+    launch = next(call for call in remote.calls if call[0] == "launch")
+    assert "--keep-focus" in launch
 
 
 def test_tab_colour_validation() -> None:

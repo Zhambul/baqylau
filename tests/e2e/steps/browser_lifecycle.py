@@ -53,10 +53,19 @@ def reload_browser_session(
     browser_session_driver.reload(sessions.get(session_name))
 
 
-@then(parsers.parse("the browser running operation time is at least {seconds:d} seconds"))
-def browser_running_operation_time_is_old_enough(browser_session_driver: BrowserSessionDriver, seconds: int) -> None:
+@then(
+    parsers.parse(
+        'the browser running operation time for command "{command_name}" is at least {seconds:d} seconds',
+    ),
+)
+def browser_running_operation_time_is_old_enough(
+    browser_session_driver: BrowserSessionDriver,
+    shells: Shells,
+    command_name: str,
+    seconds: int,
+) -> None:
     """Check the running-operation age."""
-    browser_session_driver.assert_running_elapsed_at_least(seconds)
+    browser_session_driver.assert_running_elapsed_at_least(shells.get(command_name), seconds)
 
 
 @then(

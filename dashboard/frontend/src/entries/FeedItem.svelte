@@ -220,6 +220,7 @@
 {:else if presentation.kind === 'block'}
   <div
     class={['blk', extraClass]}
+    data-entry-key={presentation.key}
     data-item-group={presentation.group}
     data-open={open ? '1' : '0'}
     data-note={presentation.note ? '1' : undefined}

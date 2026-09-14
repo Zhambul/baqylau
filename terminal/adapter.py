@@ -515,6 +515,8 @@ class _TerminalTabs(_TerminalSessionWindows):
             return SessionTerminalResult(succeeded=True)
         request = tab_models.TabRenameRequest(terminal_values.WindowId(str(window_id)), title)
         response = self._plugin.tabs.rename_tab(request)
+        if not response.succeeded and self.window_for_session(session_id) is None:
+            return SessionTerminalResult(succeeded=True)
         return SessionTerminalResult(response.succeeded, response.reason)
 
     def paint_session_tab(

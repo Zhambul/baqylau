@@ -19,6 +19,8 @@ POLL_SECONDS = 0.15
 STEP_TIMEOUT_SECONDS = 2.5
 SUBMIT_TIMEOUT_SECONDS = 4.0
 DISMISS_ATTEMPTS = 2
+IMPLEMENT_PLAN_PROMPT = "Implement the plan."
+SUBMIT_STEP = "submit"
 
 
 def options(screen_driver: ScreenDriver, window_id: WindowId) -> list[Option]:
@@ -65,7 +67,7 @@ def decide(
     except numberedmenu.SelectionError as error:
         message = "option"
         raise PlanError(message, str(error)) from error
-    _, dialog_closed = screen_actions.poll_until(
+    screen, dialog_closed = screen_actions.poll_until(
         screen_driver,
         window_id,
         plan_screen.dialog_closed,
@@ -73,9 +75,38 @@ def decide(
         sleep,
     )
     if not dialog_closed:
-        message = "submit"
-        raise PlanError(message, "dialog still open after the decision")
+        raise PlanError(SUBMIT_STEP, "dialog still open after the decision")
+    _submit_implementation_prompt(screen_driver, window_id, screen, sleep)
     return Decided(label)
+
+
+def _implementation_prompt_visible(screen: str) -> bool:
+    return any(_is_implementation_prompt(line) for line in screen.splitlines())
+
+
+def _is_implementation_prompt(line: str) -> bool:
+    return line.lstrip().startswith("\u276f") and IMPLEMENT_PLAN_PROMPT in line
+
+
+def _submit_implementation_prompt(
+    screen_driver: ScreenDriver,
+    window_id: WindowId,
+    screen: str,
+    sleep: Callable[[float], None],
+) -> None:
+    if not _implementation_prompt_visible(screen):
+        return
+    if not screen_driver.send_key(window_id, "enter"):
+        raise PlanError(SUBMIT_STEP, "implementation confirmation was not delivered")
+    screen, prompt_closed = screen_actions.poll_until(
+        screen_driver,
+        window_id,
+        lambda current: not _implementation_prompt_visible(current),
+        SUBMIT_TIMEOUT_SECONDS,
+        sleep,
+    )
+    if not prompt_closed:
+        raise PlanError(SUBMIT_STEP, "implementation confirmation stayed in the composer", screen)
 
 
 def feedback(

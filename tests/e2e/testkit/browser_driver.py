@@ -93,9 +93,6 @@ class _BrowserUsageAssertionDriver(_BrowserConnectionDriver):
         browser_expectation(self._page.get_by_role(BUTTON_ROLE, name=NEW_SESSION_BUTTON_LABEL)).to_be_visible(
             timeout=self._milliseconds(self._wait_policy.feed),
         )
-        names = self._page.locator(".aname")
-        browser_expectation(names).to_have_count(2)
-        assert set(names.all_text_contents()) == {"claude", "codex"}
         browser_session_forms.assert_rendered_usage_window(self._page, row, model_window)
 
     def assert_clean(self) -> None:

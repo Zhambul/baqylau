@@ -37,12 +37,12 @@ def _window_position(windows: Sequence[WindowInfo], wanted_window_id: WindowId) 
     raise StopIteration
 
 
-def _pane_open_arguments(pane_open_request: PaneOpenRequest, anchor_tab: str, *, app_focused: bool) -> list[str]:
+def _pane_open_arguments(pane_open_request: PaneOpenRequest, anchor_tab: str) -> list[str]:
     arguments = ["launch", MATCH_OPTION, anchor_tab]
     split_location = "vsplit" if pane_open_request.split == "vertical" else "hsplit"
     arguments.extend((f"--location={split_location}", "--next-to", match.anchor(pane_open_request.anchor)))
     arguments.extend(("--bias", str(pane_open_request.size_percent)))
-    if pane_open_request.keep_focus and app_focused:
+    if pane_open_request.keep_focus:
         arguments.append("--keep-focus")
     arguments.extend(("--cwd", pane_open_request.working_directory or "current"))
     for tag_name, tag_content in pane_open_request.tags.items():
@@ -69,7 +69,7 @@ class KittyPanes(TerminalPanes):
         """
         anchor_tab = match.tab_of(WindowId(pane_open_request.same_tab_as))
         self.kitty_remote.run("goto-layout", MATCH_OPTION, anchor_tab, "splits")
-        arguments = _pane_open_arguments(pane_open_request, anchor_tab, app_focused=self.kitty_remote.app_focused())
+        arguments = _pane_open_arguments(pane_open_request, anchor_tab)
         printed = self.kitty_remote.capture(*arguments, *pane_open_request.command)
         if printed is None:
             return PaneOpenResponse(succeeded=False, window_id=None, reason="terminal pane launch failed")

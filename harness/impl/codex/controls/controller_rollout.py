@@ -70,7 +70,13 @@ def renamed_to(message: str) -> str | None:
     return name or None
 
 
-def _rollout_lines_after(path: str, position: int) -> tuple[str, ...]:
+def rollout_lines_after(path: str, position: int) -> tuple[str, ...]:
+    """Read complete rollout lines after a byte position.
+
+    Returns:
+        The decoded lines.
+
+    """
     if position < 0:
         return ()
     try:
@@ -98,7 +104,7 @@ def rollout_records_after(path: str, position: int) -> tuple[RolloutRecord | Non
 
     """
     records: list[RolloutRecord | None] = []
-    for line in _rollout_lines_after(path, position):
+    for line in rollout_lines_after(path, position):
         try:
             record = rollout.parse_line(line)
         except ValidationError:
@@ -119,7 +125,7 @@ def confirmed_prompt_after(
         True if a user record contains exactly the expected text.
 
     """
-    for line in _rollout_lines_after(path, position):
+    for line in rollout_lines_after(path, position):
         try:
             record = rollout.parse_line(line)
         except ValidationError:

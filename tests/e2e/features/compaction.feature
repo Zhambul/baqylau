@@ -27,6 +27,7 @@ Feature: session compaction has a complete lifecycle
     And compaction "context compaction" has one finished feed entry
     And compaction "context compaction" has <compacted context>
     And compaction "context compaction" leaves its actor ready
+    And the lead in session "primary" has status awaiting_response
     When I send prompt to session "primary" as turn "after compaction"
       """
       Do not inspect files and do not use tools. Your complete response must

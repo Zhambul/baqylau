@@ -3,9 +3,17 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+from unittest.mock import Mock
+
+import psutil
+
 from terminal import processes
 from terminal.impl.kitty import metadata as kitty_metadata, remote_text, remote_tree
 from terminal.models.values import WindowProcess
+
+if TYPE_CHECKING:
+    import pytest
 
 PROGRAM_PROCESS_ID = 100
 SERVER_PROCESS_ID = 200
@@ -13,6 +21,23 @@ ROOT_PROCESS_ID = 1
 CHILD_PROCESS_ID = 2
 GRANDCHILD_PROCESS_ID = 3
 UNKNOWN_PROCESS_ID = 9
+
+
+def test_sample_skips_unreadable_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Skip one protected process and keep the readable process tree."""
+    unreadable = Mock()
+    unreadable.as_dict.side_effect = SystemError("protected process")
+    readable = Mock()
+    readable.as_dict.return_value = {
+        "pid": CHILD_PROCESS_ID,
+        "ppid": ROOT_PROCESS_ID,
+        "cmdline": ["child"],
+    }
+    monkeypatch.setattr(psutil, "process_iter", lambda: iter((unreadable, readable)))
+
+    sampled = processes.ProcessTree.sample()
+
+    assert sampled.descendants(ROOT_PROCESS_ID) == (WindowProcess(CHILD_PROCESS_ID, ("child",)),)
 
 
 def test_kitty_window_reports_its_child_process() -> None:

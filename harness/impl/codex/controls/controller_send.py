@@ -115,7 +115,13 @@ class SendTextHandler(models.contract.ControlHandler):
     ) -> bool:
         if (
             send_state.expected_message == operations.controller_values.PLAN_COMMAND
-            and operations.controller_values.PLAN_MODE_MARKER in (send_state.driver.read_text(window_id) or "")
+            and (
+                operations.controller_values.PLAN_MODE_MARKER in (send_state.driver.read_text(window_id) or "")
+                or any(
+                    operations.controller_rollout_modes.plan_mode_applied_after(position.path, position.position)
+                    for position in send_state.source_positions
+                )
+            )
         ):
             return True
         renamed_to = operations.controller_rollout.renamed_to(send_state.expected_message)

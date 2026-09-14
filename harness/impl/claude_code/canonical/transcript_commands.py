@@ -8,6 +8,7 @@ COMMAND_ARGUMENTS = re.compile(r"<command-args>\s*([^<]*?)\s*</command-args>")
 COMMAND_STANDARD_OUTPUT = re.compile(r"^\s*<local-command-stdout>")
 COMMAND_CAVEAT = re.compile(r"^\s*<local-command-caveat>")
 COMMAND_OPEN = re.compile(r"^\s*<command-(?:message|name|args)>")
+BARE_COMPACT_COMMAND = re.compile(r"/compact(?:\s+([\s\S]*))?", re.IGNORECASE)
 
 
 def command_wrapper(content: str) -> tuple[str, str]:
@@ -50,6 +51,19 @@ def command_text(content: str) -> str:
     if not name:
         return ""
     return f"{name} {arguments}" if arguments else name
+
+
+def bare_compact_command(content: str) -> tuple[str, str]:
+    """Read a bare compact command and its optional instructions.
+
+    Returns:
+        The compact command name and instructions.
+
+    """
+    match = BARE_COMPACT_COMMAND.fullmatch(content.strip())
+    if match is None:
+        return "", ""
+    return "/compact", (match.group(1) or "").strip()
 
 
 def command_caveat(content: str) -> bool:

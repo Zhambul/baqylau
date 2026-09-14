@@ -6,6 +6,8 @@ from __future__ import annotations
 from tests import canonical_sessiondata_fixtures as session_fixtures, canonical_sessiondata_values as session_values
 from tests.canonical_sessiondata_components import domain as session_domain
 
+COMPACTED_ITEMS = 200
+
 
 def test_unanswered_question_outlives_work_that() -> None:
     """Verify an unanswered question outlives the work that finished after it.
@@ -76,6 +78,31 @@ def test_compaction_is_work() -> None:
     """Verify compaction is work."""
     assert (
         session_fixtures.status_after(session_domain.event_telemetry.CompactionStarted(1000))
+        == session_values.WORKING_STATE
+    )
+
+
+def test_finished_compaction_settles_status() -> None:
+    """Verify finished compaction settles status outside an active turn."""
+    assert (
+        session_fixtures.status_after(
+            session_fixtures.succeeded_turn(),
+            session_domain.event_telemetry.CompactionStarted(1000),
+            session_domain.event_telemetry.CompactionFinished(1000, COMPACTED_ITEMS, None),
+        )
+        == session_values.AWAITING_RESPONSE_STATE
+    )
+
+
+def test_compaction_finish_keeps_turn_working() -> None:
+    """Verify finished compaction does not settle an active turn."""
+    assert (
+        session_fixtures.status_after(
+            session_fixtures.succeeded_turn(),
+            session_domain.event_conversation.TurnStarted(None),
+            session_domain.event_telemetry.CompactionStarted(1000),
+            session_domain.event_telemetry.CompactionFinished(1000, COMPACTED_ITEMS, None),
+        )
         == session_values.WORKING_STATE
     )
 

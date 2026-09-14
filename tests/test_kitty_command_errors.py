@@ -73,16 +73,3 @@ def test_enter_command_failure(monkeypatch: pytest.MonkeyPatch, remote: KittyRem
     monkeypatch.setattr(remote, "insert_text", Mock(return_value=True))
     monkeypatch.setattr(subprocess, "run", Mock(side_effect=OSError("unavailable")))
     assert not remote.send_text(WINDOW_ID, DRAFT)
-
-
-def test_focus_without_tree(monkeypatch: pytest.MonkeyPatch, remote: KittyRemote) -> None:
-    """Report no focus when the window query has no result."""
-    monkeypatch.setattr(remote, QUERY_COMMAND, Mock(return_value=None))
-    assert not remote.app_focused()
-
-
-def test_focus_preserves_code_errors(monkeypatch: pytest.MonkeyPatch, remote: KittyRemote) -> None:
-    """Do not hide an unexpected window query failure."""
-    monkeypatch.setattr(remote, QUERY_COMMAND, Mock(side_effect=RuntimeError("query defect")))
-    with pytest.raises(RuntimeError, match="query defect"):
-        remote.app_focused()

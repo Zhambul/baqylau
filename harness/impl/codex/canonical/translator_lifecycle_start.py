@@ -1228,6 +1228,13 @@ class _CodexActivityTranslator(_CodexTurnTranslator):
         source_key = source.source_key
         shell_id = self._process_shell(source.raw_event, record.process_id)
         if shell_id is None:
+            # A deferred code cell can return the process ID through `wait`.
+            # The next stdin call is the first record that links this ID to the
+            # one open command.
+            shell_id = self._only_pending_exec_shell(source_key)
+            if shell_id is not None:
+                self._process_shells[source_key, record.process_id] = shell_id
+        if shell_id is None:
             msg = f"Codex write_stdin references unknown process session: {record.process_id}"
             raise dependencies.translator_service_dependencies.raw_events.TranslationError(
                 msg,

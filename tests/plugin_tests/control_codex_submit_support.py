@@ -43,6 +43,29 @@ def submit_codex_plan(
     return response
 
 
+def submit_codex_plan_rollout(
+    native_submit: TextSubmitCallback,
+    source: Path,
+    request: terminal_input.TextSubmitRequest,
+) -> terminal_input.TextSubmitResponse:
+    """Submit text and record the Codex plan-mode setting.
+
+    Returns:
+        The response from the supplied submission callback.
+
+    """
+    response = native_submit(request)
+    with source.open("a", encoding=fixture.TEXT_ENCODING) as rollout_file:
+        rollout_file.write(json.dumps({
+            fixture.TYPE_FIELD: fixture.EVENT_MSG_ID,
+            fixture.PAYLOAD_FIELD: {
+                fixture.TYPE_FIELD: "thread_settings_applied",
+                "thread_settings": {"collaboration_mode": {"mode": "plan"}},
+            },
+        }) + "\n")
+    return response
+
+
 def submit_codex_rename(
     native_submit: TextSubmitCallback,
     rename_state: SimpleNamespace,

@@ -49,16 +49,3 @@ class KittyQueryOperations(KittySocketOperations):
             return TypeAdapter(list[KittyOSWindow]).validate_json(output)
         except ValidationError:
             return None
-
-    def app_focused(
-        self: _KittyQueryClient,
-        tree: list[KittyOSWindow] | None = None,
-    ) -> bool:
-        """Return true when a kitty window is focused.
-
-        Returns:
-            True when a kitty window is focused.
-
-        """
-        visible_tree = self.ls() if tree is None else tree
-        return any(os_window.is_focused for os_window in visible_tree or [])

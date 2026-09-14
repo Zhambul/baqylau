@@ -78,6 +78,7 @@ class CompactedPayload(BaseModel):
     message: str | None = None
     replacement_history: list[CompactedHistoryItem] | None = None
     guardian_history: list[CompactedHistoryItem] | None = None
+    retained_context: ForeignMetadata | None = None
     compaction_response_id: CodexResponseId | None = None
     latest_token_usage_record: TokenUsageRecordPayload | None = None
     window_id: str | int | None = None
