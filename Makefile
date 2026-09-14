@@ -67,12 +67,17 @@ test-browser-drift: build-frontend browser-live-e2e
 browser-live-e2e:
 	BAQYLAU_E2E_BROWSER=1 $(PY) -m pytest tests/e2e/browser -q -x -n $(E2E_WORKERS) --dist $(E2E_DIST) --maxschedchunk 1 $(E2E)
 
+terminal-live-e2e:
+	kitten @ ls > /dev/null
+	BAQYLAU_E2E_REAL_TERMINAL=1 $(PY) -m pytest tests/e2e/real_terminal -q -x -n 0 $(E2E)
+
 # Complete end-to-end gate. Every suite uses its measured parallelism. Suite
 # boundaries stay serial, so one failure stops before the next token-spending
 # layer starts. Playwright rebuilds the frontend before its suite.
 e2e: build-frontend
 	$(MAKE) --no-print-directory test-audit-replay
 	$(MAKE) --no-print-directory test-drift
+	$(MAKE) --no-print-directory terminal-live-e2e
 	$(MAKE) --no-print-directory browser-live-e2e
 	$(MAKE) --no-print-directory browser-static-e2e
 
@@ -140,4 +145,4 @@ deadcode:
 		--exclude "$(DEADCODE_EXCLUDES)" \
 		--ignore-decorators "$(DEADCODE_DECORATORS)"
 
-.PHONY: frontend-install build-frontend test-frontend test-browser browser-static-e2e test-python test test-seq test-all e2e test-drift test-browser-drift browser-live-e2e test-par lint lint-fix typecheck wemake deadcode
+.PHONY: frontend-install build-frontend test-frontend test-browser browser-static-e2e test-python test test-seq test-all e2e test-drift test-browser-drift browser-live-e2e terminal-live-e2e test-par lint lint-fix typecheck wemake deadcode

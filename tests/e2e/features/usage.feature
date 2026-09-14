@@ -10,3 +10,4 @@ Feature: harness usage reaches global application state
       | harness     |
       | codex       |
       | claude_code |
+      | opencode2   |

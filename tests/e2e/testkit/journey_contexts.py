@@ -48,16 +48,19 @@ class IsolatedHarnessHomes:
 
     codex: Path
     claude: Path
+    state: Path
 
     def launch_environment(self) -> tuple[EnvironmentVariable, ...]:
         """Build the environment for a session with isolated harness files.
 
         Returns:
-            The Codex home, Claude home, and Claude managed settings paths.
+            The Codex home, Claude home, Claude managed settings, and state paths.
 
         """
         return (
             EnvironmentVariable("CODEX_HOME", str(self.codex)),
             EnvironmentVariable("CLAUDE_CONFIG_DIR", str(self.claude)),
             EnvironmentVariable("CLAUDE_CODE_MANAGED_SETTINGS_PATH", str(self.claude / "managed-settings.json")),
+            # OpenCode2 keeps the effort of a new session in the state home.
+            EnvironmentVariable("XDG_STATE_HOME", str(self.state)),
         )

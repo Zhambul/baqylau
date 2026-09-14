@@ -20,11 +20,13 @@ Feature: completed session activity reaches insights and resume state
     And resumable list "workspace history" contains session "primary"
 
     Examples:
-      | harness     | model        | worker   |
-      | codex       | gpt-5.6-luna | lead     |
-      | codex       | gpt-5.6-luna | subagent |
-      | claude_code | haiku        | lead     |
-      | claude_code | haiku        | subagent |
+      | harness     | model                           | worker   |
+      | codex       | gpt-5.6-luna                    | lead     |
+      | codex       | gpt-5.6-luna                    | subagent |
+      | claude_code | haiku                           | lead     |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | lead     |
+      | claude_code | haiku                           | subagent |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | subagent |
 
   Scenario Outline: resume history supports search, activity state, and newest-first order
     Given session configuration "older" uses <harness> with model <model> and low effort
@@ -61,6 +63,7 @@ Feature: completed session activity reaches insights and resume state
     Then resumable list "ID search" contains only session "older"
 
     Examples:
-      | harness     | model        | older_title                    | newer_title                    |
-      | codex       | gpt-5.6-luna | Codex resume older title 9021 | Codex resume newer title 9021 |
-      | claude_code | haiku        | Claude resume older title 9021 | Claude resume newer title 9021 |
+      | harness     | model                           | older_title                       | newer_title                       |
+      | codex       | gpt-5.6-luna                    | Codex resume older title 9021     | Codex resume newer title 9021     |
+      | claude_code | haiku                           | Claude resume older title 9021    | Claude resume newer title 9021    |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | OpenCode2 resume older title 9021 | OpenCode2 resume newer title 9021 |

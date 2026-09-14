@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
+from harness.impl.opencode2.sources import HARNESS as OPENCODE_HARNESS
 from tests.e2e import (
     e2e_fixture_dependencies as fixture_dependencies,
     e2e_fixture_journeys,
@@ -96,6 +97,9 @@ def isolated_harness_runtime_configs(
 
     """
     installed = fixture_dependencies.harness.harness_runtime.default_harness_runtime_configs()
+    opencode_settings = isolated_codex_home.parent / "opencode2-settings.json"
+    # Keep one native search provider for the fixed-query live checks.
+    opencode_settings.write_text('{"websearch":{"provider":"tavily"}}', encoding="utf-8")
     return fixture_dependencies.harness.harness_runtime.HarnessRuntimeConfigs((
         fixture_dependencies.harness.harness_runtime.HarnessRuntimeEntry(
             CLAUDE_CODE_HARNESS,
@@ -109,6 +113,13 @@ def isolated_harness_runtime_configs(
             CODEX_HARNESS,
             fixture_dependencies.harness.harness_runtime.HarnessRuntimeConfig(
                 installed.for_harness(CODEX_HARNESS).executable, isolated_codex_home,
+            ),
+        ),
+        fixture_dependencies.harness.harness_runtime.HarnessRuntimeEntry(
+            OPENCODE_HARNESS,
+            fixture_dependencies.harness.harness_runtime.HarnessRuntimeConfig(
+                installed.for_harness(OPENCODE_HARNESS).executable, isolated_codex_home.parent / "opencode2-events",
+                opencode_settings,
             ),
         ),
     ))

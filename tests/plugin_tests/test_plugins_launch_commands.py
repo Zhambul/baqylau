@@ -13,7 +13,7 @@ from terminal.models.values import SESSION_WINDOW_TAG
 from tests.fake_terminal import FakeTerminal, window
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.native_launch_support import _native_launch_results
-from tests.plugin_tests.support_launch import _test_launcher
+from tests.plugin_tests.support_launch import _StartupTerminal, _test_launcher
 
 if TYPE_CHECKING:
     import pytest
@@ -21,6 +21,9 @@ if TYPE_CHECKING:
 
 CODEX_HARNESS = HarnessName("codex")
 CLAUDE_CODE_HARNESS = HarnessName("claude_code")
+VISIBLE_DRAFT = "This is the last visible prompt line: hello"
+# The native start page is the only screen that draws this logo.
+START_PAGE_LOGO = "█▀▀█ █▀▀█"
 
 
 def test_launchers_build_native_commands(
@@ -115,3 +118,28 @@ def test_harness_that_announces_at_its_first_turn() -> None:
         ),
     )
     assert attached.status == fixture.STARTED
+
+
+def test_launch_checks_native_draft_submission() -> None:
+    """A successful key write must not hide an unchanged native draft."""
+    draft = (
+        f"{START_PAGE_LOGO}\n┃ {VISIBLE_DRAFT}\n"
+        "Build · DeepSeek V4.1 Flash · low\nshift+tab agents  ctrl+p commands"
+    )
+    terminal = _StartupTerminal((draft, draft, "Working  shift+tab agents  ctrl+p commands"))
+    result = _test_launcher(HarnessName("opencode2"), terminal).launch(
+        launch.LaunchRequest(
+            working_directory=fixture.WORK_PATH,
+            initial_text=f"Hidden text above the screen. {VISIBLE_DRAFT}",
+            model=None,
+            effort=None,
+            account_id=None,
+            resume_session_id=None,
+        ),
+    )
+    assert result.status == fixture.STARTED
+    assert [key for _window, key in terminal.keys] == ["enter", "enter"]
+    assert terminal.screen_text == "Working  shift+tab agents  ctrl+p commands"
+    assert EnvironmentVariable(
+        "OPENCODE_CONFIG", "/work/opencode2-settings.json",
+    ) in terminal.opened_tabs[0].environment

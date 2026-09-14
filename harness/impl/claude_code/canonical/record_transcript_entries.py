@@ -18,7 +18,13 @@ from harness.impl.claude_code.ids import (
 
 
 class TeammateIdleNotificationDocument(BaseModel):
-    """The JSON body in one Claude team ``idle_notification`` message."""
+    """The JSON body in one Claude team ``idle_notification`` message.
+
+    `result` arrived with Claude Code 2.1.269 (observed 2026-09-13) and holds
+    the final answer of the teammate. It is listed because this model FORBIDS an
+    unknown field, and a notification it refuses leaves the lead waiting for a
+    subagent that has already finished.
+    """
 
     model_config = FOREIGN
     type: Literal["idle_notification"] = "idle_notification"
@@ -26,6 +32,7 @@ class TeammateIdleNotificationDocument(BaseModel):
     timestamp: str | None = None
     idle_reason: Annotated[str, Field(alias="idleReason")]
     failure_reason: Annotated[str | None, Field(alias="failureReason")] = None
+    result: str | None = None
 
 
 class TeammateMessageBodyHeader(BaseModel):

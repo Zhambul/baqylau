@@ -23,6 +23,9 @@ if TYPE_CHECKING:
 
 START_TIMEOUT_SECONDS = 30.0
 STOP_TIMEOUT_SECONDS = 15.0
+# A harness that keeps state in the state home writes it here, under the data
+# directory of the test application, and not in the file of the person.
+HARNESS_STATE_DIRECTORY = "harness-state"
 HARNESS_PARENT_ENVIRONMENT_VARIABLES = (
     "CLAUDECODE",
     "CLAUDE_CODE_CHILD_SESSION",

@@ -20,7 +20,7 @@ def selection_violations(scenario: feature_scenarios.FeatureScenario) -> tuple[s
     location = feature_scenarios.scenario_location(scenario)
     violations: list[str] = []
     title = scenario.title.casefold()
-    if "codex" in title or "claude code" in title:
+    if any(harness.replace("_", " ") in title for harness in feature_scenarios.HARNESSES):
         violations.append(f"{location} names a harness in the behavior title")
     if FIXED_SESSION.search(scenario.behavior):
         violations.append(f"{location} fixes one harness in session setup")

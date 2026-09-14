@@ -37,6 +37,7 @@ def harness_catalog(
         Harness catalog.
 
     """
+    selected_models = models if harness_catalog_snapshot.models is None else harness_catalog_snapshot.models
     return HarnessCatalogResponse(
         commands=tuple(
             CommandOptionResponse(
@@ -60,7 +61,7 @@ def harness_catalog(
                     for effort in model.efforts
                 ),
             )
-            for model in models
+            for model in selected_models
         ),
         rewind_modes=tuple(
             RewindModeOptionResponse(value=mode.mode, display_name=mode.display_name) for mode in rewind_modes

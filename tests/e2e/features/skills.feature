@@ -12,8 +12,10 @@ Feature: skill execution reaches the session feed
     And work "load communication skill" has final answer 'loaded'
 
     Examples:
-      | harness     | model        | worker   | argument_check                            |
-      | codex       | gpt-5.6-luna | lead     | has no arguments                          |
-      | codex       | gpt-5.6-luna | subagent | has no arguments                          |
-      | claude_code | haiku        | lead     | has arguments 'baqylau-e2e-argument'     |
-      | claude_code | haiku        | subagent | has arguments 'baqylau-e2e-argument'     |
+      | harness     | model                           | worker   | argument_check                       |
+      | codex       | gpt-5.6-luna                    | lead     | has no arguments                     |
+      | codex       | gpt-5.6-luna                    | subagent | has no arguments                     |
+      | claude_code | haiku                           | lead     | has arguments 'baqylau-e2e-argument' |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | lead     | has no arguments                     |
+      | claude_code | haiku                           | subagent | has arguments 'baqylau-e2e-argument' |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | subagent | has no arguments                     |

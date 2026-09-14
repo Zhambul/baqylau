@@ -616,15 +616,17 @@
           disabled={catalogLoading || modelOptions.length === 0}
         />
       </div>
-      <div class="nsfield">
-        <span class="nslabel">effort</span>
-        <CustomSelect
-          bind:value={effort}
-          options={effortOptions}
-          label="effort"
-          disabled={catalogLoading || effortOptions.length === 0}
-        />
-      </div>
+      {#if catalogLoading || effortOptions.length > 0}
+        <div class="nsfield">
+          <span class="nslabel">effort</span>
+          <CustomSelect
+            bind:value={effort}
+            options={effortOptions}
+            label="effort"
+            disabled={catalogLoading}
+          />
+        </div>
+      {/if}
     </div>
 
     <label

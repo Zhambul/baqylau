@@ -12,6 +12,7 @@ Feature: the browser controls real harness sessions
     And I reload browser session "primary"
     And I send browser prompt to session "primary" as turn "after cursor overtake"
       """
+      This is a new status check. Replace the previous status identifier.
       The status identifier for this code task is AFTER_CURSOR_OVERTAKE.
       State that identifier only.
       """
@@ -20,9 +21,10 @@ Feature: the browser controls real harness sessions
     And the browser feed shows text containing 'status identifier for this code task is AFTER_CURSOR_OVERTAKE'
 
     Examples:
-      | harness     | model        |
-      | codex       | gpt-5.6-luna |
-      | claude_code | haiku        |
+      | harness     | model                           |
+      | codex       | gpt-5.6-luna                    |
+      | claude_code | haiku                           |
+      | opencode2   | opencode-go/deepseek-v4.1-flash |
 
   Scenario Outline: usage appears after the first application read misses it
     Given the next browser application read omits usage for <harness>
@@ -33,6 +35,7 @@ Feature: the browser controls real harness sessions
       | harness     |
       | codex       |
       | claude_code |
+      | opencode2   |
 
   Scenario Outline: a new-session draft survives modal close and page reload
     Given session configuration "draft form" uses <harness> with model <model> and low effort
@@ -47,9 +50,10 @@ Feature: the browser controls real harness sessions
     When I close browser session form "restored draft form"
 
     Examples:
-      | harness     | model        |
-      | codex       | gpt-5.6-luna |
-      | claude_code | haiku        |
+      | harness     | model                           |
+      | codex       | gpt-5.6-luna                    |
+      | claude_code | haiku                           |
+      | opencode2   | opencode-go/deepseek-v4.1-flash |
 
   Scenario Outline: each session keeps its composer draft until it is sent
     Given session configuration "primary" uses <harness> with model <model> and low effort
@@ -86,9 +90,10 @@ Feature: the browser controls real harness sessions
     Then the browser composer contains exact draft 'preserve primary draft 732'
 
     Examples:
-      | harness     | model        |
-      | codex       | gpt-5.6-luna |
-      | claude_code | haiku        |
+      | harness     | model                           |
+      | codex       | gpt-5.6-luna                    |
+      | claude_code | haiku                           |
+      | opencode2   | opencode-go/deepseek-v4.1-flash |
 
   Scenario Outline: file diffs use distinct added and removed colors
     Given the file operation fixture does not exist
@@ -111,9 +116,10 @@ Feature: the browser controls real harness sessions
     Then the browser renders added and removed colors for file operation "browser diff operation"
 
     Examples:
-      | harness     | model        | account      | worker   |
-      | codex       | gpt-5.6-luna | no           | lead     |
-      | claude_code | haiku        | no           | subagent |
+      | harness     | model                           | account | worker   |
+      | codex       | gpt-5.6-luna                    | no      | lead     |
+      | claude_code | haiku                           | no      | subagent |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | no      | subagent |
 
   Scenario Outline: a Git worktree and its main checkout share one project group
     Given session configuration "main checkout" uses <harness> with model <model> and low effort in the isolated repository root
@@ -139,9 +145,10 @@ Feature: the browser controls real harness sessions
     Then browser sessions "main checkout" and "linked worktree" share the isolated project group
 
     Examples:
-      | harness     | model        | account      |
-      | codex       | gpt-5.6-luna | no           |
-      | claude_code | haiku        | no           |
+      | harness     | model                           | account |
+      | codex       | gpt-5.6-luna                    | no      |
+      | claude_code | haiku                           | no      |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | no      |
 
   Scenario Outline: a native session name survives parking restart and resume
     Given session configuration "primary" uses <harness> with model <model> and low effort
@@ -177,9 +184,10 @@ Feature: the browser controls real harness sessions
     And the browser session header has title 'Native E2E 738'
 
     Examples:
-      | harness     | model        | account      |
-      | codex       | gpt-5.6-luna | no           |
-      | claude_code | haiku        | no           |
+      | harness     | model                           | account |
+      | codex       | gpt-5.6-luna                    | no      |
+      | claude_code | haiku                           | no      |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | no      |
 
   Scenario Outline: the browser shows one default profile and live Fable usage
     # Harness limit: claude_code only. Fable usage is a Claude Code account feature.
@@ -239,9 +247,10 @@ Feature: the browser controls real harness sessions
     And a fresh application session list does not contain session "primary"
 
     Examples:
-      | harness     | model        | account |
-      | codex       | gpt-5.6-luna | no      |
-      | claude_code | haiku        | no           |
+      | harness     | model                           | account |
+      | codex       | gpt-5.6-luna                    | no      |
+      | claude_code | haiku                           | no      |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | no      |
 
   Scenario Outline: a browser interrupt starts its queued prompt
     Given session configuration "primary" uses <harness> with model <model> and low effort
@@ -275,9 +284,10 @@ Feature: the browser controls real harness sessions
     And session "primary" has no running work
 
     Examples:
-      | harness     | model        |
-      | codex       | gpt-5.6-luna |
-      | claude_code | haiku        |
+      | harness     | model                           |
+      | codex       | gpt-5.6-luna                    |
+      | claude_code | haiku                           |
+      | opencode2   | opencode-go/deepseek-v4.1-flash |
 
   Scenario Outline: operation times keep their event origin after a page reload
     Given session configuration "primary" uses <harness> with model <model> and low effort
@@ -300,9 +310,10 @@ Feature: the browser controls real harness sessions
     Then the browser completed operation time for command "timed command" is at least 3 seconds
 
     Examples:
-      | harness     | model        | release_marker                     |
-      | codex       | gpt-5.6-luna | .baqylau-browser-timer-codex       |
-      | claude_code | haiku        | .baqylau-browser-timer-claude-code |
+      | harness     | model                           | release_marker                     |
+      | codex       | gpt-5.6-luna                    | .baqylau-browser-timer-codex       |
+      | claude_code | haiku                           | .baqylau-browser-timer-claude-code |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | .baqylau-browser-timer-opencode2   |
 
   Scenario Outline: a browser loads older activity from one consistent feed
     Given session configuration "primary" uses <harness> with model <model> and low effort
@@ -330,9 +341,10 @@ Feature: the browser controls real harness sessions
     Then the browser feed shows text containing 'BROWSER-OLDEST-ACTIVITY-731'
 
     Examples:
-      | harness     | model        | account |
-      | codex       | gpt-5.6-luna | no      |
-      | claude_code | haiku        | no           |
+      | harness     | model                           | account |
+      | codex       | gpt-5.6-luna                    | no      |
+      | claude_code | haiku                           | no      |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | no      |
 
   Scenario Outline: browser question cards support answers and discussion
     Given session configuration "primary" uses <harness> with model <model> and low effort
@@ -380,11 +392,13 @@ Feature: the browser controls real harness sessions
     And the browser has 0 asking session badges
 
     Examples:
-      | harness     | model        | account |
-      | codex       | gpt-5.6-luna | no      |
-      | claude_code | haiku        | no           |
+      | harness     | model                           | account |
+      | codex       | gpt-5.6-luna                    | no      |
+      | claude_code | haiku                           | no      |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | no      |
 
   Scenario Outline: browser plan cards support approval and discussion
+    # Harness limit: codex, claude_code only. OpenCode2 has no plan decision control.
     Given session configuration "primary" uses <harness> with model <model> and low effort
     And session configuration "primary" uses <account> account
     When I launch session "primary" as turn "ready for browser plans" with prompt
@@ -426,7 +440,7 @@ Feature: the browser controls real harness sessions
     Examples:
       | harness     | model        | account |
       | codex       | gpt-5.6-luna | no      |
-      | claude_code | haiku        | no           |
+      | claude_code | haiku        | no      |
 
   Scenario Outline: a browser plan card sends feedback where supported
     # Harness limit: claude_code only. Codex does not accept text feedback for a plan decision.
@@ -507,6 +521,7 @@ Feature: the browser controls real harness sessions
     And turn "restore hidden workspace" has final answer 'BROWSER_WORKSPACE_RESTORED'
 
     Examples:
-      | harness     | model        | account |
-      | codex       | gpt-5.6-luna | no      |
-      | claude_code | haiku        | no           |
+      | harness     | model                           | account |
+      | codex       | gpt-5.6-luna                    | no      |
+      | claude_code | haiku                           | no      |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | no      |

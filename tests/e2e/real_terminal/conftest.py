@@ -30,10 +30,22 @@ if TYPE_CHECKING:
 ORIGIN_WINDOW_ID = os.environ.get("KITTY_WINDOW_ID")
 
 
+@pytest.fixture(scope="session")
+def kitty_data_directory(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Create the data directory of the Kitty test application.
+
+    Returns:
+        The data directory that also holds the isolated harness state.
+
+    """
+    return Path(tmp_path_factory.mktemp("baqylau-kitty-data"))
+
+
 @pytest.fixture
 def isolated_harness_homes(
     isolated_codex_home: Path,
     isolated_claude_home: Path,
+    kitty_data_directory: Path,
 ) -> journey_contexts.IsolatedHarnessHomes:
     """Return isolated harness configuration directories.
 
@@ -44,6 +56,7 @@ def isolated_harness_homes(
     return journey_contexts.IsolatedHarnessHomes(
         isolated_codex_home,
         isolated_claude_home,
+        kitty_data_directory / process_testkit.HARNESS_STATE_DIRECTORY,
     )
 
 
@@ -60,7 +73,7 @@ def real_terminal_identity(
 
 @pytest.fixture(scope="session")
 def application_process(
-    tmp_path_factory: pytest.TempPathFactory,
+    kitty_data_directory: Path,
     isolated_harness_runtime_configs: HarnessRuntimeConfigs,
     claude_workspace_trust: None,
 ) -> Iterator[process_testkit.ApplicationProcess]:
@@ -76,14 +89,19 @@ def application_process(
     runtime_configs = isolated_harness_runtime_configs
     process = process_testkit.ApplicationProcess.start(
         ApplicationConfig(
-            data_directory=Path(tmp_path_factory.mktemp("baqylau-kitty-data")),
+            data_directory=kitty_data_directory,
             port=0,
             terminal="kitty",
             notify_telegram=False,
             notify_webpush=False,
             harness_runtime_configs=runtime_configs,
             environment_removals=process_testkit.HARNESS_PARENT_ENVIRONMENT_VARIABLES,
-            base_environment=dict(os.environ),
+            # A harness that keeps state in the state home writes it here, and
+            # not in the file of the person.
+            base_environment={
+                **os.environ,
+                "XDG_STATE_HOME": str(kitty_data_directory / process_testkit.HARNESS_STATE_DIRECTORY),
+            },
         ),
     )
     try:

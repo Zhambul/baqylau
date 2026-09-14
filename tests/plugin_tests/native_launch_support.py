@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from harness.contract import HarnessPlugin
 from harness.impl.discovery import installed
+from harness.impl.opencode2.sources import HARNESS as OPENCODE_HARNESS
 from harness.models.controls import AttachmentReference
 from harness.models.launch import LaunchRequest, LaunchResult
 from harness.runtime import HarnessRuntimeConfig, HarnessRuntimeConfigs, HarnessRuntimeEntry
@@ -25,6 +26,9 @@ def _native_runtime_configs() -> HarnessRuntimeConfigs:
             HarnessRuntimeEntry(
                 CODEX_HARNESS,
                 HarnessRuntimeConfig(fixture.CODEX_HARNESS, Path(fixture.WORK_CODEX_HOME_PATH)),
+            ),
+            HarnessRuntimeEntry(
+                OPENCODE_HARNESS, HarnessRuntimeConfig("opencode2", Path("/work/opencode2-events")),
             ),
         ),
     )

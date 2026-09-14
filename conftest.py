@@ -61,6 +61,7 @@ pytest_plugins = (
     "tests.e2e.steps.resumable_assertions",
     "tests.e2e.steps.journey_lifecycle",
     "tests.e2e.steps.journey_terminal",
+    "tests.e2e.steps.journey_keys",
     "tests.e2e.steps.journey_lineage",
     "tests.e2e.steps.planning_start",
     "tests.e2e.steps.planning_decisions",

@@ -40,6 +40,12 @@ class AgentMetaFile(BaseModel):
     A subagent's `agent-<id>.meta.json` sidecar — corpus-observed (this
         machine's own sidecars, 2026-08-22): every field any of them has ever
         carried, though `description`/`taskKind` are the only two read.
+
+        `requestShape`, `requestNonInteractive` and `spawnedWithWorktree`
+        arrived with Claude Code 2.1.269 (observed 2026-09-12). They are listed
+        because this model FORBIDS an unknown field, and a sidecar it refuses
+        takes down every source of its session: the lead transcript stops being
+        read too, and the subagent never becomes an actor.
     """
 
     model_config = FOREIGN
@@ -53,7 +59,10 @@ class AgentMetaFile(BaseModel):
     parent_agent_id: Annotated[str | None, Field(alias="parentAgentId")] = None
     permission_mode: Annotated[str | None, Field(alias="permissionMode")] = None
     plan_mode_required: Annotated[bool | None, Field(alias="planModeRequired")] = None
+    request_non_interactive: Annotated[bool | None, Field(alias="requestNonInteractive")] = None
+    request_shape: Annotated[str | None, Field(alias="requestShape")] = None
     spawn_depth: Annotated[int | None, Field(alias="spawnDepth")] = None
+    spawned_with_worktree: Annotated[bool | None, Field(alias="spawnedWithWorktree")] = None
     stopped_by_user: Annotated[bool | None, Field(alias="stoppedByUser")] = None
     task_kind: Annotated[str | None, Field(alias="taskKind")] = None
     team_name: Annotated[str | None, Field(alias="teamName")] = None

@@ -93,7 +93,7 @@ class SharedUsageCache:
         age = time.time() - document.captured_at
         max_age = (
             min(self.max_age_seconds, USAGE_FAILED_CACHE_SECONDS)
-            if any(row.collection_error for row in document.rows)
+            if any(row.collection_error or row.authentication_error for row in document.rows)
             else self.max_age_seconds
         )
         return document if 0 <= age < max_age else None

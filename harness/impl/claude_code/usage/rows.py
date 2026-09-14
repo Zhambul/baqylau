@@ -111,7 +111,7 @@ class ClaudeCodeUsage(HarnessUsage):
                 scheduling_score=None,
                 scheduling_allowed=False,
                 limit=None,
-                authentication_error=None,
+                authentication_error=collection.authentication_error,
                 collection_error=collection.error,
             ),
         )

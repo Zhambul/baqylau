@@ -169,24 +169,21 @@ def open_window(
     command: tuple[str, ...],
     working_directory: str,
     environment: Mapping[str, str],
-) -> PtyWindow | None:
-    """Start `command` on a new pty, or None when it cannot be started.
+) -> PtyWindow:
+    """Start `command` on a new pty.
 
     Returns:
         The pty window.
 
     """
     screen = pyte.Screen(COLUMNS, LINES)
-    opened_process = runtime.open_process(
+    process, controller = runtime.open_process(
         command,
         working_directory,
         environment,
         COLUMNS,
         LINES,
     )
-    if opened_process is None:
-        return None
-    process, controller = opened_process
     window = PtyWindow(
         window_id=window_id,
         process=process,

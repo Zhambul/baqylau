@@ -17,6 +17,9 @@ from __future__ import annotations
 
 from types import MappingProxyType
 
+from terminal.models.input import TextInputMode
+from terminal.paste import pasted
+
 NAMED_KEYS = MappingProxyType({
     "enter": b"\r",
     "return": b"\r",
@@ -34,9 +37,6 @@ NAMED_KEYS = MappingProxyType({
     "page_up": b"\x1b[5~",
     "page_down": b"\x1b[6~",
 })
-
-BRACKETED_PASTE_START = b"\x1b[200~"
-BRACKETED_PASTE_END = b"\x1b[201~"
 
 
 def encoded(key: str) -> bytes | None:
@@ -75,3 +75,13 @@ def chord(keys: str) -> bytes | None:
             return None
         payload += encoding
     return payload
+
+
+def payload(text: str, text_input_mode: TextInputMode) -> bytes:
+    """Return the bytes that one text input writes.
+
+    Returns:
+        One paste, or the text as it is typed.
+
+    """
+    return pasted(text) if text_input_mode == TextInputMode.PASTE else text.encode("utf-8")

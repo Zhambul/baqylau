@@ -90,6 +90,12 @@ def _test_launcher(harness: domain_ids.HarnessName, terminal: FakeTerminal) -> h
                 CODEX_HARNESS,
                 HarnessRuntimeConfig(fixture.CODEX_HARNESS, Path(fixture.WORK_CODEX_HOME_PATH)),
             ),
+            HarnessRuntimeEntry(
+                domain_ids.HarnessName("opencode2"),
+                HarnessRuntimeConfig(
+                    "opencode2", Path("/work/opencode2-events"), Path("/work/opencode2-settings.json"),
+                ),
+            ),
         ),
     )
     plugin = next(

@@ -20,9 +20,10 @@ Feature: live harness sessions survive a Baqylau restart
     And session "primary" has no repeated entry identity
 
     Examples:
-      | harness     | model        |
-      | codex       | gpt-5.6-luna |
-      | claude_code | haiku        |
+      | harness     | model                           |
+      | codex       | gpt-5.6-luna                    |
+      | claude_code | haiku                           |
+      | opencode2   | opencode-go/deepseek-v4.1-flash |
 
   Scenario Outline: active lead or subagent work completes through restart
     Given session configuration "primary" uses <harness> with model <model> and low effort
@@ -45,14 +46,18 @@ Feature: live harness sessions survive a Baqylau restart
     And work "restart work" completes
     And work "restart work" has worker type <worker>
     And work "restart work" has final answer 'RESTART_WORK_DONE'
+    And session "primary" has no running work
+    And the lead in session "primary" has status awaiting_response
     And session "primary" has no repeated entry identity
 
     Examples:
-      | harness     | model        | worker   |
-      | codex       | gpt-5.6-luna | lead     |
-      | codex       | gpt-5.6-luna | subagent |
-      | claude_code | haiku        | lead     |
-      | claude_code | haiku        | subagent |
+      | harness     | model                           | worker   |
+      | codex       | gpt-5.6-luna                    | lead     |
+      | codex       | gpt-5.6-luna                    | subagent |
+      | claude_code | haiku                           | lead     |
+      | claude_code | haiku                           | subagent |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | lead     |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | subagent |
 
   Scenario Outline: a yielded command closes its original job after restart
     # Harness limit: codex only. Only Codex exposes this yielded command event shape.
@@ -120,6 +125,7 @@ Feature: live harness sessions survive a Baqylau restart
     And session "primary" has no repeated entry identity
 
     Examples:
-      | harness     | model        |
-      | codex       | gpt-5.6-luna |
-      | claude_code | haiku        |
+      | harness     | model                           |
+      | codex       | gpt-5.6-luna                    |
+      | claude_code | haiku                           |
+      | opencode2   | opencode-go/deepseek-v4.1-flash |

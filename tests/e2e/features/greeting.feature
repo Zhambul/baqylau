@@ -14,8 +14,10 @@ Feature: a plain turn reaches the session feed
     And work "greeting" has final answer 'Hi'
 
     Examples:
-      | harness     | model        | effort | worker   |
-      | codex       | gpt-5.6-luna | low    | lead     |
-      | codex       | gpt-5.6-luna | low    | subagent |
-      | claude_code | haiku        | low    | lead     |
-      | claude_code | haiku        | low    | subagent |
+      | harness     | model                           | effort | worker   |
+      | codex       | gpt-5.6-luna                    | low    | lead     |
+      | codex       | gpt-5.6-luna                    | low    | subagent |
+      | claude_code | haiku                           | low    | lead     |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | low    | lead     |
+      | claude_code | haiku                           | low    | subagent |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | low    | subagent |

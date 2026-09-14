@@ -63,11 +63,10 @@ class QueryContext:
 class HarnessCatalogSnapshot:
     """The menu vocabulary that genuinely depends on WHERE the session is.
 
-    Everything a harness offers unconditionally now lives on HarnessInfo, which
-    is a frozen literal built once at import. Only the commands remain here,
-    because they are discovered by walking the session's own directory -- two
-    sessions in different projects have different ones, so no static literal can
-    hold them.
+    Commands can depend on the directory. Models can depend on the native
+    account and configuration. None keeps the fixed models from HarnessInfo;
+    an empty model tuple means that native discovery found no models.
     """
 
     commands: tuple[CommandOption, ...] = ()
+    models: tuple[ModelOption, ...] | None = None

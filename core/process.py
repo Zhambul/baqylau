@@ -19,6 +19,8 @@ def _matches(process: psutil.Process, process_name: str) -> bool:
         True if a process name or resolved executable path matches.
 
     """
+    if process.status() == psutil.STATUS_ZOMBIE:
+        return False
     if process_name in _names(process):
         return True
     executable = shutil.which(process_name)
@@ -99,13 +101,11 @@ def process_is_alive(process_id: int) -> bool:
     if process_id <= 0:
         return False
     try:
-        os.kill(process_id, 0)
-    except PermissionError:
+        return psutil.Process(process_id).status() != psutil.STATUS_ZOMBIE
+    except psutil.AccessDenied:
         return True
-    except ProcessLookupError:
+    except (psutil.NoSuchProcess, psutil.ZombieProcess):
         return False
-    else:
-        return True
 
 
 def _find_named_ancestor(process: psutil.Process, process_name: str) -> int | None:

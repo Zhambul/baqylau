@@ -54,9 +54,13 @@ writers and HTTP response models are cheaper and clearer to test.
 ## The live-harness suite — `tests/e2e/`, `make test-drift`
 
 This suite is not part of `make test`. Run it on demand. It starts real
-applications, launches the real `claude` and `codex` programs in isolated
+applications, launches the real `claude`, `codex`, and `opencode2` programs in isolated
 copies of the configured workspace, and uses real tokens. It detects a harness
 change that a simulated test cannot detect.
+
+The OpenCode2 test profile selects the native Tavily search provider. This keeps
+the fixed-query checks on one provider. The shared scenarios require real search
+results and check which worker owns them.
 
 ```sh
 make test-drift                                        # every scenario
@@ -64,12 +68,15 @@ make test-drift E2E="-k codex"                         # one harness
 make test-drift E2E="--e2e-model claude-opus-5"        # every scenario, one model
 make test-drift E2E="--e2e-data-dir /tmp/drift"        # keep the databases after
 make test-drift E2E_WORKERS=1                           # isolate one scenario for debug
+make terminal-live-e2e                                 # real Kitty journeys, one at a time
 make e2e                                                # every live + browser E2E layer
 ```
 
 Each worker has one private data directory, one automatic port, one Codex home,
-and one Git workspace copy. It cannot use the normal application on port 8377.
-It uses the installed harness credentials and hooks. After every scenario the
+one state home, and one Git workspace copy. It cannot use the normal application
+on port 8377. It uses the installed harness credentials and hooks. The state home
+keeps what a harness writes there out of the files of the person: OpenCode2
+records in it the effort that a new session starts with. After every scenario the
 worker restarts its private application; application shutdown closes every PTY
 process group. The next scenario therefore gets a fresh daemon, terminal, and
 harness process boundary without paying for a new xdist worker or workspace.
@@ -89,10 +96,13 @@ pool. Override `E2E_WORKERS` to measure or stress a different concurrency level.
 Use `E2E_WORKERS=1` for real-terminal or installed-daemon cases because those
 explicit opt-in suites control one machine-level resource.
 
-`make e2e` is the complete end-to-end gate. It runs the live scenarios, the
-live-browser scenarios, and then static Playwright. Playwright rebuilds the
+`make e2e` is the complete end-to-end gate. It runs audit replay, live scenarios,
+real Kitty journeys, live-browser scenarios, and static Playwright.
+The Kitty layer requires a running Kitty instance with remote control. Its
+command fails if that instance cannot be reached. It runs one case at a time
+because the cases share the terminal application. Playwright rebuilds the
 production application before its suite. Every suite uses its measured maximum
-reliable parallelism: six workers for each live suite and four for static
+reliable parallelism: six workers for the PTY and live-browser suites and four for static
 Playwright. The suite boundaries are serial, so a failed token-spending layer
 stops the gate before the next layer starts. Override `E2E_WORKERS` when you
 measure another machine. Cases do not share ports, data directories, harness
@@ -127,6 +137,13 @@ The suite has these layers:
 - Step modules separate actions, reference acquisition, and checks. A `Then`
   step checks one fact. Time limits are in `testkit.policy`, not in feature
   text.
+
+A scenario names the worker it wants: `the lead`, `the subagent`, `the named
+subagent`, `the background subagent`, or `the foreground subagent`. A subagent
+is left to run unless the scenario asks for a foreground one, and `the subagent`
+is the background one. Every harness supports both, but each one asks for it
+with a different native argument, so the scenario states the wanted behaviour
+and `testkit.work_delegation` holds the native wording.
 
 Each E2E scenario must test all discovered harnesses. If a harness cannot
 support the behavior, put one machine-readable comment in the scenario:

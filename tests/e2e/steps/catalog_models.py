@@ -27,13 +27,13 @@ def catalog_has_one_default_model(harness_catalogs: HarnessCatalogs, name: str) 
     assert len(found) == 1, f"catalog {name!r} has default models {found}"
 
 
-@then(parsers.parse('each model in catalog "{name}" has exactly one default effort'))
+@then(parsers.parse('each model with effort settings in catalog "{name}" has exactly one default effort'))
 def every_model_has_one_default_effort(harness_catalogs: HarnessCatalogs, name: str) -> None:
     """Verify each catalog model has one default effort."""
     failures = {
         model.model_id: [model_effort.effort for model_effort in model.efforts if model_effort.default]
         for model in harness_catalogs.get(name).models
-        if len([model_effort for model_effort in model.efforts if model_effort.default]) != 1
+        if model.efforts and len([model_effort for model_effort in model.efforts if model_effort.default]) != 1
     }
     assert not failures, f"catalog {name!r} has invalid default efforts: {failures}"
 
@@ -47,7 +47,7 @@ def catalog_has_command(harness_catalogs: HarnessCatalogs, name: str, command: s
     assert len(found) == 1, f"catalog {name!r} has {len(found)} commands named {command!r}"
 
 
-@then(parsers.parse("catalog \"{name}\" advertises exactly rewind modes '{rewind_modes}'"))
+@then(parsers.re(r"catalog \"(?P<name>[^\"]+)\" advertises exactly rewind modes '(?P<rewind_modes>[^']*)'"))
 def catalog_advertises_exact_rewind_modes(
     harness_catalogs: HarnessCatalogs,
     name: str,
@@ -55,5 +55,5 @@ def catalog_advertises_exact_rewind_modes(
 ) -> None:
     """Verify the catalog advertises the specified rewind modes."""
     actual = tuple(mode.mode for mode in harness_catalogs.get(name).rewind_modes)
-    expected = tuple(rewind_modes.split(","))
+    expected = tuple(rewind_modes.split(",")) if rewind_modes else ()
     assert actual == expected, f"catalog {name!r} advertises rewind modes {actual}; expected {expected}"

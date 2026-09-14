@@ -13,9 +13,10 @@ Feature: session controls change live session state
     And the application contains exactly session "primary"
 
     Examples:
-      | harness     | model        |
-      | codex       | gpt-5.6-luna |
-      | claude_code | haiku        |
+      | harness     | model                           |
+      | codex       | gpt-5.6-luna                    |
+      | claude_code | haiku                           |
+      | opencode2   | opencode-go/deepseek-v4.1-flash |
 
   Scenario Outline: closing a session stops its active work
     Given session configuration "primary" uses <harness> with model <model> and low effort
@@ -35,12 +36,15 @@ Feature: session controls change live session state
     And command "command during close" belongs to worker of work "work during close"
     And session "primary" has no running work
 
+    # OpenCode2 has no subagent row. The work of an OpenCode2 subagent belongs to
+    # the turn that asked for it, and the lead ends that turn before the close.
     Examples:
-      | harness     | model        | worker   |
-      | codex       | gpt-5.6-luna | lead     |
-      | codex       | gpt-5.6-luna | subagent |
-      | claude_code | haiku        | lead     |
-      | claude_code | haiku        | subagent |
+      | harness     | model                           | worker   |
+      | codex       | gpt-5.6-luna                    | lead     |
+      | codex       | gpt-5.6-luna                    | subagent |
+      | claude_code | haiku                           | lead     |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | lead     |
+      | claude_code | haiku                           | subagent |
 
   Scenario Outline: a quiet session can be renamed, reconfigured, and closed
     Given session configuration "primary" uses <harness> with model <model> and low effort
@@ -59,10 +63,13 @@ Feature: session controls change live session state
     Then control "change model" response is accepted
     And control "change model" outcome is acknowledged
     And session "primary" reports model <new_model>
-    When I select medium effort in session "primary" as control "increase effort"
-    Then control "increase effort" response is accepted
-    And control "increase effort" outcome is acknowledged
-    And session "primary" reports effort medium
+    When I send prompt to session "primary" as turn "work after model change"
+      """
+      Do not use tools. Reply only with MODEL_CHANGE_CONFIRMED.
+      """
+    Then turn "work after model change" completes
+    And turn "work after model change" has final answer 'MODEL_CHANGE_CONFIRMED'
+    And session "primary" reports model <new_model>
     When I request backgrounding in session "primary" as control "idle background request"
     Then control "idle background request" response is rejected
     And control "idle background request" outcome is rejected
@@ -72,11 +79,34 @@ Feature: session controls change live session state
     And session "primary" finishes
 
     Examples:
-      | harness     | model        | new_model      | worker   |
+      | harness     | model        | new_model     | worker   |
       | codex       | gpt-5.6-luna | gpt-5.6-terra | lead     |
       | codex       | gpt-5.6-luna | gpt-5.6-terra | subagent |
-      | claude_code | haiku        | sonnet         | lead     |
-      | claude_code | haiku        | sonnet         | subagent |
+      | claude_code | haiku        | sonnet        | lead     |
+      | claude_code | haiku        | sonnet        | subagent |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | opencode-go/gpt-5.6-luna | lead |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | opencode-go/gpt-5.6-luna | subagent |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | opencode-go/deepseek-v4-pro | lead |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | opencode-go/longcat-2.0 | lead |
+
+  Scenario Outline: a quiet session changes the effort of its next work
+    Given session configuration "primary" uses <harness> with model <model> and low effort
+    When I launch session "primary" and assign work "effort sample" to the lead with prompt
+      """
+      Reply only with the word ready.
+      """
+    Then work "effort sample" completes
+    And work "effort sample" releases the lead
+    When I select <new_effort> effort in session "primary" as control "change effort"
+    Then control "change effort" response is accepted
+    And control "change effort" outcome is acknowledged
+    And session "primary" reports effort <new_effort>
+
+    Examples:
+      | harness     | model                           | new_effort |
+      | codex       | gpt-5.6-luna                    | medium     |
+      | claude_code | haiku                           | medium     |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | high       |
 
   Scenario Outline: a harness can replace a custom title with an automatic name
     Given session configuration "primary" uses <harness> with model <model> and low effort
@@ -99,9 +129,10 @@ Feature: session controls change live session state
     And control "second automatic name" outcome is acknowledged
 
     Examples:
-      | harness     | model |
-      | codex       | gpt-5.6-luna |
-      | claude_code | haiku |
+      | harness     | model                           |
+      | codex       | gpt-5.6-luna                    |
+      | claude_code | haiku                           |
+      | opencode2   | opencode-go/deepseek-v4.1-flash |
 
   Scenario Outline: a parked session keeps a durable custom name
     # Harness limit: claude_code only. Claude Code rejects automatic naming without a live terminal.
@@ -125,8 +156,8 @@ Feature: session controls change live session state
     And session "primary" has title '<parked_title>'
 
     Examples:
-      | harness     | model        | parked_title                  |
-      | claude_code | haiku        | Parked Claude Code title 82451 |
+      | harness     | model | parked_title                   |
+      | claude_code | haiku | Parked Claude Code title 82451 |
 
   Scenario Outline: a parked generic session can replace a custom title automatically
     # Harness limit: codex only. Codex can generate and store a title without a live terminal.
@@ -151,5 +182,5 @@ Feature: session controls change live session state
     And session "primary" title is not 'Temporary parked generic title'
 
     Examples:
-      | harness | model |
+      | harness | model        |
       | codex   | gpt-5.6-luna |

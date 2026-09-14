@@ -16,7 +16,7 @@ SESSION = SessionId("session-one")
 FINISHED_COMMANDS = 2
 
 
-def poll_result(raw_event: RawEvent, exit_code: int, output: str) -> RawEvent:
+def completion_result(raw_event: RawEvent, exit_code: int, output: str) -> RawEvent:
     """Set the final command result for a replay case.
 
     Returns:
@@ -24,6 +24,9 @@ def poll_result(raw_event: RawEvent, exit_code: int, output: str) -> RawEvent:
 
     """
     document = json.loads(raw_event.payload)
+    if document["type"] == "event_msg":
+        document["payload"]["item"].update(exit_code=exit_code, aggregated_output=output)
+        return replace(raw_event, payload=json.dumps(document).encode())
     block = document["payload"]["output"][1]
     block["text"] = json.dumps({"exit_code": exit_code, "output": output})
     return replace(raw_event, payload=json.dumps(document).encode())

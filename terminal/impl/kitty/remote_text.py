@@ -5,6 +5,7 @@ import subprocess  # noqa: S404 -- Send terminal input through the configured ki
 import time
 from typing import Protocol
 
+from terminal import paste
 from terminal.impl.kitty.remote_commands import GetTextRcPayload, KittyRcPayload, KittyRcResponse
 from terminal.impl.kitty.remote_constants import (
     KITTEN_QUERY_TIMEOUT_SECONDS,
@@ -45,6 +46,21 @@ class _KittyTextClient(Protocol):
         """
 
 
+def text_payload(text: str, *, bracketed: bool) -> bytes:
+    """Return the bytes that one text input writes.
+
+    The marks of the paste are written HERE, and not by `--bracketed-paste`.
+    Kitty closes that option with a SECOND, empty paste, and OpenCode2 answers a
+    paste that carries nothing by reading the clipboard of the person into the
+    prompt.
+
+    Returns:
+        One paste, or the text as it is typed.
+
+    """
+    return paste.pasted(text) if bracketed else text.encode("utf-8")
+
+
 def _send_text_arguments(kitten: str, listen: str, window_id: WindowId) -> list[str]:
     return [kitten, REMOTE_CONTROL_MARKER, TARGET_OPTION, listen, "send-text", "--match", f"id:{window_id}", "--stdin"]
 
@@ -57,13 +73,10 @@ def _insert_text_process(
     *,
     bracketed: bool,
 ) -> subprocess.CompletedProcess[bytes]:
-    arguments = _send_text_arguments(kitten, listen, window_id)
-    if bracketed:
-        arguments = [*arguments[:-1], "--bracketed-paste=enable", "--stdin"]
     return subprocess.run(  # noqa: S603 -- Send text on stdin; the argument list is not a shell command.
-        arguments,
+        _send_text_arguments(kitten, listen, window_id),
         check=False,
-        input=text.encode("utf-8"),
+        input=text_payload(text, bracketed=bracketed),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         timeout=KITTEN_TIMEOUT_SECONDS,

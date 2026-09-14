@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING
 
 from pytest_bdd import parsers, then
 
-from tests.e2e.steps.work_actions import _kind
 from tests.e2e.testkit.references import WorkerKind, WorkRef, Works
+from tests.e2e.testkit.work_workers import worker
 
 if TYPE_CHECKING:
     from api.sessiondata.models.actor import ActorResponse
@@ -24,7 +24,7 @@ def work_has_worker_type(
 ) -> None:
     """Check one work worker type."""
     work = works[name]
-    expected = _kind(worker_type)
+    expected, _ = worker(worker_type)
     actor = client.sessions.snapshot(work.session).actor(work.worker.actor_id)
     assert work.worker.kind == expected
     if expected == WorkerKind.LEAD:

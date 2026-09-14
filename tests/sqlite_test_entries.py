@@ -24,6 +24,7 @@ PROJECT_DIRECTORY = "/project"
 FIRST_SOURCE_POSITION = "1"
 THIRD_SOURCE_POSITION = "3"
 COUNT_VALUE_FIELD = "value"
+LEGACY_SHELL_SCHEMA_VERSION = 5
 LEAD_ACTOR_ID_TEXT = "lead"
 AN_ACTOR = standard_dependencies.actor_state.ActorFacts(
     session_id=SESSION,
@@ -34,10 +35,11 @@ AN_ACTOR = standard_dependencies.actor_state.ActorFacts(
 )
 
 
-def record_version_five_shell(
+def record_finished_background_shell(
     migration: sqlite_test_models.MigrationDatabase,
+    schema_version: int = LEGACY_SHELL_SCHEMA_VERSION,
 ) -> domain_dependencies.domain_ids.ShellId:
-    """Record a background shell completion with the version five schema.
+    """Record a background shell completion before the output repair.
 
     Returns:
         The completed shell identifier.
@@ -69,9 +71,10 @@ def record_version_five_shell(
         FIRST_TRANSLATION_TIME,
     )
     with migration.old.write() as connection:
-        sqlite_test_fixtures.restore_version_six_queue_table(connection)
-        sqlite_test_shells.restore_version_ten_schema(connection)
-        connection.execute("UPDATE schema_version SET version = 5 WHERE id = 1")
+        if schema_version == LEGACY_SHELL_SCHEMA_VERSION:
+            sqlite_test_fixtures.restore_version_six_queue_table(connection)
+            sqlite_test_shells.restore_version_ten_schema(connection)
+        connection.execute("UPDATE schema_version SET version = ? WHERE id = 1", (schema_version,))
     return shell_id
 
 

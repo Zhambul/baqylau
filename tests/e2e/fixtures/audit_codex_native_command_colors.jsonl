@@ -1,0 +1,8 @@
+{"type":"session_meta","payload":{"id":"session-one","cwd":"/tmp/codex-color-test"}}
+{"type":"event_msg","payload":{"type":"task_started","turn_id":"color-turn"}}
+{"type":"response_item","payload":{"type":"custom_tool_call","name":"exec","call_id":"batch-one","input":"text(await tools.exec_command({cmd:\"sleep 30\",yield_time_ms:1000}));\ntext(await tools.exec_command({cmd:\"printf ready\",yield_time_ms:1000}));"}}
+{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","id":"native-ready","process_id":"native-process-ready","command":["/bin/zsh","-lc","printf ready"],"status":"completed","aggregated_output":"ready","exit_code":0}}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"batch-one","output":[{"type":"input_text","text":"Script completed\nOutput:\n"},{"type":"input_text","text":"{\"session_id\":53920,\"output\":\"\"}"},{"type":"input_text","text":"{\"exit_code\":0,\"output\":\"ready\"}"}]}}
+{"type":"event_msg","payload":{"type":"task_complete","turn_id":"color-turn"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final","content":[{"type":"output_text","text":"Done."}]}}
+{"type":"event_msg","payload":{"type":"item_completed","turn_id":"color-turn","item":{"type":"CommandExecution","id":"native-sleep","process_id":"53920","command":["/bin/zsh","-lc","sleep 30"],"status":"completed","aggregated_output":"done","exit_code":0}}}

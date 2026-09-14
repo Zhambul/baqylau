@@ -222,6 +222,10 @@ def test_owned_packages_never_use_raw() -> None:
         "harness/impl/codex/canonical/translator_tool_models.py": {"direct_value", "requests_by_name", "string_fields"},
         "harness/impl/codex/continuity.py": {"_pending_by_window", "_resolved_by_session"},
         "harness/impl/codex/controls/controller_builder.py": {"handlers"},
+        "harness/impl/opencode2/actors.py": {"OUTCOMES"},
+        "harness/impl/opencode2/controls.py": {"HANDLERS"},
+        "harness/impl/opencode2/launch_variant.py": {"variant"},
+        "harness/impl/opencode2/permissions.py": {"CHOICES"},
         "harness/impl/codex/controls/controller_conversation_handlers.py": {"CONVERSATION_HANDLERS"},
         "harness/impl/codex/controls/controller_decision_handlers.py": {"DECISION_HANDLERS"},
         "harness/impl/codex/controls/controller_handler_registry.py": {"HANDLERS"},
@@ -281,6 +285,7 @@ def test_owned_packages_never_use_raw() -> None:
         "terminal/impl/pty/registry.py": {"child_environment", "environment", "launch_environment", "windows"},
         "terminal/impl/pty/runtime.py": {"found_identities", "identities", "observed"},
         "terminal/impl/pty/window.py": {"descendant_identities", "tags"},
+        "terminal/processes.py": {"_children", "children"},
         "terminal/tabs.py": {"_painted"},
         "terminal/theme.py": {"TAB_APPEARANCES"},
     }

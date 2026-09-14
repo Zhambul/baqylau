@@ -35,11 +35,13 @@ Feature: sessions cross dashboard and terminal boundaries
     Then session "primary" and all its actors finish
 
     Examples:
-      | harness     | model        | worker   |
-      | codex       | gpt-5.6-luna | lead     |
-      | codex       | gpt-5.6-luna | subagent |
-      | claude_code | haiku        | lead     |
-      | claude_code | haiku        | subagent |
+      | harness     | model                           | worker   |
+      | codex       | gpt-5.6-luna                    | lead     |
+      | codex       | gpt-5.6-luna                    | subagent |
+      | claude_code | haiku                           | lead     |
+      | claude_code | haiku                           | subagent |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | lead     |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | subagent |
 
   Scenario Outline: one live session accepts work from both client origins
     Given session configuration "primary" uses <harness> with model <model> and low effort
@@ -57,13 +59,16 @@ Feature: sessions cross dashboard and terminal boundaries
     And turn "second work" has final answer 'CONTINUE_DONE'
 
     Examples:
-      | harness     | model        | start_origin | continue_origin |
-      | codex       | gpt-5.6-luna | dashboard    | dashboard        |
-      | codex       | gpt-5.6-luna | terminal     | dashboard        |
-      | codex       | gpt-5.6-luna | dashboard    | terminal         |
-      | claude_code | haiku        | dashboard    | dashboard        |
-      | claude_code | haiku        | terminal     | dashboard        |
-      | claude_code | haiku        | dashboard    | terminal         |
+      | harness     | model                           | start_origin | continue_origin |
+      | codex       | gpt-5.6-luna                    | dashboard    | dashboard       |
+      | codex       | gpt-5.6-luna                    | terminal     | dashboard       |
+      | codex       | gpt-5.6-luna                    | dashboard    | terminal        |
+      | claude_code | haiku                           | dashboard    | dashboard       |
+      | claude_code | haiku                           | terminal     | dashboard       |
+      | claude_code | haiku                           | dashboard    | terminal        |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | dashboard    | dashboard       |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | terminal     | dashboard       |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | dashboard    | terminal        |
 
   Scenario Outline: a closed session resumes across client origins
     Given session configuration "primary" uses <harness> with model <model> and low effort
@@ -93,13 +98,16 @@ Feature: sessions cross dashboard and terminal boundaries
     Then session "primary" and all its actors finish
 
     Examples:
-      | harness     | model        | account_mode         | start_origin | resume_origin |
-      | codex       | gpt-5.6-luna | no                   | dashboard    | terminal      |
-      | codex       | gpt-5.6-luna | no                   | terminal     | dashboard     |
-      | codex       | gpt-5.6-luna | no                   | terminal     | terminal      |
-      | claude_code | haiku        | no      | dashboard    | terminal      |
-      | claude_code | haiku        | no      | terminal     | dashboard     |
-      | claude_code | haiku        | no      | terminal     | terminal      |
+      | harness     | model                           | account_mode | start_origin | resume_origin |
+      | codex       | gpt-5.6-luna                    | no           | dashboard    | terminal      |
+      | codex       | gpt-5.6-luna                    | no           | terminal     | dashboard     |
+      | codex       | gpt-5.6-luna                    | no           | terminal     | terminal      |
+      | claude_code | haiku                           | no           | dashboard    | terminal      |
+      | claude_code | haiku                           | no           | terminal     | dashboard     |
+      | claude_code | haiku                           | no           | terminal     | terminal      |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | no           | dashboard    | terminal      |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | no           | terminal     | dashboard     |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | no           | terminal     | terminal      |
 
   Scenario Outline: a terminal-origin session can assign subagent work
     Given session configuration "primary" uses <harness> with model <model> and low effort
@@ -117,9 +125,10 @@ Feature: sessions cross dashboard and terminal boundaries
     And work "journey child" has final answer 'JOURNEY_CHILD_DONE'
 
     Examples:
-      | harness     | model        |
-      | codex       | gpt-5.6-luna |
-      | claude_code | haiku        |
+      | harness     | model                           |
+      | codex       | gpt-5.6-luna                    |
+      | claude_code | haiku                           |
+      | opencode2   | opencode-go/deepseek-v4.1-flash |
 
   Scenario Outline: a terminal tab stays blue while the lead waits for a subagent
     Given session configuration "primary" uses <harness> with model <model> and low effort
@@ -141,9 +150,10 @@ Feature: sessions cross dashboard and terminal boundaries
     And the terminal tab for journey session "primary" has color awaiting_response
 
     Examples:
-      | harness     | model        |
-      | codex       | gpt-5.6-luna |
-      | claude_code | haiku        |
+      | harness     | model                           |
+      | codex       | gpt-5.6-luna                    |
+      | claude_code | haiku                           |
+      | opencode2   | opencode-go/deepseek-v4.1-flash |
 
   Scenario Outline: completed parallel commands do not leave the terminal tab blue
     Given session configuration "primary" uses <harness> with model <model> and low effort
@@ -164,9 +174,10 @@ Feature: sessions cross dashboard and terminal boundaries
     And the terminal tab for journey session "primary" has color awaiting_response
 
     Examples:
-      | harness     | model        |
-      | codex       | gpt-5.6-luna |
-      | claude_code | haiku        |
+      | harness     | model                           |
+      | codex       | gpt-5.6-luna                    |
+      | claude_code | haiku                           |
+      | opencode2   | opencode-go/deepseek-v4.1-flash |
 
   Scenario Outline: renaming a completed session keeps its terminal tab done
     Given session configuration "primary" uses <harness> with model <model> and low effort
@@ -191,9 +202,10 @@ Feature: sessions cross dashboard and terminal boundaries
     And the terminal tab for journey session "primary" has color awaiting_response
 
     Examples:
-      | harness     | model        |
-      | codex       | gpt-5.6-luna |
-      | claude_code | haiku        |
+      | harness     | model                           |
+      | codex       | gpt-5.6-luna                    |
+      | claude_code | haiku                           |
+      | opencode2   | opencode-go/deepseek-v4.1-flash |
 
   Scenario Outline: stopping a background command returns its terminal tab to done
     # Harness limit: claude_code only. Only Claude Code exposes a native background command stop action.

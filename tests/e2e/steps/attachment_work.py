@@ -29,10 +29,12 @@ def launch_attachment_work(
     staged = staged_attachments.get(names.attachment_source)
     started = work_launch_context.driver.launch(
         work_launch_context.session_specs.get(names.session),
-        work_name=names.work,
-        worker_kind=WorkerKind(names.worker_type),
-        prompt=docstring.strip(),
-        attachments=(attachment_reference(staged),),
+        WorkRequest(
+            names.work,
+            docstring.strip(),
+            worker_kind=WorkerKind(names.worker_type),
+            attachments=(attachment_reference(staged),),
+        ),
     )
     work_launch_context.sessions.bind(names.session, started.session)
     work_launch_context.works.bind(names.work, started.work)

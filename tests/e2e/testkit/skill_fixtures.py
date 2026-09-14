@@ -10,19 +10,17 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Protocol
+from typing import Protocol
 
 from tests.e2e.testkit.references import SessionSpec, WorkerKind
-
-if TYPE_CHECKING:
-    from api.controls.models.attachment_reference import AttachmentReferenceBody
-    from tests.e2e.testkit.work_models import StartedWork
+from tests.e2e.testkit.work_models import StartedWork, WorkRequest
 
 SKILL_FIXTURE_ROOT = Path(__file__).parents[1] / "fixtures" / "skills"
 SKILL_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 HARNESS_SKILL_ROOTS = MappingProxyType({
     "codex": Path(".agents/skills"),
     "claude_code": Path(".claude/skills"),
+    "opencode2": Path(".agents/skills"),
 })
 
 
@@ -82,15 +80,7 @@ class AvailableSkill:
 class WorkLauncher(Protocol):
     """Start one E2E work request."""
 
-    def launch(
-        self,
-        spec: SessionSpec,
-        *,
-        work_name: str,
-        worker_kind: WorkerKind,
-        prompt: str,
-        attachments: tuple[AttachmentReferenceBody, ...] = (),
-    ) -> StartedWork:
+    def launch(self, spec: SessionSpec, request: WorkRequest) -> StartedWork:
         """Start work."""
         ...
 
@@ -206,12 +196,12 @@ class SkillWorkDriver:
                 "baqylau-e2e-argument. "
                 "Then follow the loaded skill instructions."
             )
+        elif spec.harness == "opencode2":
+            prompt = (
+                f"Use the skill tool exactly once to load {skill.name}. "
+                "Then follow the loaded skill instructions."
+            )
         else:
             message = f"harness {spec.harness!r} has no skill work adapter"
             raise AssertionError(message)
-        return self._work_driver.launch(
-            spec,
-            work_name=work_name,
-            worker_kind=worker_kind,
-            prompt=prompt,
-        )
+        return self._work_driver.launch(spec, WorkRequest(work_name, prompt, worker_kind=worker_kind))

@@ -390,6 +390,10 @@ custom_agent_type  # AgentMetaFile
 is_fork  # AgentMetaFile
 parent_agent_id  # AgentMetaFile
 plan_mode_required  # AgentMetaFile
+rendered_in_human_turn  # AttachmentRecord
+request_non_interactive  # AgentMetaFile
+request_shape  # AgentMetaFile
+spawned_with_worktree  # AgentMetaFile
 spawn_depth  # AgentMetaFile
 stopped_by_user  # AgentMetaFile
 team_name  # AgentMetaFile
@@ -539,3 +543,5 @@ ULTRA  # harness/impl/codex/model.py CodexEffort
 FALLBACK_MESSAGE  # records.py UsageIterationType
 STANDARD  # records.py UsageServiceTier / UsageSpeed
 NOT_AVAILABLE  # records.py UsageInferenceGeo
+log_directory  # OpenCode2 PluginOptions: serialized as logDirectory for the native plugin.
+package  # OpenCode2 PluginPackage: serialized native package reference.

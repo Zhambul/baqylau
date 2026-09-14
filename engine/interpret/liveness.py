@@ -33,7 +33,8 @@ class ProcessProbe:
     The `ps` name check exists only to catch a pid recorded before a daemon
     restart and reused while nobody was watching. Reuse requires a death this
     probe would have seen, so the name is confirmed ONCE per source identity
-    and every later probe is a signal-0 syscall. Before this memory existed the
+    and every later probe reads the process status. A zombie has exited even
+    when its parent has not yet collected its exit code. Before this memory existed the
     check was a `ps` SUBPROCESS per unfinished session per 0.25 s tick, and on
     macOS every fork stalls the whole process on its malloc locks — measured as
     0.3-1 s of latency on every HTTP request the daemon served. The memory

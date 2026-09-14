@@ -102,6 +102,10 @@ def _resolve_live_probe(
     document = probe.response
     if document is not None:
         return _live_document_resolution(document, now)
+    if probe.failure is not None and probe.failure.authentication_error:
+        return live_models.LiveResolution(
+            live_models.LiveUsageCollection(None, None, probe.failure.message), None, RETRY_SECONDS,
+        )
     if probe.failure is not None and probe.failure.recoverable:
         if last_good is not None and now - last_good.captured_at > STALE_SECONDS:
             last_good = None

@@ -72,6 +72,12 @@ The hook pipeline is Python; the dashboard is a compiled Svelte application.
    ```
 5. Run `bin/retarget-python` once to point configured
    Claude hooks directly at the project environment and skip the pyenv shim.
+6. Install the OpenCode2 server and terminal plugin for normal CLI launches:
+   ```sh
+   .venv/bin/python -m harness.impl.opencode2.install
+   ```
+   This links the package into the native plugin discovery directory. See the
+   [OpenCode2 setup](harness/impl/opencode2/README.md) for instance settings.
 
 ## Usage
 

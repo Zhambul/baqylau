@@ -37,8 +37,10 @@ Feature: session compaction has a complete lifecycle
     And turn "after compaction" has final answer 'amber circle, blue square'
 
     Examples:
-      | harness     | model        | worker   | compacted context                |
-      | codex       | gpt-5.6-luna | lead     | no expandable compacted context |
-      | codex       | gpt-5.6-luna | subagent | no expandable compacted context |
-      | claude_code | haiku        | lead     | expandable compacted context    |
-      | claude_code | haiku        | subagent | expandable compacted context    |
+      | harness     | model                           | worker   | compacted context               |
+      | codex       | gpt-5.6-luna                    | lead     | no expandable compacted context |
+      | codex       | gpt-5.6-luna                    | subagent | no expandable compacted context |
+      | claude_code | haiku                           | lead     | expandable compacted context    |
+      | claude_code | haiku                           | subagent | expandable compacted context    |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | lead     | expandable compacted context    |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | subagent | expandable compacted context    |

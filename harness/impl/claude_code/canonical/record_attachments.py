@@ -81,6 +81,13 @@ class AttachmentRecord[AttachmentBody: BaseModel](BaseModel):
     type: Literal["attachment"] = "attachment"
     attachment: AttachmentBody | None = None
     rendered: list[RenderedAttachment] | None = None
+    # `renderedInHumanTurn` arrived with Claude Code 2.1.269 (observed
+    # 2026-09-12) and holds the same blocks as `rendered`. It is listed because
+    # this model FORBIDS an unknown field, and a record it refuses stops the
+    # transcript of the session it is in.
+    rendered_in_human_turn: Annotated[
+        list[RenderedAttachment] | None, Field(alias="renderedInHumanTurn"),
+    ] = None
     uuid: str | None = None
     parent_uuid: Annotated[str | None, Field(alias="parentUuid")] = None
     external_session_id: Annotated[str | None, Field(alias="sessionId")] = None

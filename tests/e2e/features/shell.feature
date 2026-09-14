@@ -17,11 +17,13 @@ Feature: shell work reaches the session feed
     And work "run hello" has final answer 'done'
 
     Examples:
-      | harness     | model        | effort | worker   |
-      | codex       | gpt-5.6-luna | low    | lead     |
-      | codex       | gpt-5.6-luna | low    | subagent |
-      | claude_code | haiku        | low    | lead     |
-      | claude_code | haiku        | low    | subagent |
+      | harness     | model                           | effort | worker   |
+      | codex       | gpt-5.6-luna                    | low    | lead     |
+      | codex       | gpt-5.6-luna                    | low    | subagent |
+      | claude_code | haiku                           | low    | lead     |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | low    | lead     |
+      | claude_code | haiku                           | low    | subagent |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | low    | subagent |
 
   Scenario Outline: input continues the same interactive command
     # Harness limit: codex only. Only Codex exposes native input for a yielded command.

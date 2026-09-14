@@ -7,12 +7,16 @@ import os
 import subprocess  # noqa: S404 -- Run real harness commands for unattended E2E cases.
 from functools import partial
 from http import HTTPStatus
+from types import MappingProxyType
 
 from domain.ids import HarnessName
+from harness.impl.opencode2 import launch_startup
 from sdk import client as sdk_client, state as sdk_state, wait_states
 from terminal import launch as terminal_launch, models as terminal_models
-from tests.e2e.testkit import journey_launch, journey_models, references, resume, selector_turns
-from tests.harness_names import CLAUDE_CODE_HARNESS
+from tests.e2e.testkit import journey_launch, journey_models, journey_opencode, references, resume, selector_turns
+from tests.harness_names import CLAUDE_CODE_HARNESS, OPENCODE_HARNESS
+
+TERMINAL_TITLES = MappingProxyType({CLAUDE_CODE_HARNESS: "Claude Code", OPENCODE_HARNESS: "OpenCode2"})
 
 
 class _JourneyDriverState:
@@ -44,10 +48,29 @@ class _JourneyDriverState:
         for window_id in tuple(self._windows):
             self._terminal.tabs.close_tab(terminal_models.tabs.TabCloseRequest(window_id))
             self._windows.discard(window_id)
+        for entry in self._runtime_configs.entries():
+            if entry.harness == OPENCODE_HARNESS:
+                journey_opencode.stop_service(entry.config)
 
 
 class _JourneyTerminalInput(_JourneyDriverState):
     """Control terminal input for one journey."""
+
+    def press_terminal_key(self, journey: references.SessionJourneyRef, key: str) -> None:
+        """Send one key to the session's terminal."""
+        outcome = self._terminal.input.send_key(
+            terminal_models.input.KeySendRequest(terminal_models.values.WindowId(journey.window_id), key),
+        )
+        assert outcome.succeeded, f"terminal key was not delivered: {outcome.reason}"
+
+    def wait_for_terminal_text(self, journey: references.SessionJourneyRef, text: str) -> None:
+        """Wait for text in the session's terminal screen."""
+        request = terminal_models.viewport.ScreenReadRequest(terminal_models.values.WindowId(journey.window_id))
+        sdk_client.wait_for(
+            f"terminal text {text!r}",
+            lambda: text in (self._terminal.viewport.read_screen(request).text or ""),
+            timeout=self._wait_policy.feed,
+        )
 
     def stop_terminal(self, journey: references.SessionJourneyRef) -> None:
         """Stop terminal."""
@@ -98,20 +121,9 @@ class _JourneyTerminalInput(_JourneyDriverState):
             )
 
     def use_visual_editor_mode(self, journey: references.SessionJourneyRef) -> None:
-        """Send Escape and the visual-mode key to the terminal.
-
-        Raises:
-            AssertionError: If either key cannot be delivered.
-
-        """
-        window_id = terminal_models.values.WindowId(journey.window_id)
+        """Send Escape and the visual-mode key to the terminal."""
         for key in ("escape", "v"):
-            outcome = self._terminal.input.send_key(terminal_models.input.KeySendRequest(window_id, key))
-            if not outcome.succeeded:
-                message = f"terminal editor mode key was not delivered: {outcome.reason}"
-                raise AssertionError(
-                    message,
-                )
+            self.press_terminal_key(journey, key)
 
     def interrupt_from_terminal(self, journey: references.SessionJourneyRef) -> None:
         """Press Escape twice without an HTTP control.
@@ -155,7 +167,7 @@ class _JourneyTerminalLaunch(_JourneyTerminalInput):
             msg = f"{spec.harness} has no account switcher"
             raise AssertionError(msg)
         environment = journey_launch.launch_environment(
-            harness,
+            spec,
             runtime,
             self._application_port,
             self._launch_environment,
@@ -169,14 +181,40 @@ class _JourneyTerminalLaunch(_JourneyTerminalInput):
                         *journey_launch.launch_arguments(harness, spec, resume, self._workspace, prompt),
                     ),
                 ),
-                title=("Claude Code" if harness == CLAUDE_CODE_HARNESS else "Codex"),
+                title=TERMINAL_TITLES.get(harness, "Codex"),
                 environment=environment,
             ),
         )
         if not opened.succeeded or opened.window_id is None:
             msg = f"terminal launch failed: {opened.reason}"
             raise AssertionError(msg)
+        self._windows.add(opened.window_id)
+        self._start_native_draft(harness, opened.window_id, prompt if resume is None else "")
         return opened.window_id
+
+    def _start_native_draft(
+        self,
+        harness: HarnessName,
+        window_id: terminal_models.values.WindowId,
+        prompt: str,
+    ) -> None:
+        """Send the draft that the OpenCode2 start page holds.
+
+        The other two harnesses start their first turn from the command line.
+        A NEW OpenCode2 session puts the text in the draft, so the person, or
+        this driver, sends it. A RESUMED session sends that text itself, and the
+        caller gives no draft for it.
+
+        Raises:
+            AssertionError: If the native start page keeps the draft.
+
+        """
+        if harness != OPENCODE_HARNESS or not prompt.strip():
+            return
+        reason = launch_startup.submit(self._terminal, window_id, prompt)
+        if reason is not None:
+            msg = f"native draft was not sent: {reason}"
+            raise AssertionError(msg)
 
     def _terminal_window(self, session: sdk_client.SessionRef) -> terminal_models.values.WindowId:
         return sdk_client.wait_for(

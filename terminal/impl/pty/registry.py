@@ -38,11 +38,11 @@ class PtyWindows:
         command: tuple[str, ...],
         working_directory: str,
         environment: tuple[EnvironmentVariable, ...],
-    ) -> PtyWindow | None:
+    ) -> PtyWindow:
         """Launch one program in a new PTY window.
 
         Returns:
-            The new PTY window, or ``None`` when launch fails.
+            The new PTY window.
 
         """
         with self.lock:
@@ -60,9 +60,8 @@ class PtyWindows:
             working_directory,
             child_environment,
         )
-        if window is not None:
-            with self.lock:
-                self.windows[window_id] = window
+        with self.lock:
+            self.windows[window_id] = window
         return window
 
     def get(self, window_id: WindowId) -> PtyWindow | None:

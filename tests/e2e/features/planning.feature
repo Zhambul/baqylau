@@ -17,8 +17,8 @@ Feature: planning tools update the session goal and tasks
     And work "record child task" has final answer 'done'
 
     Examples:
-      | harness     | model        | task_instruction                                                                 |
-      | codex       | gpt-5.6-luna | Use update_plan with the exact step text "Child sample".                         |
+      | harness | model        | task_instruction                                         |
+      | codex   | gpt-5.6-luna | Use update_plan with the exact step text "Child sample". |
 
   Scenario Outline: a task keeps its native description where supported
     # Harness limit: claude_code only. Codex plan steps do not have descriptions.
@@ -41,6 +41,7 @@ Feature: planning tools update the session goal and tasks
       | claude_code | haiku |
 
   Scenario Outline: task tools update shared session state
+    # Harness limit: codex, claude_code only. OpenCode2 0.0.0-beta-19242 has no native task-list tools.
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" and assign work "prepare tasks" to the subagent with prompt
       """
@@ -65,13 +66,16 @@ Feature: planning tools update the session goal and tasks
     And task "inspection" has state completed
     And task "completion" has state completed
     And work "record tasks" has final answer 'done'
+    When I hide tasks for session "primary"
+    Then tasks for session "primary" are hidden
 
     Examples:
-      | harness     | model        | task_instruction                                             |
+      | harness     | model        | task_instruction                                              |
       | codex       | gpt-5.6-luna | Use update_plan for all task creation and state changes.      |
       | claude_code | haiku        | Use TaskCreate for creation and TaskUpdate for state changes. |
 
   Scenario Outline: one task advances through each task state
+    # Harness limit: codex, claude_code only. OpenCode2 0.0.0-beta-19242 has no native task-list tools.
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" and assign work "create tracked task" to the lead with prompt
       """
@@ -119,6 +123,7 @@ Feature: planning tools update the session goal and tasks
       | codex   | gpt-5.6-luna |
 
   Scenario Outline: a dashboard choice approves a harness plan
+    # Harness limit: codex, claude_code only. OpenCode2 has no plan decision control.
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "ready" with prompt
       """
@@ -151,6 +156,7 @@ Feature: planning tools update the session goal and tasks
       | claude_code | haiku        |
 
   Scenario Outline: dismissing a plan keeps the session usable
+    # Harness limit: codex, claude_code only. OpenCode2 has no plan decision control.
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "ready" with prompt
       """

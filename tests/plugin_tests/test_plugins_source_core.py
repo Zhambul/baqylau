@@ -104,6 +104,7 @@ def test_plugin_folder_descriptors_are_discovered() -> None:
     assert [plugin.harness_info.name for plugin in installed()] == [
         fixture.CLAUDE_CODE_HARNESS,
         fixture.CODEX_HARNESS,
+        "opencode2",
     ]
 
 

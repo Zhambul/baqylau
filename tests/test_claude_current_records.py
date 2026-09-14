@@ -9,7 +9,7 @@ import pytest
 
 from api.controls.models.launch_session_request import LaunchSessionRequest
 from domain.ids import WindowId
-from harness.impl.claude_code.canonical.record_tool_response import HookPayload
+from harness.impl.claude_code.canonical import record_tool_response
 from harness.impl.claude_code.controls import controller_send, controller_send_operations
 from harness.impl.claude_code.hooks.gateway import ClaudeHookGateway
 from harness.impl.claude_code.model import ClaudeCodeModel
@@ -19,7 +19,7 @@ from harness.services.terminal_driver import TerminalDriver
 
 def test_working_directory_hook_fields() -> None:
     """Keep both paths from a working-directory change."""
-    record = HookPayload.model_validate({"old_cwd": "/work", "new_cwd": "/work/next"})
+    record = record_tool_response.HookPayload.model_validate({"old_cwd": "/work", "new_cwd": "/work/next"})
     assert record.old_cwd == "/work"
     assert record.new_cwd == "/work/next"
 
@@ -35,7 +35,7 @@ def test_instruction_hook_parent_path() -> None:
     }).encode()
     response = ClaudeHookGateway().receive_hook(hooks.HarnessHookRequest(payload, None, None, None, None))
     assert response.raw_events[0].payload == payload
-    record = HookPayload.model_validate_json(response.raw_events[0].payload)
+    record = record_tool_response.HookPayload.model_validate_json(response.raw_events[0].payload)
     assert record.parent_file_path == "/work/CLAUDE.md"
 
 

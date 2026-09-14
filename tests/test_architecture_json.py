@@ -58,6 +58,9 @@ FILE_ACCESS_ALLOWLIST = project_dependencies.MappingProxyType({
     "harness/impl/codex/canonical/title.py": "globs codex's own state index",
     "harness/impl/codex/commands.py": "your $CODEX_HOME/prompts",
     "harness/impl/codex/controls/controller.py": "reads the rollout tail to confirm an interrupt landed",
+    "harness/impl/opencode2/launch_variant.py": (
+        "opencode2's own model state, where it reads the effort a new session starts with"
+    ),
     "harness/impl/__init__.py": "plugin discovery globs its own directory",
     "harness/services/usage.py": "a run-scoped cross-process usage cache and its lock",
     "api/application/files.py": "stages an attachment; the harness is handed an @path",

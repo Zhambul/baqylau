@@ -35,11 +35,13 @@ Feature: web activity stays on the work that requested it
     And search "example search" has result containing 'Example Domain'
 
     Examples:
-      | harness     | model        | worker   |
-      | codex       | gpt-5.6-luna | lead     |
-      | codex       | gpt-5.6-luna | subagent |
-      | claude_code | haiku        | lead     |
-      | claude_code | haiku        | subagent |
+      | harness     | model                           | worker   |
+      | codex       | gpt-5.6-luna                    | lead     |
+      | codex       | gpt-5.6-luna                    | subagent |
+      | claude_code | haiku                           | lead     |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | lead     |
+      | claude_code | haiku                           | subagent |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | subagent |
 
   Scenario Outline: a real page fetch belongs to one worker
     Given session configuration "primary" uses <harness> with model <model> and low effort
@@ -57,8 +59,10 @@ Feature: web activity stays on the work that requested it
     And web fetch "example page" has result containing 'Example Domain'
 
     Examples:
-      | harness     | model        | worker   |
-      | codex       | gpt-5.6-luna | lead     |
-      | codex       | gpt-5.6-luna | subagent |
-      | claude_code | haiku        | lead     |
-      | claude_code | haiku        | subagent |
+      | harness     | model                           | worker   |
+      | codex       | gpt-5.6-luna                    | lead     |
+      | codex       | gpt-5.6-luna                    | subagent |
+      | claude_code | haiku                           | lead     |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | lead     |
+      | claude_code | haiku                           | subagent |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | subagent |

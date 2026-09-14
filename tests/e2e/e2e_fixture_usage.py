@@ -98,6 +98,12 @@ def e2e_application_config(
         environment_removals=fixture_dependencies.drivers.process_testkit.HARNESS_PARENT_ENVIRONMENT_VARIABLES,
         base_environment={
             **fixture_dependencies.standard.os.environ,
+            # OpenCode2 keeps the effort of a new session in the state home. The
+            # application writes it there and the session reads it there, so one
+            # state home of the test keeps the person's own file untouched.
+            "XDG_STATE_HOME": str(
+                data_directory / fixture_dependencies.drivers.process_testkit.HARNESS_STATE_DIRECTORY,
+            ),
             "BAQYLAU_USAGE_SHARED_CACHE": str(usage_cache),
             "BAQYLAU_USAGE_SHARED_CACHE_SECONDS": "600",
             "BAQYLAU_USAGE_INITIAL_DELAY_SECONDS": "0",

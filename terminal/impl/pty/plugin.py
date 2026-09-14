@@ -31,7 +31,6 @@ from terminal.impl.pty.registry import PtyWindows
 from terminal.models.input import (
     KeySendRequest,
     KeySendResponse,
-    TextInputMode,
     TextInsertRequest,
     TextInsertResponse,
     TextSubmitRequest,
@@ -110,13 +109,14 @@ class PtyTabs(TerminalTabs):
             The tab open response.
 
         """
-        window = self.pty_windows.launch(
-            tab_open_request.command,
-            tab_open_request.working_directory,
-            tab_open_request.environment,
-        )
-        if window is None:
-            return TabOpenResponse(succeeded=False, window_id=None, reason="pty launch failed")
+        try:
+            window = self.pty_windows.launch(
+                tab_open_request.command,
+                tab_open_request.working_directory,
+                tab_open_request.environment,
+            )
+        except OSError as error:
+            return TabOpenResponse(succeeded=False, window_id=None, reason=f"pty launch failed: {error}")
         return TabOpenResponse(succeeded=True, window_id=window.window_id)
 
     def close_tab(self, tab_close_request: TabCloseRequest) -> TabCloseResponse:
@@ -239,9 +239,7 @@ class PtyInput(TerminalInput):
             window = self.pty_windows.get(text_insert_request.window_id)
             if window is None:
                 return TextInsertResponse(succeeded=False, reason=NO_WINDOW)
-            payload = text_insert_request.text.encode("utf-8")
-            if text_insert_request.mode == TextInputMode.PASTE:
-                payload = keys.BRACKETED_PASTE_START + payload + keys.BRACKETED_PASTE_END
+            payload = keys.payload(text_insert_request.text, text_insert_request.mode)
             delivered = window.write(payload)
         return TextInsertResponse(delivered, None if delivered else "pty input failed")
 
@@ -256,9 +254,7 @@ class PtyInput(TerminalInput):
             window = self.pty_windows.get(text_submit_request.window_id)
             if window is None:
                 return TextSubmitResponse(succeeded=False, reason=NO_WINDOW)
-            payload = text_submit_request.text.encode("utf-8")
-            if text_submit_request.mode == TextInputMode.PASTE:
-                payload = keys.BRACKETED_PASTE_START + payload + keys.BRACKETED_PASTE_END
+            payload = keys.payload(text_submit_request.text, text_submit_request.mode)
             # The Enter stays a separate keystroke, so it submits rather than
             # becoming a newline in the draft (TextSubmitRequest). The delay also
             # keeps the operating system from coalescing both writes into one read,

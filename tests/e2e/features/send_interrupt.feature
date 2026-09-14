@@ -25,9 +25,10 @@ Feature: Browser send and interrupt confirmation
     Then the browser shows confirmed prompt 'Run `until [ -f baqylau-interrupt-release ]; do sleep 2; done` as a foreground shell command. Do not run it in the background. Wait for it to finish, and then reply only with SHOULD_NOT_FINISH.'
 
     Examples:
-      | harness     | model          |
-      | codex       | gpt-5.6-luna   |
-      | claude_code | haiku          |
+      | harness     | model                           |
+      | codex       | gpt-5.6-luna                    |
+      | claude_code | haiku                           |
+      | opencode2   | opencode-go/deepseek-v4.1-flash |
 
   Scenario Outline: one idle Escape does not request Stop
     Given session configuration "primary" uses <harness> with model <model> and low effort
@@ -42,6 +43,7 @@ Feature: Browser send and interrupt confirmation
     Then one idle Escape does not request Stop
 
     Examples:
-      | harness     | model          |
-      | codex       | gpt-5.6-luna   |
-      | claude_code | haiku          |
+      | harness     | model                           |
+      | codex       | gpt-5.6-luna                    |
+      | claude_code | haiku                           |
+      | opencode2   | opencode-go/deepseek-v4.1-flash |

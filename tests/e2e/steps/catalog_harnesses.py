@@ -33,6 +33,14 @@ def every_harness_is_launchable(harness_lists: HarnessLists, name: str) -> None:
     assert not found, f"harness list {name!r} has harnesses that cannot launch: {found}"
 
 
+@then(parsers.parse('harness {harness} in list "{name}" supports attachments'))
+def harness_supports_attachments(harness_lists: HarnessLists, name: str, harness: str) -> None:
+    """Verify the dashboard can offer attachment controls."""
+    matches = [harness_info for harness_info in harness_lists.get(name) if harness_info.name == harness]
+    assert len(matches) == 1
+    assert matches[0].supports_attachments, f"harness {harness!r} does not advertise attachments"
+
+
 @then(parsers.parse('harness {harness} in list "{name}" advertises control {control_name}'))
 def harness_advertises_control(
     harness_lists: HarnessLists,

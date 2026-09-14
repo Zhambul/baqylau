@@ -18,7 +18,7 @@ from tests.e2e.testkit.skill_fixtures import (
 
 if TYPE_CHECKING:
     from api.controls.models.attachment_reference import AttachmentReferenceBody
-    from tests.e2e.testkit.work_models import StartedWork
+    from tests.e2e.testkit.work_models import StartedWork, WorkRequest
 
 SKILL_NAME = "baqylau-e2e-communication"
 
@@ -28,6 +28,7 @@ SKILL_NAME = "baqylau-e2e-communication"
     [
         ("codex", Path(".agents/skills")),
         ("claude_code", Path(".claude/skills")),
+        ("opencode2", Path(".agents/skills")),
     ],
 )
 def test_skill_fixture_uses_one_test_owned_source(
@@ -58,23 +59,15 @@ class CapturingWorkDriver:
         self.prompt = ""
         self.launch_options: tuple[str, WorkerKind, tuple[AttachmentReferenceBody, ...]] | None = None
 
-    def launch(
-        self,
-        _spec: SessionSpec,
-        *,
-        work_name: str,
-        worker_kind: WorkerKind,
-        prompt: str,
-        attachments: tuple[AttachmentReferenceBody, ...] = (),
-    ) -> StartedWork:
+    def launch(self, _spec: SessionSpec, request: WorkRequest) -> StartedWork:
         """Record the skill work launch request.
 
         Returns:
             The fixed test marker with the started-work type.
 
         """
-        self.prompt = prompt
-        self.launch_options = (work_name, worker_kind, attachments)
+        self.prompt = request.prompt
+        self.launch_options = (request.name, request.worker_kind, request.attachments)
         return cast("StartedWork", "started")
 
 
@@ -82,6 +75,13 @@ class CapturingWorkDriver:
     ("harness", "expected_prompt"),
     [
         ("codex", "$baqylau-e2e-communication"),
+        (
+            "opencode2",
+            (
+                "Use the skill tool exactly once to load baqylau-e2e-communication. "
+                "Then follow the loaded skill instructions."
+            ),
+        ),
         (
             "claude_code",
             (

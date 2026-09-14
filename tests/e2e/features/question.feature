@@ -32,12 +32,13 @@ Feature: a dashboard answer resolves a harness question
     And work "ask colour" has final answer 'done'
 
     Examples:
-      | harness     | model        |
-      | codex       | gpt-5.6-luna |
-      | claude_code | haiku        |
+      | harness     | model                           |
+      | codex       | gpt-5.6-luna                    |
+      | claude_code | haiku                           |
+      | opencode2   | opencode-go/deepseek-v4.1-flash |
 
   Scenario Outline: a question records multiple selected choices
-    # Harness limit: claude_code only. Codex questions do not support multiple selected choices.
+    # Harness limit: claude_code, opencode2 only. Codex questions do not support multiple selected choices.
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" and assign question work "ask colours" to the lead with prompt
       """
@@ -60,8 +61,9 @@ Feature: a dashboard answer resolves a harness question
     And work "ask colours" has final answer 'done'
 
     Examples:
-      | harness     | model |
-      | claude_code | haiku |
+      | harness     | model                           |
+      | claude_code | haiku                           |
+      | opencode2   | opencode-go/deepseek-v4.1-flash |
 
   Scenario Outline: dismissing a question sends chat text to the harness
     Given session configuration "primary" uses <harness> with model <model> and low effort
@@ -82,9 +84,10 @@ Feature: a dashboard answer resolves a harness question
     And question "approach choice" is followed by final answer 'discussed' after control "discuss approach"
 
     Examples:
-      | harness     | model        |
-      | codex       | gpt-5.6-luna |
-      | claude_code | haiku        |
+      | harness     | model                           |
+      | codex       | gpt-5.6-luna                    |
+      | claude_code | haiku                           |
+      | opencode2   | opencode-go/deepseek-v4.1-flash |
 
   Scenario Outline: a question records a free-text answer
     Given session configuration "primary" uses <harness> with model <model> and low effort
@@ -105,9 +108,10 @@ Feature: a dashboard answer resolves a harness question
     And work "ask shade" has final answer 'Amber'
 
     Examples:
-      | harness     | model        |
-      | codex       | gpt-5.6-luna |
-      | claude_code | haiku        |
+      | harness     | model                           |
+      | codex       | gpt-5.6-luna                    |
+      | claude_code | haiku                           |
+      | opencode2   | opencode-go/deepseek-v4.1-flash |
 
   Scenario Outline: one dialog records answers to two questions
     Given session configuration "primary" uses <harness> with model <model> and low effort
@@ -133,9 +137,10 @@ Feature: a dashboard answer resolves a harness question
     And work "ask settings" has final answer 'done'
 
     Examples:
-      | harness     | model        |
-      | codex       | gpt-5.6-luna |
-      | claude_code | haiku        |
+      | harness     | model                           |
+      | codex       | gpt-5.6-luna                    |
+      | claude_code | haiku                           |
+      | opencode2   | opencode-go/deepseek-v4.1-flash |
 
   Scenario Outline: an unfinished question draft returns with its exact input
     Given session configuration "primary" uses <harness> with model <model> and low effort
@@ -153,9 +158,10 @@ Feature: a dashboard answer resolves a harness question
     And question "draft choice" offers option 'Green'
 
     Examples:
-      | harness     | model        |
-      | codex       | gpt-5.6-luna |
-      | claude_code | haiku        |
+      | harness     | model                           |
+      | codex       | gpt-5.6-luna                    |
+      | claude_code | haiku                           |
+      | opencode2   | opencode-go/deepseek-v4.1-flash |
 
   Scenario Outline: a tall question dialog remains answerable when its prompt scrolls away
     Given session configuration "primary" uses <harness> with model <model> and low effort
@@ -180,6 +186,7 @@ Feature: a dashboard answer resolves a harness question
     And work "ask clipped settings" has final answer 'CLIPPED_DONE'
 
     Examples:
-      | harness     | model        |
-      | codex       | gpt-5.6-luna |
-      | claude_code | haiku        |
+      | harness     | model                           |
+      | codex       | gpt-5.6-luna                    |
+      | claude_code | haiku                           |
+      | opencode2   | opencode-go/deepseek-v4.1-flash |

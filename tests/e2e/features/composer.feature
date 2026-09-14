@@ -4,11 +4,11 @@ Feature: prompts sent during active work wait for that work
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "active work" with prompt
       """
-      Run `python3 -c 'import time; time.sleep(8); print("active-work-finished")'`
+      Run `while [ ! -f <release_marker> ]; do sleep 0.2; done; printf 'active-work-finished\n'`
       as a foreground shell command. Do not run it in the background. Wait for
       it, and then reply only with ACTIVE_WORK_DONE.
       """
-    And I name the only running foreground command in turn "active work" containing 'time.sleep(8)' "active command"
+    And I name the only running foreground command in turn "active work" containing '<release_marker>' "active command"
     And I send prompt to session "primary" as turn "queued work" and control "queued delivery"
       """
       Reply only with QUEUED_WORK_DONE.
@@ -16,7 +16,8 @@ Feature: prompts sent during active work wait for that work
     Then control "queued delivery" response is accepted
     And control "queued delivery" reports queued delivery
     And session "primary" has control "queued delivery" queued as prompt 'Reply only with QUEUED_WORK_DONE.' after a fresh application read
-    And command "active command" has state succeeded
+    When I release active work in session "primary" with marker "<release_marker>"
+    Then command "active command" has state succeeded
     And turn "queued work" produces its final answer after command "active command" finishes
     And turn "queued work" completes
     And turn "queued work" has exactly 0 assignments
@@ -24,9 +25,10 @@ Feature: prompts sent during active work wait for that work
     And session "primary" has no running work
 
     Examples:
-      | harness     | model        |
-      | codex       | gpt-5.6-luna |
-      | claude_code | haiku        |
+      | harness     | model                         | release_marker                   |
+      | codex       | gpt-5.6-luna                   | .baqylau-composer-release-codex   |
+      | claude_code | haiku                         | .baqylau-composer-release-claude  |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | .baqylau-composer-release-opencode2 |
 
   Scenario Outline: an interrupt starts its queued prompt
     Given session configuration "primary" uses <harness> with model <model> and low effort
@@ -55,6 +57,7 @@ Feature: prompts sent during active work wait for that work
     And session "primary" has no running work
 
     Examples:
-      | harness     | model        |
-      | codex       | gpt-5.6-luna |
-      | claude_code | haiku        |
+      | harness     | model                           |
+      | codex       | gpt-5.6-luna                    |
+      | claude_code | haiku                           |
+      | opencode2   | opencode-go/deepseek-v4.1-flash |

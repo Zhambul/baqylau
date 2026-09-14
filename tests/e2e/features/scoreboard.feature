@@ -44,9 +44,10 @@ Feature: the scoreboard summarizes the session
     And work "file changes" has final answer 'done'
 
     Examples:
-      | harness     | model        | effort |
-      | codex       | gpt-5.6-luna | low    |
-      | claude_code | haiku        | low    |
+      | harness     | model                           | effort |
+      | codex       | gpt-5.6-luna                    | low    |
+      | claude_code | haiku                           | low    |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | low    |
 
   Scenario Outline: a completed yielded command is history, not live background work
     # Harness limit: codex only. Only Codex exposes this yielded command event shape.

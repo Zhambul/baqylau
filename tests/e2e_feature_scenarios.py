@@ -21,7 +21,8 @@ HARNESSES = frozenset(str(definition.name) for definition in definitions())
 HARNESS_NAME = "|".join(re.escape(harness) for harness in sorted(HARNESSES))
 HARNESS_ROW = re.compile(rf"^\s*\|\s*({HARNESS_NAME})\s*\|", re.MULTILINE)
 HARNESS_LIMIT = re.compile(
-    rf"^\s*# Harness limit: (?:(?P<harness>{HARNESS_NAME}) only|(?P<none>no harness))\. (?P<reason>\S.*)$",
+    rf"^\s*# Harness limit: (?:(?P<harness>(?:{HARNESS_NAME})(?:,\s*(?:{HARNESS_NAME}))*) only"
+    r"|(?P<none>no harness))\. (?P<reason>\S.*)$",
     re.MULTILINE,
 )
 HARNESS_LIMIT_LINE = re.compile(r"^\s*# Harness limit:.*$", re.MULTILINE)
@@ -74,7 +75,7 @@ class HarnessLimit:
         """
         return tuple(
             cls(
-                frozenset((match.group("harness"),)) if match.group("harness") else frozenset(),
+                frozenset(re.findall(HARNESS_NAME, match.group("harness") or "")),
                 match.group("reason"),
             )
             for match in HARNESS_LIMIT.finditer(source)

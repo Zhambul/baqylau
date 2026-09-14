@@ -35,10 +35,14 @@ WORKER_NAME_CHARACTER_LIMIT = 40
 MINIMUM_PARALLEL_WORK_ITEMS = 2
 CODEX_HARNESS = "codex"
 CLAUDE_CODE_HARNESS = "claude_code"
+OPENCODE2_HARNESS = "opencode2"
+# How one parallel assignment is told apart from its siblings. Codex gives the
+# child a native name we ask for and can predict. The others do not, so the
+# exact prompt is the only stable key: two siblings never share one prompt.
+NAMED_PARALLEL_HARNESSES = frozenset((CODEX_HARNESS,))
 MISSING_LEAD_ACTOR = "work request does not have a lead actor"
 
 if TYPE_CHECKING:
-    from api.controls.models.attachment_reference import AttachmentReferenceBody
     from sdk.client import BaqylauClient, SessionRef
     from tests.e2e.testkit.policy import WaitPolicy
 
@@ -54,25 +58,8 @@ def _parallel_delegation_prompt(
     if len(set(names)) != len(names):
         message = "parallel work names must have distinct native names"
         raise AssertionError(message)
-    if harness == CODEX_HARNESS:
-        instruction = (
-            "Use spawn_agent once for every work item below. "
-            "Make all spawn calls in one response so the subagents run in parallel. "
-            "For each call, set task_name to the stated worker name and set message "
-            "to the exact text between WORK START and WORK END. Do not do the work "
-            "yourself. After all subagents start, reply only with the word launched."
-        )
-    elif harness == CLAUDE_CODE_HARNESS:
-        instruction = (
-            "Use the Agent tool once for every work item below. Put all Agent calls "
-            "in one response so the subagents run in parallel. For each call, set "
-            "description to the stated work name and set prompt to the exact text "
-            "between WORK START and WORK END. Do not set name. Do not do the work "
-            "yourself. Each Agent call returns an async launch acknowledgement. "
-            "Immediately after the final launch acknowledgement, reply only with "
-            "the word launched. Do not wait for child completion or notifications."
-        )
-    else:
+    instruction = work_delegation.PARALLEL_INSTRUCTIONS.get(harness)
+    if instruction is None:
         message = f"harness {harness!r} has no subagent work adapter"
         raise AssertionError(message)
     blocks = "\n\n".join(_work_request_block(harness, request) for request in requests)
@@ -120,6 +107,9 @@ def _delegation_with_followup_prompt(
             f"\n\nWORK START\n{work_prompt}\nWORK END"
             f"\n\nFOLLOW-UP START\n{followup}\nFOLLOW-UP END"
         )
+    # OpenCode2 has no tool that messages a subagent while it still runs. Its
+    # subagent tool takes a sessionID, but that RESUMES a conversation which
+    # already gave its result. So a follow-up mid-run has no native gesture.
     message = f"harness {harness!r} has no subagent follow-up adapter"
     raise AssertionError(message)
 
@@ -230,27 +220,13 @@ class WorkDriver(WorkResolution):
         self._workspace = workspace
         self._wait_policy = wait_policy
 
-    def launch(
-        self,
-        spec: SessionSpec,
-        *,
-        work_name: str,
-        worker_kind: WorkerKind,
-        prompt: str,
-        attachments: tuple[AttachmentReferenceBody, ...] = (),
-    ) -> StartedWork:
+    def launch(self, spec: SessionSpec, request: WorkRequest) -> StartedWork:
         """Launch a session and resolve its requested work.
 
         Returns:
             The new session and resolved work reference.
 
         """
-        request = WorkRequest(
-            work_name,
-            prompt,
-            worker_kind=worker_kind,
-            attachments=attachments,
-        )
         request_prompt = work_delegation.request_prompt(spec.harness, request)
         launch = self._client.sessions.launch(
             SessionLaunchRequest(
@@ -316,12 +292,15 @@ class WorkDriver(WorkResolution):
             attachment_paths=tuple(
                 attachment.local_path
                 for attachment in request.attachments
-                if not (spec.harness == CLAUDE_CODE_HARNESS and (attachment.media_type or "").startswith("image/"))
+                if spec.harness != OPENCODE2_HARNESS and not (
+                    spec.harness == CLAUDE_CODE_HARNESS and (attachment.media_type or "").startswith("image/")
+                )
             ),
             native_attachment_names=tuple(
                 attachment.display_name
                 for attachment in request.attachments
-                if spec.harness == CLAUDE_CODE_HARNESS and (attachment.media_type or "").startswith("image/")
+                if spec.harness == OPENCODE2_HARNESS
+                or (spec.harness == CLAUDE_CODE_HARNESS and (attachment.media_type or "").startswith("image/"))
             ),
         )
         return self._resolve(
@@ -371,10 +350,12 @@ class WorkDriver(WorkResolution):
                         request.prompt,
                         exact_actor_name=(
                             work_names.assignment_actor_name(spec.harness, request.name)
-                            if spec.harness == CODEX_HARNESS
+                            if spec.harness in NAMED_PARALLEL_HARNESSES
                             else None
                         ),
-                        exact_prompt=(request.prompt if spec.harness == CLAUDE_CODE_HARNESS else None),
+                        exact_prompt=(
+                            None if spec.harness in NAMED_PARALLEL_HARNESSES else request.prompt
+                        ),
                     ),
                 ),
             )

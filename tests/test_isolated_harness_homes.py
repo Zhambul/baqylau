@@ -14,9 +14,10 @@ if TYPE_CHECKING:
 
 def test_launch_environment_uses_isolated_homes(tmp_path: Path) -> None:
     """Keep all harness configuration paths inside the supplied test homes."""
-    homes = IsolatedHarnessHomes(tmp_path / "codex", tmp_path / "claude")
+    homes = IsolatedHarnessHomes(tmp_path / "codex", tmp_path / "claude", tmp_path / "state")
     assert homes.launch_environment() == (
         EnvironmentVariable("CODEX_HOME", str(tmp_path / "codex")),
         EnvironmentVariable("CLAUDE_CONFIG_DIR", str(tmp_path / "claude")),
         EnvironmentVariable("CLAUDE_CODE_MANAGED_SETTINGS_PATH", str(tmp_path / "claude" / "managed-settings.json")),
+        EnvironmentVariable("XDG_STATE_HOME", str(tmp_path / "state")),
     )

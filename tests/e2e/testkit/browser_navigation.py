@@ -104,7 +104,11 @@ class _BrowserUsageDriver(_BrowserDriverCore):
         marker = self._usage_document_marker
         if marker is None or marker == "pending":
             raise AssertionError(APPLICATION_READ_NOT_INTERCEPTED)
-        harness_rows = browser_values.usage_rows_for_harness(self._client.usage.state().usage_rows, harness)
+        harness_rows = runtime_dependencies.wait_for(
+            f"usage collection for harness {harness!r}",
+            lambda: browser_values.usage_rows_for_harness(self._client.usage.state().usage_rows, harness) or None,
+            timeout=self._wait_policy.feed,
+        )
         if len(harness_rows) != 1:
             msg = f"harness {harness!r} has {len(harness_rows)} usage rows"
             raise AssertionError(msg)

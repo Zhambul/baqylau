@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 import psutil
 
-from harness.impl.claude_code.usage import live_models, probe_decode, probe_documents
+from harness.impl.claude_code.usage import auth_status, live_models, probe_decode, probe_documents
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -97,7 +97,9 @@ def request_usage(
             ),
         )
     try:
-        return _exchange_request(process)
+        return auth_status.checked_response(
+            _exchange_request(process), harness_runtime_config, subprocess_environment(harness_runtime_config),
+        )
     except OSError:
         return live_models.ProbeResult(
             None,

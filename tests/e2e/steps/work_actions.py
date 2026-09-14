@@ -7,21 +7,12 @@ from typing import TYPE_CHECKING
 
 from pytest_bdd import parsers, when
 
-from tests.e2e.testkit.references import Turns, WorkerKind, WorkRef, Works
 from tests.e2e.testkit.work_models import WorkRequest
+from tests.e2e.testkit.work_workers import worker
 
 if TYPE_CHECKING:
+    from tests.e2e.testkit.references import Turns, WorkRef, Works
     from tests.e2e.testkit.work_contexts import WorkControlContext, WorkLaunchContext
-
-
-def _kind(worker_name: str) -> WorkerKind:
-    if worker_name == "named subagent":
-        return WorkerKind.SUBAGENT
-    try:
-        return WorkerKind(worker_name)
-    except ValueError as error:
-        message = f"unknown worker type {worker_name!r}"
-        raise AssertionError(message) from error
 
 
 def _bind_work(works: Works, turns: Turns, name: str, work: WorkRef) -> None:
@@ -42,11 +33,10 @@ def launch_work(
     docstring: str,
 ) -> None:
     """Launch one work item."""
+    kind, background = worker(worker_type)
     started = work_launch_context.driver.launch(
         work_launch_context.session_specs.get(session_name),
-        work_name=work_name,
-        worker_kind=_kind(worker_type),
-        prompt=docstring.strip(),
+        WorkRequest(work_name, docstring.strip(), worker_kind=kind, background=background),
     )
     work_launch_context.sessions.bind(session_name, started.session)
     _bind_work(work_launch_context.works, work_launch_context.turns, work_name, started.work)
@@ -65,13 +55,15 @@ def assign_work(
     docstring: str,
 ) -> None:
     """Assign one work item."""
+    kind, background = worker(worker_type)
     work = work_launch_context.driver.assign(
         work_launch_context.session_specs.get(session_name),
         work_launch_context.sessions.get(session_name),
         WorkRequest(
             work_name,
             docstring.strip(),
-            worker_kind=_kind(worker_type),
+            worker_kind=kind,
+            background=background,
             named=worker_type == "named subagent",
         ),
     )

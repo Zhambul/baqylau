@@ -18,6 +18,7 @@ Feature: background state survives a Baqylau restart
     And turn "empty command through restart" has final answer 'EMPTY_RESTART_DONE'
 
     Examples:
-      | harness     | model        | execution_instruction                                                       |
-      | codex       | gpt-5.6-luna | Use the shell execution tool with a 30000 ms yield time.                     |
-      | claude_code | haiku        | Use the Bash tool in the foreground. Do not set run_in_background to true.  |
+      | harness     | model                           | execution_instruction                                                      |
+      | codex       | gpt-5.6-luna                    | Use the shell execution tool with a 30000 ms yield time.                   |
+      | claude_code | haiku                           | Use the Bash tool in the foreground. Do not set run_in_background to true. |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | Use the Bash tool in the foreground. Do not set run_in_background to true. |

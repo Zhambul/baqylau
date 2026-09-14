@@ -25,14 +25,16 @@ Feature: file operations reach the session feed
     And work "change fixture" has final answer 'done'
 
     Examples:
-      | harness     | model        | effort | worker   |
-      | codex       | gpt-5.6-luna | low    | lead     |
-      | codex       | gpt-5.6-luna | low    | subagent |
-      | claude_code | haiku        | low    | lead     |
-      | claude_code | haiku        | low    | subagent |
+      | harness     | model                           | effort | worker   |
+      | codex       | gpt-5.6-luna                    | low    | lead     |
+      | codex       | gpt-5.6-luna                    | low    | subagent |
+      | claude_code | haiku                           | low    | lead     |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | low    | lead     |
+      | claude_code | haiku                           | low    | subagent |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | low    | subagent |
 
   Scenario Outline: a file read reports its path and content
-    # Harness limit: claude_code only. Only Claude Code has a native local text file read event.
+    # Harness limit: claude_code, opencode2 only. Codex has no native local text file read event.
     Given session configuration "primary" uses <harness> with model <model> and <effort> effort
     When I launch session "primary" and assign work "read project guide" to the <worker> with prompt
       """
@@ -48,17 +50,19 @@ Feature: file operations reach the session feed
     And work "read project guide" has final answer 'done'
 
     Examples:
-      | harness     | model        | effort | worker   |
-      | claude_code | haiku        | low    | lead     |
-      | claude_code | haiku        | low    | subagent |
+      | harness     | model                           | effort | worker   |
+      | claude_code | haiku                           | low    | lead     |
+      | claude_code | haiku                           | low    | subagent |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | low    | lead     |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | low    | subagent |
 
   Scenario Outline: a deleted file keeps its complete operation history
-    # Harness limit: codex only. Only Codex apply_patch reports a native file delete operation.
+    # Harness limit: codex, opencode2 only. Claude Code has no native file delete tool.
     Given the file operation fixture does not exist
     And session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" and assign work "delete fixture" to the <worker> with prompt
       """
-      Use apply_patch in two separate calls. First, create
+      Use <patch_tool> in two separate calls. First, create
       baqylau-e2e-file.txt with the exact content deletion-marker-731. Second,
       delete that file. Do not use a shell command. Reply only with the word
       done.
@@ -75,19 +79,21 @@ Feature: file operations reach the session feed
     And work "delete fixture" has final answer 'done'
 
     Examples:
-      | harness | model        | worker   |
-      | codex   | gpt-5.6-luna | lead     |
-      | codex   | gpt-5.6-luna | subagent |
+      | harness   | model                    | worker   | patch_tool  |
+      | codex     | gpt-5.6-luna             | lead     | apply_patch |
+      | codex     | gpt-5.6-luna             | subagent | apply_patch |
+      | opencode2 | opencode-go/gpt-5.6-luna | lead     | patch       |
+      | opencode2 | opencode-go/gpt-5.6-luna | subagent | patch       |
 
   Scenario Outline: a renamed file keeps both exact paths
-    # Harness limit: codex only. Only Codex apply_patch reports a native file move operation.
+    # Harness limit: codex, opencode2 only. Claude Code has no native file move tool.
     Given the file rename fixtures do not exist
     And session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" and assign work "rename fixture" to the <worker> with prompt
       """
-      Use apply_patch in two separate calls. First, create
+      Use <patch_tool> in two separate calls. First, create
       baqylau-e2e-rename-source.txt with the exact content rename-marker-852.
-      Second, use apply_patch with its Move to header to rename that file to
+      Second, use <patch_tool> with its Move to header to rename that file to
       baqylau-e2e-rename-target.txt. Do not use a shell command. When complete,
       reply with the exact marker RENAME_DONE and no other text.
       """
@@ -99,9 +105,11 @@ Feature: file operations reach the session feed
     And work "rename fixture" has final answer 'RENAME_DONE'
 
     Examples:
-      | harness | model        | worker   |
-      | codex   | gpt-5.6-luna | lead     |
-      | codex   | gpt-5.6-luna | subagent |
+      | harness   | model                    | worker   | patch_tool  |
+      | codex     | gpt-5.6-luna             | lead     | apply_patch |
+      | codex     | gpt-5.6-luna             | subagent | apply_patch |
+      | opencode2 | opencode-go/gpt-5.6-luna | lead     | patch       |
+      | opencode2 | opencode-go/gpt-5.6-luna | subagent | patch       |
 
   Scenario Outline: a failed file read keeps its exact path
     Given the missing file fixture does not exist
@@ -122,8 +130,10 @@ Feature: file operations reach the session feed
     And work "read missing fixture" has final answer 'MISSING_READ_DONE'
 
     Examples:
-      | harness     | model        | worker   |
-      | codex       | gpt-5.6-luna | lead     |
-      | codex       | gpt-5.6-luna | subagent |
-      | claude_code | haiku        | lead     |
-      | claude_code | haiku        | subagent |
+      | harness     | model                           | worker   |
+      | codex       | gpt-5.6-luna                    | lead     |
+      | codex       | gpt-5.6-luna                    | subagent |
+      | claude_code | haiku                           | lead     |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | lead     |
+      | claude_code | haiku                           | subagent |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | subagent |

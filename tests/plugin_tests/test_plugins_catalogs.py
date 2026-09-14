@@ -16,13 +16,8 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-def test_catalogs_expose_only_what_depends_on_dir(tmp_path: Path) -> None:
-    """The catalogue is now the per-DIRECTORY half of the menu vocabulary.
-
-    Everything a harness offers unconditionally moved onto HarnessInfo, which is
-    a frozen literal built at import -- so only the slash commands, discovered by
-    walking the session's own directory, still need a QueryContext.
-    """
+def test_catalogs_keep_fixed_models_on_descriptor(tmp_path: Path) -> None:
+    """Fixed model lists need no native override in the catalog."""
     application = ProviderGraph()
     context = QueryContext(session_id=None, working_directory=str(tmp_path))
 
@@ -32,7 +27,7 @@ def test_catalogs_expose_only_what_depends_on_dir(tmp_path: Path) -> None:
     assert {command.command for command in claude_catalog.commands} != {
         command.command for command in codex_catalog.commands
     }
-    assert not hasattr(claude_catalog, "models")
+    assert claude_catalog.models is None and codex_catalog.models is None
     assert not hasattr(claude_catalog, "accounts")
 
 

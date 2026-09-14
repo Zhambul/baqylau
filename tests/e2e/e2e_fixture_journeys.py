@@ -10,8 +10,6 @@ json_document = fixture_dependencies.standard.json
 USAGE_CACHE_MAX_AGE_SECONDS = 600
 TEXT_ENCODING = "utf-8"
 CLAUDE_PROFILE_NAME = ".claude.json"
-MISSING_CLAUDE_USAGE_WINDOW = "Claude usage preflight has no Fable window"
-MISSING_CODEX_USAGE_ROW = "Codex usage preflight has no usage row"
 
 
 def failure_diagnostic_text(
@@ -37,25 +35,10 @@ def prewarm_usage_cache(
     path: fixture_dependencies.application.Path,
     runtime_configs: fixture_dependencies.harness.harness_runtime.HarnessRuntimeConfigs,
 ) -> None:
-    """Fill the shared usage cache before the test daemons start.
-
-    Raises:
-        AssertionError: If Claude usage fails, its Fable window is absent, or Codex has no usage row.
-
-    """
-    rows = fixture_dependencies.harness.SharedUsageCache(path, max_age_seconds=USAGE_CACHE_MAX_AGE_SECONDS).read(
+    """Fill the shared cache; the usage scenarios check each provider's result."""
+    fixture_dependencies.harness.SharedUsageCache(path, max_age_seconds=USAGE_CACHE_MAX_AGE_SECONDS).read(
         e2e_fixture_reporting.LiveE2EUsageSource(runtime_configs),
     )
-    claude = next((row for row in rows if row.harness == "claude_code"), None)
-    codex = next((row for row in rows if row.harness == "codex"), None)
-    if claude is None or claude.collection_error is not None:
-        failure_reason = "no usage row" if claude is None else claude.collection_error
-        msg = f"Claude usage preflight failed: {failure_reason}"
-        raise AssertionError(msg)
-    if not any(window.model_name == "fable" for window in claude.windows):
-        raise AssertionError(MISSING_CLAUDE_USAGE_WINDOW)
-    if codex is None:
-        raise AssertionError(MISSING_CODEX_USAGE_ROW)
 
 
 def codex_hook_state_lines(

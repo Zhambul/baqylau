@@ -7,6 +7,8 @@ from dataclasses import replace
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
+import pytest
+
 from harness.models.usage import UsageRow
 from harness.services.usage import (
     USAGE_CACHE_DOCUMENT,
@@ -19,7 +21,6 @@ from tests.usage_test_support import RecordingUsageSource
 if TYPE_CHECKING:
     from pathlib import Path
 
-    import pytest
 
 FAILED_CACHE_TIME = 10.0
 RETRY_READ_TIME = 16.0
@@ -50,7 +51,10 @@ def test_shared_usage_cache_runs_one_probe(tmp_path: Path) -> None:
     assert source.calls == EXPECTED_SOURCE_READS
 
 
-def test_shared_usage_cache_retries_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("authentication", [False, True])
+def test_shared_usage_cache_retries_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, authentication: bool,
+) -> None:
     """Verify the shared cache retries a failed snapshot quickly."""
     cache_path = tmp_path / "usage.json"
     failed_row = UsageRow(
@@ -64,16 +68,17 @@ def test_shared_usage_cache_retries_failed(tmp_path: Path, monkeypatch: pytest.M
         scheduling_score=None,
         scheduling_allowed=True,
         limit=None,
-        authentication_error=None,
-        collection_error="temporary failure",
+        authentication_error="sign in" if authentication else None,
+        collection_error=None if authentication else "temporary failure",
     )
     cache_path.write_bytes(
         USAGE_CACHE_DOCUMENT.dump_json(UsageCacheDocument(FAILED_CACHE_TIME, (failed_row,))),
     )
-    source = RecordingUsageSource((replace(failed_row, collection_error=None),))
+    source = RecordingUsageSource((replace(failed_row, collection_error=None, authentication_error=None),))
     monkeypatch.setattr("harness.services.usage.time.time", lambda: RETRY_READ_TIME)
 
     usage_rows = SharedUsageCache(cache_path).read(source)
 
     assert usage_rows[0].collection_error is None
+    assert usage_rows[0].authentication_error is None
     assert source.calls == EXPECTED_SOURCE_READS

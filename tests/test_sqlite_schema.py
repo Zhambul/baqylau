@@ -74,9 +74,12 @@ def test_version_four_actor_models_are_migrated(migration: sqlite_test_models.Mi
     assert "selection_id" not in row[PAYLOAD_FIELD]
 
 
-def test_version_five_closes_finished_codex(migration: sqlite_test_models.MigrationDatabase) -> None:
-    """Verify version five closes finished codex backgrounded shells."""
-    shell_id = sqlite_test_entries.record_version_five_shell(migration)
+@standard_dependencies.pytest.mark.parametrize("schema_version", [5, 25])
+def test_upgrade_closes_finished_codex_shells(
+    migration: sqlite_test_models.MigrationDatabase, schema_version: int,
+) -> None:
+    """Verify that an upgrade closes finished Codex background shells."""
+    shell_id = sqlite_test_entries.record_finished_background_shell(migration, schema_version)
     upgraded = migration.upgrade()
     repaired = repository_dependencies.SqliteCanonicalEventRepository(upgraded).find(
         domain_dependencies.domain_ids.CanonicalEventId("migration:6:shell-output-finished:finished-one"),

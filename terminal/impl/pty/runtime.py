@@ -34,11 +34,16 @@ def open_process(
     environment: Mapping[str, str],
     columns: int,
     lines: int,
-) -> tuple[RunningProcess, int] | None:
+) -> tuple[RunningProcess, int]:
     """Open a PTY and start a process in a new session.
 
     Returns:
-        The process and its PTY descriptor, or None after an open error.
+        The process and its PTY descriptor.
+
+    Raises:
+        OSError: If the operating system refuses the process. The cause is kept
+            because a launch that fails only under load — no descriptors, no
+            processes — cannot be told apart from a missing program without it.
 
     """
     controller, program_side = pty.openpty()
@@ -56,7 +61,7 @@ def open_process(
     except OSError:
         os.close(controller)
         os.close(program_side)
-        return None
+        raise
     os.close(program_side)
     return process, controller
 

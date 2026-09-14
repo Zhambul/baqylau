@@ -1,11 +1,12 @@
 Feature: interrupting a turn reports the turn and command outcomes
 
   Scenario Outline: one subagent can stop while another subagent continues
+    # Harness limit: codex, claude_code only. OpenCode2 has no native tool that stops one named subagent.
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "parallel work" and assign these work items in parallel to subagents
-      | work          | prompt                                                                                                                                                                                                 |
-      | stopped work  | Run `python3 -c 'import time; time.sleep(30); print("stopped-work-finished")'` as a foreground shell command. Do not run it in the background. Wait for it before you reply.                                               |
-      | survivor work | Run `python3 -c 'import time; time.sleep(12); print("survivor-work-finished")'` as a foreground shell command. Do not run it in the background. Wait for it, and then reply only with SURVIVOR_DONE.                     |
+      | work          | prompt                                                                                                                                                                                               |
+      | stopped work  | Run `python3 -c 'import time; time.sleep(30); print("stopped-work-finished")'` as a foreground shell command. Do not run it in the background. Wait for it before you reply.                         |
+      | survivor work | Run `python3 -c 'import time; time.sleep(12); print("survivor-work-finished")'` as a foreground shell command. Do not run it in the background. Wait for it, and then reply only with SURVIVOR_DONE. |
     And I name the only running foreground command in work "stopped work" containing 'time.sleep(30)' "stopped command"
     And I name the only running foreground command in work "survivor work" containing 'time.sleep(12)' "survivor command"
     And I request interruption of work "stopped work" in session "primary" as worker control "stop one child"
@@ -28,6 +29,7 @@ Feature: interrupting a turn reports the turn and command outcomes
       | claude_code | haiku        |
 
   Scenario Outline: an interrupt cancels active subagent work
+    # Harness limit: codex, claude_code only. OpenCode2 has no native tool that stops one named subagent.
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" and assign work "child sleep" to the subagent with prompt
       """
@@ -75,6 +77,7 @@ Feature: interrupting a turn reports the turn and command outcomes
     And session "primary" has no running work
 
     Examples:
-      | harness     | model        |
-      | codex       | gpt-5.6-luna |
-      | claude_code | haiku        |
+      | harness     | model                           |
+      | codex       | gpt-5.6-luna                    |
+      | claude_code | haiku                           |
+      | opencode2   | opencode-go/deepseek-v4.1-flash |

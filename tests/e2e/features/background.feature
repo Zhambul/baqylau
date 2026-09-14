@@ -44,10 +44,12 @@ Feature: background work reaches the session feed
     And work "start delayed echo" has final answer 'started'
 
     Examples:
-      | harness     | model        | worker   | background_instruction                                                   |
-      | codex       | gpt-5.6-luna | lead     | Run the command exactly as written: do not add &, nohup, or shell background syntax. Your first action must be the shell execution tool with a 1000 ms yield time. Once it yields, do not call wait or poll. |
-      | codex       | gpt-5.6-luna | subagent | Run the command exactly as written: do not add &, nohup, or shell background syntax. Your first action must be the shell execution tool with a 1000 ms yield time. Once it yields, do not call wait or poll. |
-      | claude_code | haiku        | lead     | Use the Bash tool with run_in_background set to true.                     |
+      | harness     | model                           | worker   | background_instruction                                                                                                                                                                                       |
+      | codex       | gpt-5.6-luna                    | lead     | Run the command exactly as written: do not add &, nohup, or shell background syntax. Your first action must be the shell execution tool with a 1000 ms yield time. Once it yields, do not call wait or poll. |
+      | codex       | gpt-5.6-luna                    | subagent | Run the command exactly as written: do not add &, nohup, or shell background syntax. Your first action must be the shell execution tool with a 1000 ms yield time. Once it yields, do not call wait or poll. |
+      | claude_code | haiku                           | lead     | Use the Bash tool with run_in_background set to true.                                                                                                                                                        |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | lead     | Use the native shell tool with background set to true.                                                                                                                                                       |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | subagent | Use the native shell tool with background set to true.                                                                                                                                                       |
 
   Scenario Outline: a completed empty command is not background work
     Given session configuration "primary" uses <harness> with model <model> and low effort
@@ -65,9 +67,10 @@ Feature: background work reaches the session feed
     And turn "empty command" has final answer 'EMPTY_COMMAND_DONE'
 
     Examples:
-      | harness     | model        | execution_instruction                                                       |
-      | codex       | gpt-5.6-luna | Use the shell execution tool with a 10000 ms yield time.                     |
-      | claude_code | haiku        | Use the Bash tool in the foreground. Do not set run_in_background to true.  |
+      | harness     | model                           | execution_instruction                                                      |
+      | codex       | gpt-5.6-luna                    | Use the shell execution tool with a 10000 ms yield time.                   |
+      | claude_code | haiku                           | Use the Bash tool in the foreground. Do not set run_in_background to true. |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | Use the native shell tool in the foreground with background set to false.  |
 
   Scenario Outline: a subagent owns background work through completion
     Given session configuration "primary" uses <harness> with model <model> and low effort
@@ -88,17 +91,18 @@ Feature: background work reaches the session feed
     And work "complete child job" has final answer 'CHILD_JOB_DONE'
 
     Examples:
-      | harness     | model        | completion_instruction                                                                                   |
-      | codex       | gpt-5.6-luna | Use the shell execution tool with a 1000 ms yield time. Use the process wait operation after it yields.   |
-      | claude_code | haiku        | Your first tool call must be Bash with run_in_background set to true; do not call ToolSearch or another tool first. After Bash returns, wait for its automatic completion notification. |
+      | harness     | model                           | completion_instruction                                                                                                                                                                  |
+      | codex       | gpt-5.6-luna                    | Use the shell execution tool with a 1000 ms yield time. Use the process wait operation after it yields.                                                                                 |
+      | claude_code | haiku                           | Your first tool call must be Bash with run_in_background set to true; do not call ToolSearch or another tool first. After Bash returns, wait for its automatic completion notification. |
+      | opencode2   | opencode-go/deepseek-v4.1-flash | Your first tool call must be the native shell tool with background set to true. After it returns, wait for its automatic completion notification.                                       |
 
   Scenario Outline: a command backgrounded mid-run keeps reporting
-    # Harness limit: claude_code only. Only Claude Code supports the background control.
+    # Harness limit: claude_code, opencode2 only. Codex has no native control to background a running command.
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "run delayed echo" with prompt
       """
       Run `echo started; sleep 30; echo done` in the foreground and wait for it.
-      Do not use run_in_background. If the command is moved to the background,
+      Do not start it in the background. If the command is moved to the background,
       do not start a monitor or any other tool. Reply only with the word started.
       """
     And I name the only running foreground command in turn "run delayed echo" containing 'sleep' "delayed echo"
@@ -113,5 +117,6 @@ Feature: background work reaches the session feed
     And session "primary" has no running work
 
     Examples:
-      | harness     | model |
-      | claude_code | haiku |
+      | harness     | model                         |
+      | claude_code | haiku                         |
+      | opencode2   | opencode-go/deepseek-v4.1-flash |

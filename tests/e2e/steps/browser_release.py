@@ -23,6 +23,7 @@ def release_active_browser_work(client: BaqylauClient, sessions: Sessions, sessi
 
 
 @when(parsers.parse('I release active browser work in session "{session_name}" with marker "{marker}"'))
+@when(parsers.parse('I release active work in session "{session_name}" with marker "{marker}"'))
 def release_active_browser_work_with_marker(
     client: BaqylauClient,
     sessions: Sessions,

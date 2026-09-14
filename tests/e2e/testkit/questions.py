@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from tests.e2e.testkit.work_models import WorkRequest
@@ -33,6 +34,8 @@ def native_question_prompt(spec: SessionSpec, prompt: str) -> str:
         )
     elif spec.harness == "claude_code":
         instruction = "Use AskUserQuestion exactly once."
+    elif spec.harness == "opencode2":
+        instruction = "Use the native question tool exactly once."
     else:
         message = f"harness {spec.harness!r} has no question work adapter"
         raise AssertionError(message)
@@ -46,14 +49,7 @@ class QuestionWorkDriver:
         """Initialize the object."""
         self._work_driver = work_driver
 
-    def launch(
-        self,
-        spec: SessionSpec,
-        *,
-        work_name: str,
-        worker_kind: WorkerKind,
-        prompt: str,
-    ) -> StartedWork:
+    def launch(self, spec: SessionSpec, request: WorkRequest) -> StartedWork:
         """Launch question work.
 
         Returns:
@@ -62,9 +58,7 @@ class QuestionWorkDriver:
         """
         return self._work_driver.launch(
             spec,
-            work_name=work_name,
-            worker_kind=worker_kind,
-            prompt=native_question_prompt(spec, prompt),
+            replace(request, prompt=native_question_prompt(spec, request.prompt)),
         )
 
     def assign(

@@ -7,12 +7,12 @@ import shlex
 from itertools import starmap
 from typing import TYPE_CHECKING
 
+from domain.ids import HarnessName
 from terminal.models.tabs import EnvironmentVariable
-from tests.e2e.testkit import journey_session_ids
-from tests.harness_names import CLAUDE_CODE_HARNESS
+from tests.e2e.testkit import journey_opencode, journey_session_ids
+from tests.harness_names import CLAUDE_CODE_HARNESS, OPENCODE_HARNESS
 
 if TYPE_CHECKING:
-    from domain.ids import HarnessName
     from harness.runtime import HarnessRuntimeConfig
     from sdk.client import SessionRef
     from tests.e2e.testkit.references import SessionSpec
@@ -52,6 +52,8 @@ def launch_arguments(
         The command arguments for a harness launch.
 
     """
+    if harness == OPENCODE_HARNESS:
+        return journey_opencode.launch_arguments(resume, prompt)
     arguments = (
         claude_launch_arguments(spec, resume)
         if harness == CLAUDE_CODE_HARNESS
@@ -97,7 +99,7 @@ def codex_launch_arguments(spec: SessionSpec, resume: SessionRef | None, workspa
 
 
 def launch_environment(
-    harness: HarnessName,
+    spec: SessionSpec,
     runtime: HarnessRuntimeConfig,
     dashboard_port: int,
     environment_values: tuple[EnvironmentVariable, ...],
@@ -108,12 +110,15 @@ def launch_environment(
         Environment variables for a harness launch.
 
     """
+    harness = HarnessName(spec.harness)
     environment = {launch_value.name: launch_value.content for launch_value in environment_values}
     environment["BAQYLAU_DASHBOARD_PORT"] = str(dashboard_port)
     if harness == CLAUDE_CODE_HARNESS:
         environment["CLAUDE_CONFIG_DIR"] = str(runtime.configuration_directory)
         if runtime.settings_file is not None:
             environment["CLAUDE_CODE_MANAGED_SETTINGS_PATH"] = str(runtime.settings_file)
+    elif harness == OPENCODE_HARNESS:
+        environment.update(journey_opencode.launch_environment(spec, runtime, dashboard_port))
     else:
         environment["CODEX_HOME"] = str(runtime.configuration_directory)
     return tuple(starmap(EnvironmentVariable, environment.items()))

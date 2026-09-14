@@ -28,11 +28,13 @@ from __future__ import annotations
 
 from types import MappingProxyType
 
-MAIN_SCHEMA_VERSION = 25
+MAIN_SCHEMA_VERSION = 26
 AUDIT_SCHEMA_VERSION = 1
 TOOL_COUNTS_REPAIR_VERSION = 15
 FIRST_REPEATED_REPAIR_VERSION = 21
 SECOND_REPEATED_REPAIR_VERSION = 22
+SHELL_OUTPUT_REPAIR_VERSION = 6
+RESTART_SHELL_REPAIR_VERSION = 26
 
 
 def _repeat_repairs(
@@ -41,6 +43,9 @@ def _repeat_repairs(
     repair = migrations[TOOL_COUNTS_REPAIR_VERSION]
     migrations[FIRST_REPEATED_REPAIR_VERSION] = repair
     migrations[SECOND_REPEATED_REPAIR_VERSION] = repair
+    # Native command completion after a restart could omit output completion.
+    # Add the missing facts with the same repair used for older yielded shells.
+    migrations[RESTART_SHELL_REPAIR_VERSION] = migrations[SHELL_OUTPUT_REPAIR_VERSION]
     return MappingProxyType(migrations)
 
 

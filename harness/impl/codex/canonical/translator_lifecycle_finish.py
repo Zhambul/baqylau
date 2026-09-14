@@ -214,16 +214,17 @@ class _CodexShellResultTranslator(_CodexToolResultTranslator):
         events = finish_dependencies.translator_shell_events.completed_shell_events(
             context, resolved, process_exit_code, outcome,
         )
-        if key in self._backgrounded_shells:
-            self._backgrounded_shells.discard(key)
-            events.append(
-                finish_dependencies.translator_shell_events.completed_shell_event(
-                    context,
-                    resolved.shell_id,
-                    "output_finished",
-                    dependencies.translator_domain_events.event_shell.ShellOutputFinished(resolved.shell_id, outcome),
-                ),
-            )
+        # Native completion closes the output even if a restart cleared the
+        # background set. Command matching can recover the shell without it.
+        self._backgrounded_shells.discard(key)
+        events.append(
+            finish_dependencies.translator_shell_events.completed_shell_event(
+                context,
+                resolved.shell_id,
+                "output_finished",
+                dependencies.translator_domain_events.event_shell.ShellOutputFinished(resolved.shell_id, outcome),
+            ),
+        )
         return events
 
     def _mcp_tool_completed(

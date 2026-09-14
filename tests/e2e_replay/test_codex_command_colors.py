@@ -18,21 +18,22 @@ TERMINATED_EXIT = -15
 
 # Harness limit: codex only. Replay a native command completion and a yielded background command.
 @pytest.mark.parametrize("restart_index", [None, 3, 6])
+@pytest.mark.parametrize("filename", ["audit_codex_command_colors.jsonl", "audit_codex_native_command_colors.jsonl"])
 @pytest.mark.parametrize(("exit_code", "output"), [(0, "done"), (TERMINATED_EXIT, "")])
 def test_command_results_do_not_scan_old_history(
-    monkeypatch: pytest.MonkeyPatch, restart_index: int | None, exit_code: int, output: str,
+    monkeypatch: pytest.MonkeyPatch, restart_index: int | None, filename: str, exit_code: int, output: str,
 ) -> None:
     """Known commands reach the display without a full rollout scan."""
     scan = Mock(wraps=translator_recovery.backward_lines)
     monkeypatch.setattr(translator_recovery, "backward_lines", scan)
     application = ProviderGraph()
     tabs = command_color_support.record_colors(application)
-    for index, record in enumerate(command_inputs("audit_codex_command_colors.jsonl")):
+    for index, record in enumerate(command_inputs(filename)):
         if index == restart_index:
             application = ProviderGraph()
             tabs = command_color_support.record_colors(application)
         application.raw_events.record((
-            command_color_support.poll_result(record, exit_code, output)
+            command_color_support.completion_result(record, exit_code, output)
             if index == RESULT_INDEX else record,
         ))
         application.provider("interpreter", Interpreter).tick()

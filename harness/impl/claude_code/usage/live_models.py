@@ -24,6 +24,7 @@ class LiveUsageCollection:
 
     usage: LiveUsage | None
     error: str | None
+    authentication_error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,7 @@ class ProbeFailure:
 
     message: str
     recoverable: bool
+    authentication_error: bool = False
 
 
 @dataclass(frozen=True)

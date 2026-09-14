@@ -5,3 +5,4 @@ from domain.ids import HarnessName
 
 CLAUDE_CODE_HARNESS = HarnessName("claude_code")
 CODEX_HARNESS = HarnessName("codex")
+OPENCODE_HARNESS = HarnessName("opencode2")

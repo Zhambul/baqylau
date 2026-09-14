@@ -1,5 +1,64 @@
 Feature: a real terminal owns one composable session surface
 
+  Scenario Outline: a terminal session accepts a dashboard permission answer
+    # Harness limit: opencode2 only. The other adapters do not expose native permission prompts.
+    Given session configuration "primary" uses <harness> with model <model> and low effort
+    When I start journey session "primary" from the terminal as turn "terminal ready" with prompt
+      """
+      Reply only with READY.
+      """
+    Then turn "terminal ready" completes
+    When I assign permission work "read external file" in session "primary" for an external file
+    And I name the pending question in work "read external file" containing 'external_directory' "file access"
+    When I answer question "file access" with option 'Allow once' as control "allow file"
+    Then control "allow file" response is accepted
+    And control "allow file" outcome is acknowledged
+    And question "file access" records option 'Allow once'
+    And question "file access" is resolved
+    And work "read external file" completes
+    And work "read external file" has final answer 'The access code is 731.'
+    And journey session "primary" has its exact terminal pane set
+
+    Examples:
+      | harness   | model                         |
+      | opencode2 | opencode-go/deepseek-v4.1-flash |
+
+  Scenario Outline: two terminal sessions keep separate ownership
+    Given session configuration "primary" uses <harness> with model <model> and low effort
+    And session configuration "secondary" uses <harness> with model <model> and low effort
+    When I start journey session "primary" from the terminal as turn "first terminal" with prompt
+      """
+      Reply only with FIRST_TERMINAL_READY.
+      """
+    Then turn "first terminal" completes
+    And turn "first terminal" has final answer 'FIRST_TERMINAL_READY'
+    When I start journey session "secondary" from the terminal as turn "second terminal" with prompt
+      """
+      Reply only with SECOND_TERMINAL_READY.
+      """
+    Then turn "second terminal" completes
+    And turn "second terminal" has final answer 'SECOND_TERMINAL_READY'
+    And journey session "primary" has its exact terminal pane set
+    And journey session "secondary" has its exact terminal pane set
+    And the terminal tab for journey session "primary" has color awaiting_response
+    And the terminal tab for journey session "secondary" has color awaiting_response
+    When I close the terminal for journey session "primary"
+    Then session "primary" and all its actors finish
+    And session "secondary" is live
+    When I continue journey session "secondary" from the dashboard as turn "surviving terminal" with prompt
+      """
+      Reply only with SECOND_TERMINAL_STILL_READY.
+      """
+    Then turn "surviving terminal" completes
+    And turn "surviving terminal" has final answer 'SECOND_TERMINAL_STILL_READY'
+    And journey session "secondary" has its exact terminal pane set
+
+    Examples:
+      | harness     | model                         |
+      | codex       | gpt-5.6-luna                   |
+      | claude_code | haiku                         |
+      | opencode2   | opencode-go/deepseek-v4.1-flash |
+
   Scenario Outline: a session terminal supports its complete pane lifecycle
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I start journey session "primary" from the terminal as turn "terminal pane start" with prompt
@@ -9,6 +68,7 @@ Feature: a real terminal owns one composable session surface
     Then turn "terminal pane start" completes
     And turn "terminal pane start" has final answer 'TERMINAL_PANES_READY'
     And journey session "primary" has its exact terminal pane set
+    And the terminal tab for journey session "primary" has color awaiting_response
     When I remember journey session "primary" pane geometry as "opened"
     And I toggle journey session "primary" terminal panes
     Then journey session "primary" has no auxiliary terminal panes
@@ -30,9 +90,10 @@ Feature: a real terminal owns one composable session surface
     Then journey session "primary" activity pane uses 25 percent
 
     Examples:
-      | harness     | model        |
-      | codex       | gpt-5.6-luna |
-      | claude_code | haiku        |
+      | harness     | model                           |
+      | codex       | gpt-5.6-luna                    |
+      | claude_code | haiku                           |
+      | opencode2   | opencode-go/deepseek-v4.1-flash |
 
   Scenario Outline: dashboard launch and pane setup preserve terminal focus
     Given session configuration "primary" uses <harness> with model <model> and low effort
@@ -47,9 +108,10 @@ Feature: a real terminal owns one composable session surface
     And current terminal focus remains "before dashboard launch"
 
     Examples:
-      | harness     | model        |
-      | codex       | gpt-5.6-luna |
-      | claude_code | haiku        |
+      | harness     | model                           |
+      | codex       | gpt-5.6-luna                    |
+      | claude_code | haiku                           |
+      | opencode2   | opencode-go/deepseek-v4.1-flash |
 
   Scenario Outline: pane ownership and controls survive an application restart
     Given session configuration "primary" uses <harness> with model <model> and low effort
@@ -80,9 +142,10 @@ Feature: a real terminal owns one composable session surface
     And turn "after pane restart" has one final answer containing 'AFTER_PANE_RESTART'
 
     Examples:
-      | harness     | model        |
-      | codex       | gpt-5.6-luna |
-      | claude_code | haiku        |
+      | harness     | model                           |
+      | codex       | gpt-5.6-luna                    |
+      | claude_code | haiku                           |
+      | opencode2   | opencode-go/deepseek-v4.1-flash |
 
   Scenario Outline: a detached harness cannot inherit another session terminal
     Given session configuration "host" uses <host_harness> with model <host_model> and low effort
@@ -109,9 +172,10 @@ Feature: a real terminal owns one composable session surface
     And turn "host after detached close" has final answer 'HOST_STILL_READY'
 
     Examples:
-      | host_harness | host_model   | detached_harness | detached_model |
-      | codex        | gpt-5.6-luna | claude_code      | haiku          |
-      | claude_code  | haiku        | codex            | gpt-5.6-luna   |
+      | host_harness | host_model                      | detached_harness | detached_model |
+      | codex        | gpt-5.6-luna                    | claude_code      | haiku          |
+      | claude_code  | haiku                           | codex            | gpt-5.6-luna   |
+      | opencode2    | opencode-go/deepseek-v4.1-flash | codex            | gpt-5.6-luna   |
 
   Scenario Outline: native exit finishes the harness but keeps the shell tab
     Given session configuration "primary" uses <harness> with model <model> and low effort
@@ -128,9 +192,10 @@ Feature: a real terminal owns one composable session surface
     And journey session "primary" keeps its shell tab
 
     Examples:
-      | harness     | model        |
-      | codex       | gpt-5.6-luna |
-      | claude_code | haiku        |
+      | harness     | model                           |
+      | codex       | gpt-5.6-luna                    |
+      | claude_code | haiku                           |
+      | opencode2   | opencode-go/deepseek-v4.1-flash |
 
   Scenario Outline: native new transfers one terminal to one new session
     Given session configuration "original" uses <harness> with model <model> and low effort
@@ -156,6 +221,7 @@ Feature: a real terminal owns one composable session surface
     And turn "after native new" has final answer 'AFTER_NATIVE_NEW'
 
     Examples:
-      | harness     | model        |
-      | codex       | gpt-5.6-luna |
-      | claude_code | haiku        |
+      | harness     | model                           |
+      | codex       | gpt-5.6-luna                    |
+      | claude_code | haiku                           |
+      | opencode2   | opencode-go/deepseek-v4.1-flash |
