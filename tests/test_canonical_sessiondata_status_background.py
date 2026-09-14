@@ -64,6 +64,28 @@ def test_bg_output_that_ends_after_turn_releases() -> None:
     )
 
 
+def test_rejected_bg_job_ends_on_failed_launch() -> None:
+    """Remove a background job when its launch fails."""
+    state = folding.fold(
+        *session_fixtures.alive(),
+        session_domain.event_shell.ShellStarted(
+            session_values.BACKGROUND_SHELL_ID,
+            session_domain.content.TextContent("blocked command"),
+            session_domain.outcomes.ExecutionMode.BACKGROUND,
+            None,
+        ),
+        session_domain.event_shell.ShellFinished(
+            session_values.BACKGROUND_SHELL_ID,
+            session_domain.outcomes.Outcome.FAILED,
+            None,
+            None,
+        ),
+        session_fixtures.succeeded_turn(),
+    )
+    assert not actor_access.lead_background(state).running_shell_ids
+    assert actor_access.lead_status(state) == session_values.AWAITING_RESPONSE_STATE
+
+
 def test_command_backgrounded_mid_run_becomes_bg() -> None:
     """Verify a command backgrounded mid run becomes background work and counts as a job."""
     state = folding.fold(

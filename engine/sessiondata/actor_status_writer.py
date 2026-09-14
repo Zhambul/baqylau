@@ -14,6 +14,7 @@ from domain import (
     event_shell,
     event_telemetry,
     event_work,
+    outcomes,
 )
 from engine.sessiondata import contract
 
@@ -21,7 +22,7 @@ if TYPE_CHECKING:
     from domain import event_base
 
 from engine.sessiondata.actor_status_attention import _assignment_status, _attention_status
-from engine.sessiondata.actor_status_background import _shell_started, _with_background
+from engine.sessiondata.actor_status_background import _shell_started, _with_background, _without_background
 from engine.sessiondata.actor_status_work import (
     _clear_actor_statuses,
     _finished_turn_actor,
@@ -112,6 +113,8 @@ def _late_status(
         return assignment_state
     if isinstance(payload, event_telemetry.CompactionStarted):
         return aggregate_state.with_actor(replace(actor, status=actor_state.ActorStatus.WORKING))
+    if isinstance(payload, event_shell.ShellFinished) and payload.outcome != outcomes.Outcome.SUCCEEDED:
+        actor = _without_background(actor, payload.shell_id)
     if isinstance(payload, event_telemetry.CompactionFinished) or _is_finished_work(payload):
         return aggregate_state.with_actor(
             replace(actor, status=_status_after_work_settled(actor)),
