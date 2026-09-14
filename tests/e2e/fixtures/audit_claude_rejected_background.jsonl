@@ -1,0 +1,4 @@
+{"type":"user","uuid":"prompt-one","cwd":"/tmp/rejected-background-replay","message":{"role":"user","content":"Start the report in the background."}}
+{"type":"assistant","uuid":"tool-start","parentUuid":"prompt-one","message":{"id":"response-one","role":"assistant","content":[{"type":"tool_use","id":"background-one","name":"Bash","input":{"command":"run-report","description":"Run the report","run_in_background":true}}],"stop_reason":"tool_use"}}
+{"type":"user","uuid":"tool-result","parentUuid":"tool-start","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"background-one","content":"PreToolUse:Bash hook error: Blocked command.","is_error":true}]},"toolUseResult":"Error: PreToolUse:Bash hook error: Blocked command."}
+{"type":"assistant","uuid":"answer-one","parentUuid":"tool-result","message":{"id":"response-two","role":"assistant","content":[{"type":"text","text":"The hook blocked the report."}],"stop_reason":"end_turn"}}

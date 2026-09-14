@@ -213,9 +213,15 @@ class _ToolCallFinishes(_ToolCallStarts):
                 ),
             ),
         )
-        if identity.native_name == runtime_dependencies.tool_kind_values.MONITOR_TOOL_NAME and not monitor_task_id:
-            # A rejected monitor has no native task and cannot send a later
-            # end notification. Its tool result is its complete lifetime.
+        if (
+            (
+                identity.native_name == runtime_dependencies.tool_kind_values.MONITOR_TOOL_NAME
+                and not monitor_task_id
+            )
+            or (identity.arguments.run_in_background and not background_task_id)
+        ):
+            # A rejected asynchronous start has no native task. It cannot send
+            # a later end notification, so its tool result ends its output.
             events.append(
                 runtime_dependencies.support.event(
                     raw_event,
