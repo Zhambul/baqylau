@@ -75,6 +75,27 @@ def assert_tag_launch(launch: tuple[RemoteArgument, ...]) -> None:
     assert "--location=hsplit" in launch
 
 
+def test_pane_launch_keeps_focus_only_while_frontmost() -> None:
+    """Verify a pane launch keeps focus only while kitty is frontmost."""
+    for focused, expected in ((True, True), (False, False)):
+        remote = FakeRemote(tree=[{"is_focused": focused}], printed="101")
+        kitty_plugin(remote).panes.open_pane(
+            PaneOpenRequest(
+                ("python3", "mirror.py"),
+                "",
+                "mirror",
+                SplitAxis.VERTICAL,
+                PANE_SIZE_PERCENT,
+                PaneAnchor(window_id=WindowId(WINDOW_ID_TEXT)),
+                WINDOW_ID_TEXT,
+                {ACTIVITY_PANE_TAG: "session-one"},
+            ),
+        )
+
+        launch = next(call for call in remote.calls if call[0] == "launch")
+        assert ("--keep-focus" in launch) is expected
+
+
 def test_an_anchor_names_exactly_one_thing() -> None:
     """Verify an anchor names exactly one target."""
     with pytest.raises(ValueError, match="exactly one"):

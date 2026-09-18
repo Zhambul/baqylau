@@ -27,6 +27,7 @@ class _KittyQueryClient(Protocol):
 
     def ls(self) -> list[KittyOSWindow] | None:
         """Return the kitty operating-system window tree."""
+        ...
 
 
 class KittyQueryOperations(KittySocketOperations):
@@ -49,3 +50,23 @@ class KittyQueryOperations(KittySocketOperations):
             return TypeAdapter(list[KittyOSWindow]).validate_json(output)
         except ValidationError:
             return None
+
+    def app_focused(self: _KittyQueryClient, tree: list[KittyOSWindow] | None = None) -> bool:
+        """Return true when any kitty OS window is focused.
+
+        This is the gate for a launch's `--keep-focus`: kitty's keep-focus
+            restore path raises the OS window whenever no kitty window is
+            focused, which on macOS activates kitty over the user's current
+            app — the dashboard web-launch focus steal. `tree` reuses an `ls`
+            the caller already paid for. False on an `ls` failure: a focus
+            probe must degrade toward not stealing.
+
+        Returns:
+            True when kitty is the frontmost application.
+
+        """
+        try:
+            windows = self.ls() if tree is None else tree
+            return any(os_window.is_focused for os_window in windows or ())
+        except Exception:  # noqa: BLE001 - A focus probe must never raise into a launch.
+            return False

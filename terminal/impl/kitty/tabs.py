@@ -52,7 +52,11 @@ class KittyTabs(TerminalTabs):
 
         """
         arguments = ["launch", "--type=tab", "--cwd", tab_open_request.working_directory]
-        arguments.append("--keep-focus")
+        if self.kitty_remote.app_focused():
+            # Only while kitty is frontmost. On a background kitty the flag's
+            # focus-restore raises the OS window and macOS activates kitty over
+            # the user's current app — the dashboard web-launch focus steal.
+            arguments.append("--keep-focus")
         for environment_variable in tab_open_request.environment:
             arguments.extend(("--env", f"{environment_variable.name}={environment_variable.content}"))
         printed = self.kitty_remote.capture(*arguments, *tab_open_request.command)

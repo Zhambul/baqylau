@@ -36,12 +36,22 @@ def test_rgb_rejects_invalid_color_bytes(hexadecimal: str) -> None:
 
 
 def test_tab_launch_focus() -> None:
-    """Verify a tab launch always keeps the current focus."""
-    remote = FakeRemote(printed="7")
+    """Verify a tab launch keeps the current focus only while kitty is frontmost."""
+    for focused, expected in ((True, True), (False, False)):
+        remote = FakeRemote(tree=[{"is_focused": focused}], printed="7")
+        kitty_plugin(remote).tabs.open_tab(TabOpenRequest("/work", ("claude",), ""))
+
+        launch = next(call for call in remote.calls if call[0] == "launch")
+        assert ("--keep-focus" in launch) is expected
+
+
+def test_tab_launch_without_a_focus_answer_does_not_keep_focus() -> None:
+    """Verify an unreadable focus state degrades to not stealing focus."""
+    remote = FakeRemote(tree=None, printed="7")
     kitty_plugin(remote).tabs.open_tab(TabOpenRequest("/work", ("claude",), ""))
 
     launch = next(call for call in remote.calls if call[0] == "launch")
-    assert "--keep-focus" in launch
+    assert "--keep-focus" not in launch
 
 
 def test_tab_colour_validation() -> None:
