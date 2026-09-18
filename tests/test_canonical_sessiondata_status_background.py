@@ -130,6 +130,26 @@ def test_monitors_and_bg_jobs_are_counted_apart() -> None:
     }
 
 
+def test_monitor_output_that_ends_after_turn_releases() -> None:
+    """Verify a monitor's output end releases the actor like a background job."""
+    assert (
+        session_fixtures.status_after(
+            session_domain.event_shell.ShellStarted(
+                session_domain.ids.ShellId("m1"),
+                session_domain.content.TextContent("watch"),
+                session_domain.outcomes.ExecutionMode.MONITOR,
+                None,
+            ),
+            session_fixtures.succeeded_turn(),
+            session_domain.event_shell.ShellOutputFinished(
+                session_domain.ids.ShellId("m1"),
+                session_domain.outcomes.Outcome.SUCCEEDED,
+            ),
+        )
+        == session_values.AWAITING_RESPONSE_STATE
+    )
+
+
 def test_finished_session_clears_every_actor_not() -> None:
     """Verify a finished session clears every actor not just the one that ended it."""
     state = folding.fold(
