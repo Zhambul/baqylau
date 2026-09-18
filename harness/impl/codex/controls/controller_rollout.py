@@ -15,7 +15,6 @@ from harness.impl.codex.canonical.records import (
 )
 from harness.impl.codex.controls.controller_results import RolloutPosition
 from harness.impl.codex.controls.controller_rollout_state import _has_queued_turn
-from harness.impl.codex.controls.controller_values import RENAME_COMMAND_PREFIX
 
 
 def source_positions(
@@ -57,17 +56,17 @@ def position_for(
     )
 
 
-def renamed_to(message: str) -> str | None:
-    """Read a new title from a rename command.
+def command_argument(message: str, prefix: str) -> str | None:
+    """Read the argument of a slash command such as `/rename ` or `/goal `.
 
     Returns:
-        The title, or None if the message has no rename title.
+        The argument, or None if the message is not that command or has none.
 
     """
-    if not message.startswith(RENAME_COMMAND_PREFIX):
+    if not message.startswith(prefix):
         return None
-    name = message.removeprefix(RENAME_COMMAND_PREFIX).strip()
-    return name or None
+    argument = message.removeprefix(prefix).strip()
+    return argument or None
 
 
 def rollout_lines_after(path: str, position: int) -> tuple[str, ...]:

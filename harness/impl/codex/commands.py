@@ -5,7 +5,7 @@
 #
 # The web composer offers the same "/" autocomplete the codex TUI does, but a
 # codex session's commands are NOT Claude's: it has /plan, /approvals, /review,
-# … and NOT /goal, /rewind, /agents. The old fan-out concatenated every
+# /goal … and NOT /rewind, /agents. The old fan-out concatenated every
 # plugin's list, which was only ever right because claude_code was the sole
 # provider — so a codex session was offered Claude's vocabulary (the reported
 # "/plan isn't recognized" gap). Now plugins.slash_commands is host-SCOPED (the
@@ -90,6 +90,7 @@ BUILTINS = (
     ("approvals", "choose what Codex can do without approval"),
     ("compact", "summarize the conversation to save context"),
     ("diff", "show git diff (including untracked files)"),
+    ("goal", "set a goal that Codex works toward across turns"),
     ("init", "create an AGENTS.md with instructions for Codex"),
     ("logout", "log out of Codex"),
     ("mcp", "list configured MCP tools"),
