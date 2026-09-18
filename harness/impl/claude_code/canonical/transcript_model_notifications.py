@@ -14,6 +14,7 @@ from harness.impl.claude_code.canonical.transcript_model_activity import (
 )
 from harness.impl.claude_code.canonical.transcript_model_core import (
     BadTranscriptRecord,
+    CommandOutputTranscriptRecord,
     CompactSummaryTranscriptRecord,
     CompactTranscriptRecord,
     PromptTranscriptRecord,
@@ -80,6 +81,7 @@ type TranscriptRecord = (
     | TextTranscriptRecord
     | PromptTranscriptRecord
     | SlashCommandTranscriptRecord
+    | CommandOutputTranscriptRecord
     | TeamMessageTranscriptRecord
     | ResultsTranscriptRecord
     | TeammateIdleTranscriptRecord

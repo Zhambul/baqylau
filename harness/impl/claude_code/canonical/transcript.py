@@ -92,6 +92,7 @@ from harness.impl.claude_code.canonical.transcript_model_activity import (
 )
 from harness.impl.claude_code.canonical.transcript_model_core import (
     BadTranscriptRecord as BadTranscriptRecord,
+    CommandOutputTranscriptRecord as CommandOutputTranscriptRecord,
     CompactSummaryTranscriptRecord as CompactSummaryTranscriptRecord,
     CompactTranscriptRecord as CompactTranscriptRecord,
     PromptTranscriptRecord as PromptTranscriptRecord,

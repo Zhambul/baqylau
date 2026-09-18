@@ -7,8 +7,12 @@ from harness.impl.claude_code.canonical import (
     message_models,
     message_subject_values,
     transcript,
+    transcript_commands,
 )
 from harness.models import raw_event_builders, raw_events
+
+EFFORT_COMMAND_NAME = "effort"
+SELECTION_COMMANDS = frozenset((message_subject_values.MODEL_SUBJECT, EFFORT_COMMAND_NAME))
 
 
 def prompt_turn(
@@ -60,8 +64,15 @@ def slash_command(
     selection = record.arguments.strip()
     if name in {"clear", "compact", "rename"}:
         return []
-    if _is_selection_command(name, selection):
-        return _selection_command_events(source, name, selection, semantics)
+    if name in SELECTION_COMMANDS:
+        # A picker form carries no argument and runs no model turn; its output
+        # record reports the choice separately. An invalid argument runs no
+        # turn either.
+        return (
+            _selection_command_events(source, name, selection, semantics)
+            if _is_selection_command(name, selection)
+            else []
+        )
     command_event, role = _prompt_command_event(source, record)
     if role == messaging.MessageRole.USER:
         return [
@@ -74,6 +85,25 @@ def slash_command(
             command_event,
         ]
     return [command_event]
+
+
+def command_output(
+    source: message_models.TranscriptSource,
+    record: transcript.CommandOutputTranscriptRecord,
+    semantics: message_models.TranscriptSemantics,
+) -> list[event_base.CanonicalEvent[event_base.EventPayload]]:
+    """Translate local command output into the selection it reports.
+
+    Returns:
+        The selection event, or no events for other command output.
+
+    """
+    choice = transcript_commands.output_selection(record.text)
+    if choice is None:
+        return []
+    name, selection = choice
+    selected_event = _slash_selection_event(source, name, selection, semantics)
+    return [] if selected_event is None else [selected_event]
 
 
 def _selection_command_events(
@@ -145,6 +175,6 @@ def _slash_selection_event(
 
 
 def _is_selection_command(name: str, selection: str) -> bool:
-    if name not in {message_subject_values.MODEL_SUBJECT, "effort"}:
+    if name not in SELECTION_COMMANDS:
         return False
     return bool(selection) and len(selection.split()) == 1
