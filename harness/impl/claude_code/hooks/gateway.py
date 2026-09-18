@@ -21,9 +21,14 @@ def _base_hook_event(
     hook_observation: observation.HookObservation,
 ) -> RawEvent:
     actors = hook_observation.actors
+    # The source type depends on agent metadata that can arrive after the first
+    # delivery. It is part of the observation identity, so it is part of the raw
+    # event id: a corrected re-delivery is a new observation, not an identity
+    # conflict. The "hook" source type keeps the historical id unchanged.
     return RawEvent(
         raw_event_id=RawEventId(
-            f"claude_code:hook:{actors.session_id}:{hook_observation.hook_name}:{hook_observation.observation_id}",
+            f"claude_code:{hook_observation.source_type}:{actors.session_id}:"
+            f"{hook_observation.hook_name}:{hook_observation.observation_id}",
         ),
         harness=constants.HARNESS,
         source_type=hook_observation.source_type,
