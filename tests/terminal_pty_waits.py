@@ -60,9 +60,12 @@ def wait_for_process_exit(process_id: int) -> None:
     assert not psutil.pid_exists(process_id), "orphaned tool outlived its PTY window"
 
 
-def wait_until(condition: Callable[[], bool]) -> None:
-    """Wait for a condition until the PTY test timeout."""
-    deadline = time.monotonic() + TIMEOUT_SECONDS
+def wait_until(condition: Callable[[], bool], timeout: float = TIMEOUT_SECONDS) -> None:
+    """Wait for a condition until the PTY test timeout.
+
+    A caller with slow work uses a larger explicit timeout.
+    """
+    deadline = time.monotonic() + timeout
     while not condition() and time.monotonic() < deadline:
         time.sleep(POLL_SECONDS)
     assert condition()

@@ -7,6 +7,8 @@ import { expect, test as base } from '@playwright/test';
 
 type TestFixtures = {
   fixtureBaseURL: string;
+  fixtureModule: string;
+  extensionReadOnly: boolean;
 };
 
 const repositoryRoot = fileURLToPath(new URL('../../../', import.meta.url));
@@ -39,37 +41,54 @@ async function waitUntilHealthy(
   throw new Error(`fixture server did not become healthy\n${output()}`);
 }
 
-async function stop(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null) return;
-  const exited = new Promise<void>((resolve) => {
-    child.once('exit', () => {
-      resolve();
-    });
-  });
+async function stop(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  if (child.exitCode !== null) return child.exitCode === 0;
+  const exited = new Promise<{ stopped: boolean; clean: boolean }>(
+    (resolve) => {
+      child.once('exit', (code) => {
+        resolve({ stopped: true, clean: code === 0 });
+      });
+    },
+  );
   child.kill('SIGTERM');
   const stopped = await Promise.race([
-    exited.then(() => true),
-    delay(2_000).then(() => false),
+    exited,
+    delay(timeoutMs).then(() => ({ stopped: false, clean: false })),
   ]);
-  if (!stopped) {
+  if (!stopped.stopped) {
     child.kill('SIGKILL');
     await exited;
   }
+  return stopped.clean;
 }
 
 export const test = base.extend<TestFixtures>({
-  fixtureBaseURL: async ({ browserName }, use, testInfo) => {
+  fixtureModule: ['tests.frontend_fixture_server', { option: true }],
+  extensionReadOnly: [false, { option: true }],
+  fixtureBaseURL: async (
+    { browserName, fixtureModule, extensionReadOnly },
+    use,
+    testInfo,
+  ) => {
     const external = process.env.BAQYLAU_E2E_BASE_URL;
     if (external !== undefined) {
+      if (fixtureModule !== 'tests.frontend_fixture_server')
+        throw new Error(
+          'Extension write tests require their own private daemon.',
+        );
       await use(external);
       return;
     }
 
     const python = process.env.BAQYLAU_E2E_PYTHON ?? 'python3';
     let output = `browser: ${browserName}\n`;
-    const child = spawn(python, ['-m', 'tests.frontend_fixture_server'], {
+    const child = spawn(python, ['-m', fixtureModule], {
       cwd: repositoryRoot,
-      env: { ...process.env, BAQYLAU_E2E_PORT: '0' },
+      env: {
+        ...process.env,
+        BAQYLAU_E2E_PORT: '0',
+        BAQYLAU_E2E_EXTENSION_READ_ONLY: extensionReadOnly ? '1' : '0',
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     child.stdout.on('data', (chunk: Buffer) => {
@@ -83,8 +102,13 @@ export const test = base.extend<TestFixtures>({
       const baseURL = await waitUntilHealthy(child, () => output);
       await use(baseURL);
     } finally {
-      await stop(child);
-      if (testInfo.status !== testInfo.expectedStatus && output.length > 0) {
+      const managed = fixtureModule !== 'tests.frontend_fixture_server';
+      const stopped = await stop(child, managed ? 15_000 : 2_000);
+      if (
+        (testInfo.status !== testInfo.expectedStatus ||
+          (managed && !stopped)) &&
+        output.length > 0
+      ) {
         const logPath = testInfo.outputPath('fixture-server.log');
         await writeFile(logPath, output, 'utf8');
         await testInfo.attach('fixture-server.log', {
@@ -92,6 +116,10 @@ export const test = base.extend<TestFixtures>({
           contentType: 'text/plain',
         });
       }
+      if (managed)
+        expect
+          .soft(stopped, 'The private extension daemon must stop cleanly.')
+          .toBe(true);
     }
   },
   baseURL: async ({ fixtureBaseURL }, use) => {

@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from baqylau_dev.signatures import method_signatures as method_signatures, satisfies as satisfies
+
 from tests import (
     architecture_project_dependencies as project_dependencies,
     architecture_standard_dependencies as standard_dependencies,
@@ -30,6 +32,8 @@ SOURCE_PACKAGES = (
     ENGINE_PACKAGE,
     NOTIFY_PACKAGE,
     TERMINAL_PACKAGE,
+    "extensions",
+    "packages/extension-api/src/baqylau_extension_api",
 )
 
 
@@ -39,29 +43,6 @@ def assert_registry_is_isolated(instances: dict[object, object]) -> None:
     other = injection.registry()
     database_provider = standard_dependencies.importlib.import_module("app.provider_databases").main_db
     assert injection.resolve(other, database_provider) is not injection.resolve(instances, database_provider)
-
-
-def method_signatures(node: standard_dependencies.ast.ClassDef) -> dict[str, tuple[str, ...]]:
-    """Read parameter names from methods declared directly in a class.
-
-    Returns:
-        Each declared method name and its positional parameter names.
-
-    """
-    return {
-        member.name: (
-            tuple(argument.arg for argument in member.args.args)
-            + tuple(f"*{argument.arg}" for argument in member.args.kwonlyargs)
-        )
-        for member in node.body
-        if isinstance(
-            member,
-            (
-                standard_dependencies.ast.FunctionDef,
-                standard_dependencies.ast.AsyncFunctionDef,
-            ),
-        )
-    }
 
 
 def source_python_paths() -> project_dependencies.Iterator[project_dependencies.Path]:
@@ -85,27 +66,6 @@ def has_generic_protocol_base(bases: list[str]) -> bool:
 
     """
     return any(base.startswith(("Protocol[", "typing.Protocol")) for base in bases)
-
-
-def satisfies(members: dict, protocol: dict) -> bool:
-    """Every protocol method is present with the same parameter NAMES.
-
-    Names, not just arity: they are part of the contract because any of these
-    may be called with keywords, and a renamed parameter is exactly the drift
-    this test exists to catch. Matching on names is also what keeps the check
-    precise -- `read(self, context)` and `read(self)` are different protocols,
-    so a class does not accidentally implement one by owning a common verb.
-
-    Returns:
-        True if the protocol is not empty and all method parameters match.
-
-    """
-    if not protocol:
-        return False
-    return all(
-        members.get(name) == arguments
-        for name, arguments in protocol.items()
-    )
 
 
 def control_member_value(statement: standard_dependencies.ast.stmt) -> tuple[str, str] | None:

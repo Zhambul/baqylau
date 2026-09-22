@@ -12,6 +12,7 @@ from harness.impl.codex.canonical import (
     translator_lifecycle_event_dependencies as event_dependencies,
     translator_lifecycle_runtime_dependencies as runtime_dependencies,
 )
+from harness.models import translation_stages as stages
 
 if typing.TYPE_CHECKING:
     from harness.impl.codex.canonical.translator_lifecycle_protocols import (
@@ -88,6 +89,7 @@ class _CodexTranslationLifecycle(dependencies.translator_service_dependencies.Ha
     def translate(
         self,
         raw_event: dependencies.translator_service_dependencies.raw_events.RawEvent,
+        *, translation_stage: stages.TranslationStage = stages.TranslationStage.COMPLETE,
     ) -> dependencies.translator_service_dependencies.raw_events.TranslationResult:
         """Translate translate.
 
@@ -99,13 +101,14 @@ class _CodexTranslationLifecycle(dependencies.translator_service_dependencies.Ha
             event_dependencies.translator_started_events.source_key(raw_event),
         )
         try:
-            return typing.cast("_CodexSourceTranslator", self)._translate(raw_event)  # noqa: SLF001 -- The cast still refers to self.
+            translated = typing.cast("_CodexSourceTranslator", self)._translate(raw_event, translation_stage)  # noqa: SLF001 -- The cast still refers to self.
         except dependencies.translator_service_dependencies.raw_events.UnknownRawEventError as unknown:
             return dependencies.translator_service_dependencies.raw_events.TranslationResult(
                 (),
                 dependencies.translator_domain_values.records.RecordedTranslationDecision.IGNORED_UNKNOWN,
                 unknown.reason,
             )
+        return stages.select_result(translated, translation_stage)
 
     def _continued_from(
         self,
@@ -387,11 +390,14 @@ class _CodexSourceTranslator(_CodexPendingShells):
     def _translate(
         self,
         raw_event: dependencies.translator_service_dependencies.raw_events.RawEvent,
+        translation_stage: stages.TranslationStage,
     ) -> dependencies.translator_service_dependencies.raw_events.TranslationResult:
         raw_text = event_dependencies.translator_selection_events.decoded_rollout(raw_event)
         if raw_event.source_type == "hook":
-            return self._translate_hook_source(raw_event, raw_text)
+            return self._translate_hook_source(raw_event, raw_text, translation_stage)
         if raw_event.source_type == dependencies.translator_service_dependencies.raw_events.TITLE_SOURCE_TYPE:
+            if translation_stage == stages.TranslationStage.LIFECYCLE:
+                return stages.empty_result(translation_stage)
             return event_dependencies.translator_started_events.translate_title_source(raw_event)
         if raw_event.source_type in {"child_replay", "sidecar_replay"}:
             return dependencies.translator_service_dependencies.raw_events.TranslationResult(
@@ -399,12 +405,13 @@ class _CodexSourceTranslator(_CodexPendingShells):
                 dependencies.translator_domain_values.records.RecordedTranslationDecision.IGNORED_NONSEMANTIC,
                 "parent history replayed in child rollout",
             )
-        return self._translate_rollout_source(raw_event, raw_text)
+        return self._translate_rollout_source(raw_event, raw_text, translation_stage)
 
     def _translate_hook_source(
         self,
         raw_event: dependencies.translator_service_dependencies.raw_events.RawEvent,
         raw_text: str,
+        translation_stage: stages.TranslationStage,
     ) -> dependencies.translator_service_dependencies.raw_events.TranslationResult:
         if raw_event.parent_actor_id is not None:
             return dependencies.translator_service_dependencies.raw_events.TranslationResult(
@@ -422,7 +429,7 @@ class _CodexSourceTranslator(_CodexPendingShells):
                 msg,
                 context=raw_event.source_position,
             ) from error
-        events = self._translate_hook(raw_event, hook)
+        events = self._translate_hook(raw_event, hook, translation_stage)
         if events:
             return dependencies.translator_service_dependencies.raw_events.TranslationResult(
                 tuple(events),
@@ -438,6 +445,7 @@ class _CodexSourceTranslator(_CodexPendingShells):
         self,
         raw_event: dependencies.translator_service_dependencies.raw_events.RawEvent,
         raw_text: str,
+        translation_stage: stages.TranslationStage,
     ) -> dependencies.translator_service_dependencies.raw_events.TranslationResult:
         try:
             header = dependencies.record_payload_namespaces.record_rollout_headers.RolloutHeader.model_validate_json(
@@ -449,7 +457,9 @@ class _CodexSourceTranslator(_CodexPendingShells):
                 context=raw_event.source_position,
             ) from error
         if header.type == "session_meta":
-            return self._session_metadata_result(raw_event, raw_text)
+            return self._session_metadata_result(raw_event, raw_text, translation_stage)
+        if translation_stage == stages.TranslationStage.LIFECYCLE:
+            return stages.empty_result(translation_stage)
         record = dependencies.translator_codex_dependencies.rollout.parse_line(raw_text)
         if record is None:
             return dependencies.translator_service_dependencies.raw_events.TranslationResult(
@@ -484,7 +494,10 @@ class _CodexSourceTranslator(_CodexPendingShells):
         self,
         raw_event: dependencies.translator_service_dependencies.raw_events.RawEvent,
         raw_text: str,
+        translation_stage: stages.TranslationStage,
     ) -> dependencies.translator_service_dependencies.raw_events.TranslationResult:
+        if translation_stage == stages.TranslationStage.ACTIVITY and raw_event.parent_actor_id is None:
+            return stages.empty_result(translation_stage)
         if raw_event.source_position != "0":
             return dependencies.translator_service_dependencies.raw_events.TranslationResult(
                 (),
@@ -517,6 +530,7 @@ class _CodexSourceTranslator(_CodexPendingShells):
         self,
         raw_event: dependencies.translator_service_dependencies.raw_events.RawEvent,
         codex_hook_payload: dependencies.record_payload_namespaces.record_session_meta.CodexHookPayload,
+        translation_stage: stages.TranslationStage,
     ) -> list[
         dependencies.translator_type_dependencies.event_base.CanonicalEvent[
             dependencies.translator_type_dependencies.event_base.EventPayload
@@ -524,8 +538,11 @@ class _CodexSourceTranslator(_CodexPendingShells):
     ]:
         hook_name = codex_hook_payload.hook_event_name or ""
         native_identity = codex_hook_payload.hook_event_id or codex_hook_payload.uuid or raw_event.source_position
-        run_started = self._hook_run_started_events(raw_event, codex_hook_payload)
-        if hook_name == "SessionStart":
+        run_started = (
+            [] if translation_stage == stages.TranslationStage.ACTIVITY
+            else self._hook_run_started_events(raw_event, codex_hook_payload)
+        )
+        if hook_name == "SessionStart" or translation_stage == stages.TranslationStage.LIFECYCLE:
             return run_started
         if hook_name == "PreCompact":
             self._compactions[raw_event.session_id, str(raw_event.actor_id)] = (

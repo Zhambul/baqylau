@@ -1,0 +1,7 @@
+import importlib.util
+import os
+
+assert importlib.util.find_spec("app") is None
+assert importlib.util.find_spec("domain") is None
+os.write(1, b"Content-Length: this is a log, not an RPC header\n")
+os.write(2, b"fixture worker loaded\n")

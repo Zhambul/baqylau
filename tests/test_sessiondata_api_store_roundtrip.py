@@ -35,13 +35,13 @@ def test_wire_shapes_survive_round_trip_through(
         session_data_contract.SessionDataChanges(
             session=api_values.FACTS,
             actors=api_values.ACTOR_ROWS,
-            entry=api_entries.entry(
+            entries=(api_entries.entry(
                 entry_shells.ShellStartedBody(
                     domain_ids.ShellId("sh9"),
                     domain_content.TextContent("make test"),
                     outcomes.ExecutionMode.BACKGROUND,
                 ),
-            ),
+            ),),
         ),
         1,
     )

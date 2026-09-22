@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "baqylau-extension-api"
+version = "0.1.0a1"
+description = "Typed contracts for external Baqylau extensions."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.13,<3",
+    "jsonschema>=4.26,<5",
+    "referencing>=0.36,<1",
+    "packaging>=26,<27",
+    "jsonrpcpeer==0.2.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+baqylau_extension_api = ["py.typed"]

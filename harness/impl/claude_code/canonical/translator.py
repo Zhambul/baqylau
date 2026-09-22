@@ -12,6 +12,7 @@ from harness.impl.claude_code.canonical import (
     hooks,
     messages,
     records,
+    required_translation,
     source_translators,
     support,
 )
@@ -34,6 +35,7 @@ from harness.models import (
     raw_event_builders,
     raw_events,
     selections,
+    translation_stages as stages,
 )
 from repository.mapper.documents import StoredDocumentError, decode_document
 
@@ -91,15 +93,20 @@ class _ClaudeTranslatorState:
 class _ClaudeTurnStamping(_ClaudeTranslatorState, HarnessTranslator):
     """Translate events and attach their open turn."""
 
-    def translate(self, raw_event: raw_events.RawEvent) -> raw_events.TranslationResult:
+    def translate(
+        self, raw_event: raw_events.RawEvent,
+        *, translation_stage: stages.TranslationStage = stages.TranslationStage.COMPLETE,
+    ) -> raw_events.TranslationResult:
         """Translate translate.
 
         Returns:
             The translation result.
 
         """
+        if translation_stage == stages.TranslationStage.LIFECYCLE:
+            return self._stamped(raw_event, required_translation.translate(raw_event), self._turns.current(raw_event))
         try:
-            return self._translate_stamped(raw_event)
+            return stages.select_result(self._translate_stamped(raw_event), translation_stage)
         except raw_events.UnknownRawEventError as unknown:
             return raw_events.TranslationResult(
                 (), domain_records.RecordedTranslationDecision.IGNORED_UNKNOWN, unknown.reason,

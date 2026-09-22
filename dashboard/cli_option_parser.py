@@ -1,10 +1,11 @@
 # Copyright (c) 2026 Zhambyl Yermagambet
 """Own dashboard option parser."""
 
+import os
 from pathlib import Path
 
 from dashboard.cli_models import _HarnessFlag, _ParsedOptions
-from dashboard.cli_option_values import HARNESS_FLAGS, LAUNCH_VARIABLES, LOG_FLAG
+from dashboard.cli_option_values import EXTENSION_ROOT_FLAG, HARNESS_FLAGS, LAUNCH_VARIABLES, LOG_FLAG
 from dashboard.cli_output import UsageError
 
 
@@ -22,6 +23,8 @@ def _apply_option(parsed_options: _ParsedOptions, name: str, option_content: str
         parsed_options.log_path = str(Path(option_content).expanduser().resolve())
     elif name in HARNESS_FLAGS:
         parsed_options.harness_flags.append(_harness_flag(name, option_content))
+    elif name == EXTENSION_ROOT_FLAG:
+        _apply_extension_root(parsed_options, option_content)
     else:
         _apply_launch_variable(parsed_options, name, option_content)
 
@@ -33,6 +36,17 @@ def _apply_launch_variable(parsed_options: _ParsedOptions, name: str, option_con
     parsed_options.variables[LAUNCH_VARIABLES[name]] = (
         str(Path(option_content).expanduser().resolve()) if name == "--data-dir" else option_content
     )
+
+
+def _apply_extension_root(parsed_options: _ParsedOptions, option_content: str) -> None:
+    path = str(Path(option_content).expanduser().absolute())
+    if os.pathsep in path:
+        message = "an extension root cannot contain the environment path separator"
+        raise UsageError(message)
+    environment_name = LAUNCH_VARIABLES[EXTENSION_ROOT_FLAG]
+    previous = parsed_options.variables.get(environment_name)
+    selected = path if previous is None else os.pathsep.join((previous, path))
+    parsed_options.variables[environment_name] = selected
 
 
 def _next_option(remaining: list[str]) -> tuple[str, str]:

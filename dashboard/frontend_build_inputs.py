@@ -9,18 +9,28 @@ from pathlib import Path
 from dashboard.config import STATIC_DIR
 
 FRONTEND_DIRECTORY = Path(STATIC_DIR).parent / "frontend"
+POLICY_DIRECTORY = FRONTEND_DIRECTORY.parent.parent / "packages" / "dev-tools-web"
 BUILD_DIRECTORY = Path(STATIC_DIR) / "build"
 MANIFEST_PATH = BUILD_DIRECTORY / ".vite" / "manifest.json"
 STAMP_PATH = BUILD_DIRECTORY / ".source-sha256"
 ENTRY_MODULE = "src/main.ts"
 
 CONFIGURATION_FILES = (
+    ".npmrc",
     "package-lock.json",
     "package.json",
     "svelte.config.js",
     "tsconfig.json",
     "tsconfig.node.json",
     "vite.config.ts",
+)
+
+POLICY_CONFIGURATION_FILES = (
+    "package.json",
+    "package-lock.json",
+    "tsconfig.browser.json",
+    "tsconfig.node.json",
+    "coverage.mjs",
 )
 
 
@@ -36,6 +46,7 @@ def source_files() -> tuple[Path, ...]:
 
     """
     files = [FRONTEND_DIRECTORY / name for name in CONFIGURATION_FILES]
+    files.extend(POLICY_DIRECTORY / name for name in POLICY_CONFIGURATION_FILES)
     source_directory = FRONTEND_DIRECTORY / "src"
     files.extend(
         path

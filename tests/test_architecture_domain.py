@@ -58,7 +58,10 @@ def test_repo_layer_imports_only_model_layers() -> None:
     architecture_test_files.assert_imports(
         REPOSITORY_PACKAGE,
         {CORE_PACKAGE, AUDIT_PACKAGE, DOMAIN_PACKAGE, REPOSITORY_PACKAGE},
-        allowed_modules=frozenset(("harness.models", "harness.registry", "terminal.models")),
+        allowed_modules=frozenset((
+            "harness.models", "harness.registry", "terminal.models", "extensions.models",
+            "extensions.mapper.core_events",
+        )),
     )
 
 

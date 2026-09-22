@@ -5,11 +5,15 @@ from collections.abc import Callable
 from contextlib import ExitStack
 from typing import Protocol
 
+from baqylau_extension_api.models.canonical import CoreFact
+
 from audit.failures import FailureContext
 from domain import event_base, ids as domain_ids
 from engine.react.loop_context import ReactionLoopContext
 from engine.sessiondata import contract as sessiondata_contract
 from engine.sessiondata.actor_batch import AppliedActorBatch
+from extensions.mapper.core_events import private_committed
+from extensions.models.interpretations import StoredCanonicalFact
 
 REACTION_BATCH_SIZE = 500
 
@@ -45,8 +49,8 @@ class _ReactionLoopRuntimeContext(ReactionLoopContext, Protocol):
     def _audit_failure(self, where: str, failure_context: FailureContext) -> None:
         """Record a recoverable failure."""
 
-    def _replay_events(self, canonical_events: tuple[event_base.CanonicalEvent[event_base.EventPayload], ...]) -> None:
-        """Materialize replay events without listeners."""
+    def _replay_events(self, canonical_facts: tuple[StoredCanonicalFact, ...]) -> None:
+        """Materialize core replay facts and skip extension facts without listeners."""
 
 
 class ReactionLoopRuntime:
@@ -59,17 +63,22 @@ class ReactionLoopRuntime:
         """React to and materialize one event batch.
 
         Returns:
-            The number of processed events.
+            The number of mixed facts consumed by the core read model.
 
         """
-        session_data = self.dependencies.session_data_repository
-        events = self.dependencies.canonical_event_repository.page_from(session_data.progress(), REACTION_BATCH_SIZE)
+        page = self.dependencies.canonical_fact_reader.current_fact_page(
+            self.dependencies.session_data_repository.progress(), REACTION_BATCH_SIZE,
+        )
         states: dict[domain_ids.SessionId, sessiondata_contract.AggregateState] = {}
         applied_listeners = self.dependencies.listeners if listeners is None else listeners
-        for canonical_event in events:
+        for stored in page.facts:
+            if not isinstance(stored.fact, CoreFact):
+                self.dependencies.session_data_repository.advance_past_extensions(stored.cursor)
+                continue
+            canonical_event = private_committed(stored)
             self._react(canonical_event)
             self._materialize(canonical_event, states, applied_listeners)
-        return len(events)
+        return len(page.facts)
 
     def drain(self: _ReactionLoopRuntimeContext, cancelled: Callable[[], bool]) -> int:
         """Fold ready history before announcing the final display state.
@@ -96,21 +105,25 @@ class ReactionLoopRuntime:
             The number of stored events used for the rebuild.
 
         """
-        repository = self.dependencies.canonical_event_repository
+        repository = self.dependencies.canonical_fact_reader
         session_data = self.dependencies.session_data_repository
         session_data.clear()
         total = 0
         while True:
-            events = repository.page_from(session_data.progress(), REACTION_BATCH_SIZE)
-            if not events:
+            page = repository.current_fact_page(session_data.progress(), REACTION_BATCH_SIZE)
+            if not page.facts:
                 return total
-            self._replay_events(events)
-            total += len(events)
+            self._replay_events(page.facts)
+            total += len(page.facts)
 
     def _replay_events(
         self: _ReactionLoopRuntimeContext,
-        canonical_events: tuple[event_base.CanonicalEvent[event_base.EventPayload], ...],
+        canonical_facts: tuple[StoredCanonicalFact, ...],
     ) -> None:
         states: dict[domain_ids.SessionId, sessiondata_contract.AggregateState] = {}
-        for canonical_event in canonical_events:
+        for stored in canonical_facts:
+            if not isinstance(stored.fact, CoreFact):
+                self.dependencies.session_data_repository.advance_past_extensions(stored.cursor)
+                continue
+            canonical_event = private_committed(stored)
             self._materialize(canonical_event, states, ())

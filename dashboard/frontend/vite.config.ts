@@ -1,5 +1,6 @@
 import { fileURLToPath, URL } from 'node:url';
 
+import { coverageThresholds } from '@baqylau/dev-tools/coverage';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { defineConfig } from 'vitest/config';
 
@@ -40,6 +41,8 @@ export default defineConfig({
         'src/dictation/dictation-controller.svelte.ts',
         'src/entries/feed-model.ts',
         'src/entries/markup.ts',
+        'src/extensions/catalog.ts',
+        'src/extensions/management.svelte.ts',
         'src/sessions/agent-presentation.ts',
         'src/sessions/global-reducer.ts',
         'src/sessions/grouping.ts',
@@ -51,12 +54,7 @@ export default defineConfig({
       ],
       provider: 'v8',
       reporter: ['text', 'html'],
-      thresholds: {
-        branches: 55,
-        functions: 75,
-        lines: 75,
-        statements: 70,
-      },
+      thresholds: coverageThresholds,
     },
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],

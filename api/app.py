@@ -21,7 +21,7 @@ from api import application_routes, dependencies, error_responses, observation_r
 from api.middleware import SecurityHeaders, SelectiveGZip
 from api.responses import EVERY_ROUTE
 from api.workers import background_workers
-from app import provider_databases
+from app import provider_databases, provider_extensions
 from app.injection import Instances, registry, resolve
 
 if TYPE_CHECKING:
@@ -40,6 +40,8 @@ async def _lifespan(web: FastAPI) -> AsyncIterator[None]:
     # file before CREATE TABLE has committed.
     resolve(web.state.instances, provider_databases.main_db).initialize()
     resolve(web.state.instances, provider_databases.audit_db).initialize()
+    catalog = resolve(web.state.instances, provider_extensions.extension_catalog)
+    await anyio_thread.run_sync(catalog.rescan_packages, catalog.catalog_snapshot().revision)
     if not web.state.run_background_workers:
         # An app that only serves requests — the test fixture, a schema dump.
         # The flag is the seam: interpreting and notifying are the DAEMON's

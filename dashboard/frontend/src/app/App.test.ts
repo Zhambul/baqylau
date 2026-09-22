@@ -65,6 +65,7 @@ describe('application shell', () => {
       '#/',
     );
     expect(screen.getByRole('button', { name: '▦ stats' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Settings' })).toBeVisible();
     expect(screen.getByRole('button', { name: '◉ alerts' })).toBeVisible();
     expect(screen.getByRole('button', { name: '+ session' })).toBeVisible();
     expect(document.querySelector('#accounts')).not.toBeNull();

@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from baqylau_extension_api.models import record_changes
+
 from domain.actor_state import ActorFacts
 from domain.entries import SessionEntry
 from domain.session_state import SessionFacts
@@ -33,14 +35,15 @@ class SessionDataChanges:
     "everything after cursor C" answerable across both kinds of change.
     """
 
-    entry: SessionEntry | None = None
+    entries: tuple[SessionEntry, ...] = ()
+    records: tuple[record_changes.RecordChange, ...] = ()
     session: SessionFacts | None = None
     actors: tuple[ActorFacts, ...] = ()
 
     @property
     def empty(self) -> bool:
         """Whether the page is empty."""
-        return self.entry is None and self.session is None and not self.actors
+        return not any((self.entries, self.records, self.session, self.actors))
 
 
 @dataclass(frozen=True)

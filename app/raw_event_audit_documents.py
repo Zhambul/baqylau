@@ -29,6 +29,21 @@ class CanonicalAuditEntry(BaseModel):
     event: CanonicalEvent[EventPayload]
 
 
+class AuditStepEntry(BaseModel):
+    """Describe one recorded processing step without its complete bodies."""
+
+    model_config = ConfigDict(frozen=True)
+    step_index: int
+    stage: str
+    owner: str | None
+    outcome: str | None
+    observed_byte_length: int | None
+    observed_digest: str | None
+    diagnostic_code: str | None
+    reason: str | None
+    operation_kinds: tuple[str, ...]
+
+
 class RawEventAuditDocument(BaseModel):
     """Describe one raw event and its complete interpretation."""
 
@@ -48,7 +63,12 @@ class RawEventAuditDocument(BaseModel):
     decision: str
     reason: str | None
     completed_at: float
+    history_revision: str
+    runtime_revision: str
+    format_version: int
     canonical: tuple[CanonicalAuditEntry, ...]
+    steps: tuple[AuditStepEntry, ...]
+    steps_truncated: bool
 
 
 class RawEventAuditDocuments(RootModel[tuple[RawEventAuditDocument, ...]]):
@@ -82,6 +102,9 @@ def audit_document(raw_event_audit: RawEventAudit) -> RawEventAuditDocument:
         decision=interpretation.decision,
         reason=interpretation.reason,
         completed_at=interpretation.completed_at,
+        history_revision=interpretation.history_revision,
+        runtime_revision=interpretation.runtime_revision,
+        format_version=interpretation.format_version,
         canonical=tuple(
             CanonicalAuditEntry(
                 accepted_at=canonical.accepted_at,
@@ -91,6 +114,21 @@ def audit_document(raw_event_audit: RawEventAudit) -> RawEventAuditDocument:
             )
             for canonical in interpretation.events
         ),
+        steps=tuple(
+            AuditStepEntry(
+                step_index=step.step_index,
+                stage=step.stage,
+                owner=step.owner,
+                outcome=step.outcome,
+                observed_byte_length=step.observed_byte_length,
+                observed_digest=step.observed_digest,
+                diagnostic_code=step.diagnostic_code,
+                reason=step.reason,
+                operation_kinds=step.operation_kinds,
+            )
+            for step in interpretation.steps
+        ),
+        steps_truncated=interpretation.steps_truncated,
     )
 
 
@@ -126,5 +164,10 @@ def _untranslated_document(raw_event_audit: RawEventAudit) -> RawEventAuditDocum
         decision="untranslated",
         reason=None,
         completed_at=UNKNOWN_COMPLETION_TIME,
+        history_revision="default",
+        runtime_revision="",
+        format_version=1,
         canonical=(),
+        steps=(),
+        steps_truncated=False,
     )

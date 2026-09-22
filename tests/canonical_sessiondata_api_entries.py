@@ -24,7 +24,11 @@ from domain import (
     messaging,
     outcomes,
 )
+from domain.entry_extensions import ExtensionEntryBody, ExtensionSchemaIdentity
 from tests import canonical_sessiondata_api_values as api_values
+
+DIGEST_LENGTH = 64
+DIGEST = "a" * DIGEST_LENGTH
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -122,5 +126,14 @@ def sample_body(body_type: type[entry_base.EntryBody]) -> entry_base.EntryBody:
         "AssignmentFinishedBody": lambda: entry_lifecycle.AssignmentFinishedBody(domain_ids.AssignmentId("as")),
         "ModelChangeBody": lambda: entry_lifecycle.ModelChangeBody(api_values.MODEL_DISPLAY_NAME),
         "EffortChangeBody": lambda: entry_lifecycle.EffortChangeBody("high"),
+        "ExtensionEntryBody": lambda: ExtensionEntryBody(
+            owner="test.sample",
+            entry_type="test.sample.card",
+            source_event_id=domain_ids.CanonicalEventId("fact/native/1"),
+            schema_ref=ExtensionSchemaIdentity(
+                owner="test.sample", name="text", version=1, digest=DIGEST,
+            ),
+            document='"card"',
+        ),
     }
     return samples[body_type.__name__]()

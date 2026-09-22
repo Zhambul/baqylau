@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from api.sessiondata import (
     attention_body_mapper,
     conversation_body_mapper,
+    extension_body_mapper,
     lifecycle_body_mapper,
     resource_body_mapper,
     shell_body_mapper,
@@ -34,6 +35,7 @@ def entry_body(entry_body_value: entry_base.EntryBody) -> entry_models.EntryBody
         resource_body_mapper.map_body(entry_body_value),
         attention_body_mapper.map_body(entry_body_value),
         lifecycle_body_mapper.map_body(entry_body_value),
+        extension_body_mapper.map_body(entry_body_value),
     ):
         if mapped is not None:
             return mapped

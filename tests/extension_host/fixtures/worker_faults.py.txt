@@ -1,0 +1,23 @@
+import dataclasses
+import time
+
+original_factory = build_extension
+
+
+class FaultLifecycle(SampleLifecycle):
+    def activate(self, request: ActivationRequest) -> ActivationResult:
+        os.write(1, b"activation-started\n")
+        if FAULT_MODE == "hang":
+            time.sleep(60)
+        elif FAULT_MODE == "exit":
+            os._exit(7)
+        elif FAULT_MODE == "flood":
+            while True:
+                os.write(2, b"x" * 4096)
+        return super().activate(request)
+
+
+def build_extension(services: ExtensionHostServices) -> ExtensionPlugin:
+    original = original_factory(services)
+    selected = dataclasses.replace(original.capabilities, lifecycle=FaultLifecycle())
+    return SamplePlugin(selected, original.extension_info)

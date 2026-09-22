@@ -16,11 +16,12 @@ from app import (
     provider_session_writers as writer_providers,
 )
 from app.injection import singleton
+from repository.contract.interpretations import CanonicalFactReader
 
 
 @singleton
 def reaction_data(
-    events: fact_providers.CanonicalEvents,
+    events: Annotated[CanonicalFactReader, Depends(fact_providers.interpretations)],
     read_model: session_data_providers.SessionDataStore,
     event_reactions: reaction_providers.Reactions,
     entries: writer_providers.EntryWrites,

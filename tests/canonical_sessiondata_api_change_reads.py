@@ -48,14 +48,14 @@ async def read_two_session_frames(
     read_model.apply(
         api_values.SESSION,
         session_data_contract.SessionDataChanges(
-            entry=api_entries.entry(
+            entries=(api_entries.entry(
                 entry_conversation.MessageBody(
                     domain_ids.MessageId(api_values.MESSAGE_ID_TEXT),
                     messaging.MessageRole.USER,
                     messaging.MessagePhase.PROMPT,
                     content.TextContent(api_values.PROMPT_TEXT),
                 ),
-            ),
+            ),),
             actors=(replace(api_values.ACTOR, status=actor_state.ActorStatus.THINKING),),
         ),
         2,

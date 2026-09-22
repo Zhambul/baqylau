@@ -98,6 +98,20 @@ class HttpTransport:
             accepted_statuses,
         )
 
+    def put[TransportResultT](
+        self, path: str, document: BaseModel, adapter: TypeAdapter[TransportResultT], accepted_statuses: set[int],
+    ) -> tuple[int, TransportResultT]:
+        """Send a complete typed replacement with the normal JSON admission headers.
+
+        Returns:
+            The HTTP status and checked response document.
+
+        """
+        response = self.client.put(
+            path, content=document.model_dump_json(by_alias=True), headers=JSON_HEADERS,
+        )
+        return response.status_code, _decode_response("PUT", path, response, adapter, accepted_statuses)
+
     @contextmanager
     def event_stream(
         self,

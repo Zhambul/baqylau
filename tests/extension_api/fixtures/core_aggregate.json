@@ -1,0 +1,46 @@
+{
+  "session": {
+    "session_id": "session/native/1",
+    "harness": "test",
+    "state": "running",
+    "working_directory": "/work with spaces",
+    "started_at": 1.25,
+    "lead_actor_id": "actor/native/1",
+    "title": "Session title",
+    "finished_at": null,
+    "account": {"account_id":"account/1","display_name":"Work account"},
+    "goal": {"objective":"Complete the work","state":"active","reason":"Requested"},
+    "tasks": [{"task_id":"task/1","subject":"Add extensions","description":"Keep code separate","state":"in_progress","owner_actor_id":"actor/native/1"}],
+    "continued_from": "session/previous",
+    "prompt_title_internal": "Prompt title",
+    "custom_title_internal": "Custom title",
+    "automatic_title_internal": "Automatic title",
+    "summary_title_internal": "Summary title",
+    "task_order_internal": ["task/1"]
+  },
+  "actors": [{
+    "session_id": "session/native/1",
+    "actor_id": "actor/native/1",
+    "role": "lead",
+    "name": "Lead actor",
+    "state": "running",
+    "parent_actor_id": null,
+    "description": "Implement the feature",
+    "started_at": 1.25,
+    "finished_at": null,
+    "model": {"name":"model-1","display_name":"Model One"},
+    "effort": "high",
+    "status": "awaiting_background",
+    "usage": {"tokens":{"input_tokens":11,"output_tokens":12,"cache_read_tokens":13,"cache_write_tokens":14,"one_hour_cache_write_tokens":15},"cost_in_usd":"0.12345678901234567890123456789"},
+    "context": {"used_tokens":1200,"window_tokens":32000,"compacting":true},
+    "background": {"running_shell_ids":["shell/1"],"monitor_count":2,"background_job_count":3},
+    "statistics": {
+      "prompt_count":1,"shell_command_count":5,"failed_shell_command_count":2,
+      "file_count":2,"lines_added":8,"lines_removed":3,"actor_message_count":4,
+      "tool_counts":[{"tool":"shell","count":5},{"tool":"read","count":2}],
+      "active_seconds":2.5,"active_since_internal":4.25,"file_paths_internal":["a.py","dir/file with spaces.py"]
+    },
+    "pending_attention_internal": ["attention/1"],
+    "running_assignment_ids_internal": ["assignment/1"]
+  }]
+}

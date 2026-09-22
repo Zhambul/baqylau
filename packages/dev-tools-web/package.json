@@ -1,0 +1,53 @@
+{
+  "name": "@baqylau/dev-tools",
+  "version": "0.1.0-alpha.1",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12 <23"
+  },
+  "packageManager": "npm@10.9.8",
+  "files": [
+    "*.mjs",
+    "dist",
+    "tsconfig.browser.json",
+    "tsconfig.node.json",
+    "README.md"
+  ],
+  "exports": {
+    "./coverage": {
+      "types": "./dist/coverage.d.mts",
+      "default": "./coverage.mjs"
+    },
+    "./eslint": {
+      "types": "./dist/eslint.d.mts",
+      "default": "./eslint.mjs"
+    },
+    "./prettier": {
+      "types": "./dist/prettier.d.mts",
+      "default": "./prettier.mjs"
+    },
+    "./tsconfig/browser": "./tsconfig.browser.json",
+    "./tsconfig/node": "./tsconfig.node.json"
+  },
+  "scripts": {
+    "prepack": "npm run build",
+    "build": "tsc -p tsconfig.build.json",
+    "check": "tsc -p tsconfig.build.json --emitDeclarationOnly false --noEmit",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "dependencies": {
+    "@eslint/js": "10.0.1",
+    "eslint": "10.9.0",
+    "eslint-plugin-svelte": "3.23.0",
+    "globals": "17.11.0",
+    "prettier": "3.9.6",
+    "prettier-plugin-svelte": "4.1.1",
+    "svelte": "5.56.10",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.67.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.1"
+  }
+}

@@ -71,18 +71,20 @@ class EntryWriter(contract.SessionEntryWriter):
         """Initialize the object."""
         self.model_naming = model_naming or naming.ModelNaming()
 
-    def entry(self, canonical_event: event_base.CanonicalEvent[event_base.EventPayload]) -> entries.SessionEntry | None:
-        """Return the entry.
+    def entries(
+        self, canonical_event: event_base.CanonicalEvent[event_base.EventPayload],
+    ) -> tuple[entries.SessionEntry, ...]:
+        """Return the entries.
 
         Returns:
-            Entry.
+            The ordered entries.
 
         """
         event = canonical_event
         body = _body(event.payload, event.harness, self.model_naming)
         if body is None:
-            return None
-        return entries.SessionEntry(
+            return ()
+        return (entries.SessionEntry(
             entry_id=event.event_id,
             session_id=event.session_id,
             actor_id=event.actor_id,
@@ -94,7 +96,7 @@ class EntryWriter(contract.SessionEntryWriter):
             occurred_at=canonical_event.happened_at,
             summary=entry_summaries.summary(event.payload),
             body=body,
-        )
+        ),)
 
 
 def _body(

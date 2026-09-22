@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from harness.models.translation_stages import TranslationStage
 from tests import canonical_foundation_components as foundation_components, foundation_dependencies
 
 
@@ -34,6 +35,7 @@ class BuggyTranslator:
 
     def translate(
         self, raw_event: foundation_components.raw_events.RawEvent,
+        *, translation_stage: TranslationStage = TranslationStage.COMPLETE,
     ) -> foundation_dependencies.standard.typing.Never:
         """Simulate a programming error during translation.
 
@@ -41,7 +43,7 @@ class BuggyTranslator:
             ZeroDivisionError: For every raw event.
 
         """
-        message = f"translator bug for {raw_event.raw_event_id}"
+        message = f"translator bug for {raw_event.raw_event_id} in {translation_stage.value}"
         raise ZeroDivisionError(message)
 
     def release_session(self, session_id: foundation_dependencies.domain.domain_ids.SessionId) -> None:

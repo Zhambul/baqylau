@@ -1,0 +1,18 @@
+import os
+import sys
+import time
+from pathlib import Path
+
+if os.fork() == 0:
+    os.close(1)
+    os.close(2)
+    Path("owned-child").write_text(str(os.getpid()), encoding="utf-8")
+    time.sleep(60)
+else:
+    while not Path("owned-child").exists():
+        time.sleep(0.01)
+    if sys.argv[1] == "timeout":
+        time.sleep(60)
+    elif sys.argv[1] == "flood":
+        while True:
+            os.write(1, b"x" * 4096)

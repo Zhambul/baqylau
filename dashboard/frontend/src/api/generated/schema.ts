@@ -1283,9 +1283,6 @@ export interface paths {
          *
          *     Returns:
          *         Catalog.
-         *
-         *     Raises:
-         *         HarnessRegistryError: If the harness registry is not valid.
          */
         get: operations["catalog_api_harnesses__harness__catalog_get"];
         put?: never;
@@ -1335,6 +1332,180 @@ export interface paths {
          */
         get: operations["resumable_sessions_api_resumable_sessions_get"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extensions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Extensions
+         * @description Read the current validated and invalid package descriptions.
+         *
+         *     Returns:
+         *         A revisioned catalog with explicit discovery failures.
+         */
+        get: operations["extensions_api_extensions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extensions/rescan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rescan Extensions
+         * @description Recheck configured files without changing requested or active runtime state.
+         *
+         *     Returns:
+         *         The accepted catalog revision.
+         *
+         *     Raises:
+         *         HTTPException: If another scan already changed the catalog.
+         */
+        post: operations["rescan_extensions_api_extensions_rescan_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extensions/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Extension Runtime State
+         * @description Read actual runtime metadata and separate stored intent.
+         *
+         *     Returns:
+         *         Current progress, selected revisions, and host write policy.
+         */
+        get: operations["extension_runtime_state_api_extensions_state_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extensions/operations/{operation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Extension Operation
+         * @description Read a retained operation without returning its private settings snapshot.
+         *
+         *     Returns:
+         *         The requested pending or completed operation.
+         *
+         *     Raises:
+         *         HTTPException: If no operation has the selected identity.
+         */
+        get: operations["extension_operation_api_extensions_operations__operation_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extensions/{extension_id}/lifecycle/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview Extension Lifecycle
+         * @description Check a complete proposed change without accepting or preparing it.
+         *
+         *     Returns:
+         *         The exact affected owners for client confirmation.
+         */
+        post: operations["preview_extension_lifecycle_api_extensions__extension_id__lifecycle_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extensions/{extension_id}/lifecycle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Change Extension Lifecycle
+         * @description Accept one checked user request; successful admission is not completed activation.
+         *
+         *     Returns:
+         *         The new operation or the unchanged operation for an exact retry.
+         */
+        post: operations["change_extension_lifecycle_api_extensions__extension_id__lifecycle_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extensions/{extension_id}/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Extension Settings
+         * @description Read accepted values; a pending operation does not replace this result.
+         *
+         *     Returns:
+         *         The selected ordinary settings, schema, revisions, and write policy.
+         */
+        get: operations["read_extension_settings_api_extensions__extension_id__settings_get"];
+        /**
+         * Change Extension Settings
+         * @description Admit an exact settings request through normal runtime preparation.
+         *
+         *     Returns:
+         *         The accepted or replayed operation; it must finish before values change.
+         */
+        put: operations["change_extension_settings_api_extensions__extension_id__settings_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -1574,6 +1745,12 @@ export interface components {
             cost_in_usd: string | null;
         };
         /**
+         * AdmissionStatus
+         * @description Separate new work from the retained result of an exact retry.
+         * @enum {string}
+         */
+        AdmissionStatus: "accepted" | "replayed";
+        /**
          * AnswerDecisionBody
          * @description Represent answer decision body.
          * @enum {string}
@@ -1783,6 +1960,8 @@ export interface components {
             /** Events */
             events: components["schemas"]["BrowserEventBody"][];
         };
+        /** @enum {string} */
+        CapabilityName: "lifecycle" | "sources" | "translator" | "raw_transformer" | "canonical_transformer" | "projector" | "projection_transformer" | "observer" | "queries" | "commands" | "migrations" | "terminal";
         /**
          * ClientFailureKind
          * @description Represent client failure kind.
@@ -2080,6 +2259,41 @@ export interface components {
             working_directory?: string | null;
         };
         /**
+         * DirectoryEntry
+         * @description Describe the observed state of one installed package.
+         */
+        DirectoryEntry: {
+            extension_info: components["schemas"]["ExtensionInfo"];
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "discovered" | "disabled" | "preparing" | "enabled" | "stopping" | "failed" | "incompatible";
+        };
+        /**
+         * DirectorySnapshot
+         * @description Return peer metadata from one catalog and runtime revision.
+         */
+        DirectorySnapshot: {
+            /** Catalog Revision */
+            catalog_revision: number;
+            /** Runtime Revision */
+            runtime_revision: string;
+            /** Entries */
+            entries: components["schemas"]["DirectoryEntry"][];
+        };
+        /** @enum {string} */
+        DiscoveryCode: "invalid_manifest" | "incompatible_api" | "invalid_files" | "unreadable" | "duplicate_id" | "root_unavailable" | "capture_failed";
+        /**
+         * DiscoveryIssue
+         * @description Report a bounded reason without copying invalid document values.
+         */
+        DiscoveryIssue: {
+            code: components["schemas"]["DiscoveryCode"];
+            /** Detail */
+            detail: string;
+        };
+        /**
          * DismissGoalRequest
          * @description Require the objective shown on the requesting client.
          */
@@ -2108,6 +2322,15 @@ export interface components {
             display_name: string;
             /** Default */
             default: boolean;
+        };
+        /**
+         * EncodedDocument
+         * @description Carry JSON text for validation by the registered schema codec.
+         */
+        EncodedDocument: {
+            schema_ref: components["schemas"]["SchemaRef"];
+            /** Json Text */
+            json_text: string;
         };
         EntryBodyResponse: components["schemas"]["TurnStartedBodyResponse"] | components["schemas"]["TurnFinishedBodyResponse"] | components["schemas"]["MessageBodyResponse"] | components["schemas"]["ReasoningBodyResponse"] | components["schemas"]["ShellStartedBodyResponse"] | components["schemas"]["ShellOutputBodyResponse"] | components["schemas"]["ShellBackgroundedBodyResponse"] | components["schemas"]["ShellFinishedBodyResponse"] | components["schemas"]["FileBodyResponse"] | components["schemas"]["SearchBodyResponse"] | components["schemas"]["WebBodyResponse"] | components["schemas"]["BrowserBodyResponse"] | components["schemas"]["WorktreeBodyResponse"] | components["schemas"]["SkillStartedBodyResponse"] | components["schemas"]["SkillFinishedBodyResponse"] | components["schemas"]["QuestionAskedBodyResponse"] | components["schemas"]["QuestionAnsweredBodyResponse"] | components["schemas"]["PlanProposedBodyResponse"] | components["schemas"]["PlanResolvedBodyResponse"] | components["schemas"]["CompactionStartedBodyResponse"] | components["schemas"]["CompactionFinishedBodyResponse"] | components["schemas"]["AssignmentStartedBodyResponse"] | components["schemas"]["AssignmentFinishedBodyResponse"] | components["schemas"]["ModelChangeBodyResponse"] | components["schemas"]["EffortChangeBodyResponse"];
         /**
@@ -2172,6 +2395,126 @@ export interface components {
          * @enum {string}
          */
         ExecutionMode: "foreground" | "background" | "monitor";
+        /**
+         * ExtensionCatalogResponse
+         * @description Read a durable catalog revision and any failed root scans.
+         */
+        ExtensionCatalogResponse: {
+            /** Revision */
+            revision: number;
+            /** Entries */
+            entries: components["schemas"]["ExtensionPackageResponse"][];
+            /** Root Issues */
+            root_issues: components["schemas"]["RootDiscoveryIssue"][];
+        };
+        /**
+         * ExtensionInfo
+         * @description Identify the exact package and public API used by a worker.
+         */
+        ExtensionInfo: {
+            /** Extension Id */
+            extension_id: string;
+            /** Package Version */
+            package_version: string;
+            /** Api Version */
+            api_version: string;
+            /** Package Digest */
+            package_digest: string;
+        };
+        /**
+         * ExtensionIntent
+         * @description Retain requested enable state even if preparation fails.
+         */
+        ExtensionIntent: {
+            /** Extension Id */
+            extension_id: string;
+            /** Enabled */
+            enabled: boolean;
+            /** Package Digest */
+            package_digest?: string | null;
+        };
+        /**
+         * ExtensionOperationResponse
+         * @description Return an operation outcome without exposing the complete accepted proposal.
+         */
+        ExtensionOperationResponse: {
+            /** Operation Id */
+            operation_id: string;
+            kind: components["schemas"]["LifecycleKind"];
+            /** Extension Id */
+            extension_id: string | null;
+            /** Request Id */
+            request_id: string | null;
+            /** Accepted Revision */
+            accepted_revision: number;
+            /** Runtime Revision */
+            runtime_revision: string;
+            status: components["schemas"]["OperationStatus"];
+            /** Created At */
+            created_at: number;
+            /** Updated At */
+            updated_at: number;
+            failure: components["schemas"]["LifecycleFailure"] | null;
+        };
+        /**
+         * ExtensionPackageResponse
+         * @description Show one valid or invalid package source, not its runtime activation state.
+         */
+        ExtensionPackageResponse: {
+            /** Source Path */
+            source_path: string;
+            /** Resolved Path */
+            resolved_path: string | null;
+            /** Extension Id */
+            extension_id: string | null;
+            /** Name */
+            name: string | null;
+            /** Package Version */
+            package_version: string | null;
+            /** Package Digest */
+            package_digest: string | null;
+            /** Capabilities */
+            capabilities: components["schemas"]["CapabilityName"][];
+            issue: components["schemas"]["DiscoveryIssue"] | null;
+        };
+        /**
+         * ExtensionRuntimeResponse
+         * @description Separate active metadata from the last durable selection and current intent.
+         */
+        ExtensionRuntimeResponse: {
+            /** Revision */
+            revision: number;
+            /** Registry Revision */
+            registry_revision: number;
+            phase: components["schemas"]["RuntimePhase"];
+            /** Active Runtime */
+            active_runtime: string | null;
+            directory: components["schemas"]["DirectorySnapshot"] | null;
+            /** Committed Runtime */
+            committed_runtime: string | null;
+            /** Committed Packages */
+            committed_packages: components["schemas"]["SelectedExtensionResponse"][];
+            /** Pending Operation */
+            pending_operation: string | null;
+            /** Requested */
+            requested: components["schemas"]["ExtensionIntent"][];
+            /** Cleanup */
+            cleanup: components["schemas"]["RetirementIssue"][];
+            /** Cleanup Pending */
+            cleanup_pending: boolean;
+            /** Read Only */
+            read_only: boolean;
+            last_shutdown?: components["schemas"]["ShutdownRecord"] | null;
+        };
+        /**
+         * ExtensionSettingsResponse
+         * @description Return accepted settings for one scope and the current write policy.
+         */
+        ExtensionSettingsResponse: {
+            settings: components["schemas"]["SettingsSnapshot"];
+            /** Read Only */
+            read_only: boolean;
+        };
         /**
          * FileAction
          * @description Show the operation that changed or read a file.
@@ -2386,6 +2729,17 @@ export interface components {
             projects: components["schemas"]["InsightProjectSummaryResponse"][];
         };
         /**
+         * InstallationScope
+         * @description Select data shared by the current host installation.
+         */
+        InstallationScope: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "installation";
+        };
+        /**
          * InterpretationProblemResponse
          * @description Represent interpretation problem response.
          */
@@ -2470,6 +2824,87 @@ export interface components {
          * @enum {string}
          */
         LaunchStatus: "started" | "rejected";
+        /**
+         * LifecycleAdmissionResponse
+         * @description Report new admission or exact retry separately from completed activation.
+         */
+        LifecycleAdmissionResponse: {
+            status: components["schemas"]["AdmissionStatus"];
+            /** Revision */
+            revision: number;
+            operation: components["schemas"]["ExtensionOperationResponse"];
+        };
+        /**
+         * LifecycleChangeRequest
+         * @description Convert only the JSON array container; owner IDs and other fields stay strict.
+         */
+        LifecycleChangeRequest: {
+            /** Expected Revision */
+            expected_revision: number;
+            /** Expected Catalog Revision */
+            expected_catalog_revision: number;
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "enable" | "disable" | "reload";
+            /** Package Digest */
+            package_digest?: string | null;
+            /** Request Id */
+            request_id: string;
+            /**
+             * Confirmed Dependents
+             * @default []
+             */
+            confirmed_dependents: string[];
+        };
+        /**
+         * LifecycleFailure
+         * @description Store a bounded reason, not feature log text or secret settings.
+         */
+        LifecycleFailure: {
+            /**
+             * Code
+             * @enum {string}
+             */
+            code: "preparation_failed" | "incompatible" | "unresolved_jobs" | "interrupted" | "policy_denied";
+            /** Detail */
+            detail: string;
+        };
+        /**
+         * LifecycleKind
+         * @description Name user changes and internal recovery operations.
+         * @enum {string}
+         */
+        LifecycleKind: "enable" | "disable" | "reload" | "settings" | "restore" | "failure";
+        /**
+         * LifecyclePlanResponse
+         * @description Describe affected packages without exposing a complete runtime proposal.
+         */
+        LifecyclePlanResponse: {
+            /** Extension Id */
+            extension_id: string;
+            request: components["schemas"]["LifecyclePreviewRequest"];
+            /** Affected Extensions */
+            affected_extensions: string[];
+        };
+        /**
+         * LifecyclePreviewRequest
+         * @description Publish the checked preview fields as an HTTP request contract.
+         */
+        LifecyclePreviewRequest: {
+            /** Expected Revision */
+            expected_revision: number;
+            /** Expected Catalog Revision */
+            expected_catalog_revision: number;
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "enable" | "disable" | "reload";
+            /** Package Digest */
+            package_digest?: string | null;
+        };
         /**
          * LifecycleState
          * @description Show if a session or actor can still produce activity.
@@ -2647,6 +3082,8 @@ export interface components {
             /** Request Id */
             request_id: string;
         };
+        /** @enum {string} */
+        OperationStatus: "preparing" | "succeeded" | "failed" | "interrupted";
         /**
          * OptimisticActionKind
          * @description Represent optimistic action kind.
@@ -2936,6 +3373,23 @@ export interface components {
             name: string;
         };
         /**
+         * RepositoryScope
+         * @description Name one repository worktree and its resolved Git directory.
+         */
+        RepositoryScope: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "repository";
+            /** Repository Id */
+            repository_id: string;
+            /** Worktree */
+            worktree: string;
+            /** Git Directory */
+            git_directory: string;
+        };
+        /**
          * RepositoryStatusResponse
          * @description Represent repository status response.
          */
@@ -2946,6 +3400,14 @@ export interface components {
             worktree: string | null;
             /** Dirty */
             dirty: boolean;
+        };
+        /**
+         * RescanExtensionsRequest
+         * @description Reject stale management writes before package files are read.
+         */
+        RescanExtensionsRequest: {
+            /** Expected Revision */
+            expected_revision: number;
         };
         /**
          * ResetPaneRequest
@@ -2978,6 +3440,26 @@ export interface components {
             account: components["schemas"]["AccountReferenceResponse"] | null;
         };
         /**
+         * RetirementIssue
+         * @description Retain uncertainty without claiming that an external job has completed.
+         */
+        RetirementIssue: {
+            /** Runtime Revision */
+            runtime_revision: string;
+            /** Extension Id */
+            extension_id?: string | null;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "unresolved_jobs" | "deactivation_failed" | "close_failed" | "cleanup_unavailable";
+            /**
+             * Pending Job Ids
+             * @default []
+             */
+            pending_job_ids: string[];
+        };
+        /**
          * RewindModeOptionResponse
          * @description Represent rewind mode option response.
          */
@@ -3003,11 +3485,41 @@ export interface components {
             degraded: boolean;
         };
         /**
+         * RootDiscoveryIssue
+         * @description Keep a failed root scan visible without discarding the prior catalog.
+         */
+        RootDiscoveryIssue: {
+            /** Root Path */
+            root_path: string;
+            issue: components["schemas"]["DiscoveryIssue"];
+        };
+        /**
          * RunState
          * @description Show how an operation that runs ended.
          * @enum {string}
          */
         RunState: "succeeded" | "failed" | "cancelled";
+        /**
+         * RuntimePhase
+         * @description Describe actual manager progress, not the requested enable state.
+         * @enum {string}
+         */
+        RuntimePhase: "running" | "preparing" | "awaiting_boundary" | "closing" | "closed" | "fenced";
+        /**
+         * RuntimeShutdown
+         * @description Report one drained runtime and the result of its resource close.
+         */
+        RuntimeShutdown: {
+            /** Runtime Revision */
+            runtime_revision: string;
+            /** Resources Closed */
+            resources_closed: boolean;
+            /**
+             * Issues
+             * @default []
+             */
+            issues: components["schemas"]["RetirementIssue"][];
+        };
         /**
          * SavedResponse
          * @description Represent saved response.
@@ -3020,6 +3532,31 @@ export interface components {
             saved: boolean;
         };
         /**
+         * SchemaDefinition
+         * @description Bundle a schema with its immutable identity.
+         */
+        SchemaDefinition: {
+            reference: components["schemas"]["SchemaRef"];
+            /** Json Text */
+            json_text: string;
+        };
+        /**
+         * SchemaRef
+         * @description Identify a specific immutable schema owned by one extension.
+         */
+        SchemaRef: {
+            /** Owner */
+            owner: string;
+            /** Name */
+            name: string;
+            /** Version */
+            version: number;
+            /** Digest */
+            digest: string;
+        };
+        /** @enum {string} */
+        ScopeKind: "session" | "workspace" | "repository" | "installation";
+        /**
          * SearchBodyResponse
          * @description Represent a search entry body.
          */
@@ -3029,6 +3566,19 @@ export interface components {
             query: components["schemas"]["ContentResponse"];
             state: components["schemas"]["FileState"];
             result: components["schemas"]["ContentResponse"] | null;
+        };
+        /**
+         * SecretSetting
+         * @description Name a credential reference, never a default secret value.
+         */
+        SecretSetting: {
+            /** Name */
+            name: string;
+            /**
+             * Required
+             * @default false
+             */
+            required: boolean;
         };
         /**
          * SelectEffortRequest
@@ -3049,6 +3599,15 @@ export interface components {
             request_id: string;
             /** Model Id */
             model_id: string;
+        };
+        /**
+         * SelectedExtensionResponse
+         * @description Name stored package and settings revisions without disclosing their values.
+         */
+        SelectedExtensionResponse: {
+            extension_info: components["schemas"]["ExtensionInfo"];
+            /** Settings Revision */
+            settings_revision: number;
         };
         /**
          * SendTextRequest
@@ -3168,6 +3727,23 @@ export interface components {
             continued_from?: string | null;
         };
         /**
+         * SessionScope
+         * @description Name a session and the actor that produced an observation.
+         */
+        SessionScope: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "session";
+            /** Session Id */
+            session_id: string;
+            /** Actor Id */
+            actor_id: string;
+            /** Harness */
+            harness: string;
+        };
+        /**
          * SetPanePercentRequest
          * @description Represent set pane percent request.
          */
@@ -3178,6 +3754,69 @@ export interface components {
             window_id?: string | null;
             /** Percent */
             percent: number;
+        };
+        /**
+         * SettingsChangeRequest
+         * @description Validate a full scope document or explicit reset before host admission.
+         */
+        SettingsChangeRequest: {
+            /** Expected Revision */
+            expected_revision: number;
+            /** Expected Catalog Revision */
+            expected_catalog_revision: number;
+            /**
+             * Action
+             * @default settings
+             * @constant
+             */
+            action: "settings";
+            /** Request Id */
+            request_id: string;
+            /** Package Digest */
+            package_digest: string;
+            /** Expected Settings Revision */
+            expected_settings_revision: number;
+            /** Scope */
+            scope: components["schemas"]["SessionScope"] | components["schemas"]["WorkspaceScope"] | components["schemas"]["RepositoryScope"] | components["schemas"]["InstallationScope"];
+            document: components["schemas"]["EncodedDocument"] | null;
+        };
+        /**
+         * SettingsDefinition
+         * @description Use the default document's schema for settings validation and migration.
+         */
+        SettingsDefinition: {
+            defaults: components["schemas"]["EncodedDocument"];
+            /** Scopes */
+            scopes: components["schemas"]["ScopeKind"][];
+            /**
+             * Secret References
+             * @default []
+             */
+            secret_references: components["schemas"]["SecretSetting"][];
+        };
+        /**
+         * SettingsSnapshot
+         * @description Describe accepted settings and the exact package declaration used to resolve them.
+         */
+        SettingsSnapshot: {
+            extension_info: components["schemas"]["ExtensionInfo"];
+            /** Scope */
+            scope: components["schemas"]["SessionScope"] | components["schemas"]["WorkspaceScope"] | components["schemas"]["RepositoryScope"] | components["schemas"]["InstallationScope"];
+            /** Lifecycle Revision */
+            lifecycle_revision: number;
+            /** Catalog Revision */
+            catalog_revision: number;
+            /** Settings Revision */
+            settings_revision: number;
+            /** Selected From Committed */
+            selected_from_committed: boolean;
+            /** Pending Operation */
+            pending_operation: string | null;
+            definition: components["schemas"]["SettingsDefinition"];
+            /** Schemas */
+            schemas: components["schemas"]["SchemaDefinition"][];
+            override: components["schemas"]["EncodedDocument"] | null;
+            effective: components["schemas"]["EncodedDocument"];
         };
         /**
          * ShellBackgroundedBodyResponse
@@ -3231,6 +3870,20 @@ export interface components {
             window_id?: string | null;
             /** Columns */
             columns?: number | null;
+        };
+        /**
+         * ShutdownRecord
+         * @description Store an immutable shutdown observation before native ownership is released.
+         */
+        ShutdownRecord: {
+            /** Record Id */
+            record_id: string;
+            /** Manager Id */
+            manager_id: string;
+            /** Recorded At */
+            recorded_at: number;
+            /** Runtimes */
+            runtimes: components["schemas"]["RuntimeShutdown"][];
         };
         /**
          * SkillFinishedBodyResponse
@@ -3522,6 +4175,19 @@ export interface components {
             url: string | null;
             state: components["schemas"]["FileState"];
             result: components["schemas"]["ContentResponse"] | null;
+        };
+        /**
+         * WorkspaceScope
+         * @description Name a workspace independently of its display path.
+         */
+        WorkspaceScope: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "workspace";
+            /** Workspace Id */
+            workspace_id: string;
         };
         /**
          * WorktreeAction
@@ -6289,6 +6955,637 @@ export interface operations {
             };
             /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    extensions_api_extensions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionCatalogResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    rescan_extensions_api_extensions_rescan_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RescanExtensionsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionCatalogResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The browser origin is not accepted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The catalog revision changed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request is not application/json. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    extension_runtime_state_api_extensions_state_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionRuntimeResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Extension changes are read-only or the browser origin is not accepted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The operation does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description State changed, work is pending, or dependent confirmation is incomplete. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request is not application/json. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The daemon extension manager is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    extension_operation_api_extensions_operations__operation_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                operation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionOperationResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Extension changes are read-only or the browser origin is not accepted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The operation does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description State changed, work is pending, or dependent confirmation is incomplete. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request is not application/json. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The daemon extension manager is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    preview_extension_lifecycle_api_extensions__extension_id__lifecycle_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                extension_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LifecyclePreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LifecyclePlanResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Extension changes are read-only or the browser origin is not accepted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The operation does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description State changed, work is pending, or dependent confirmation is incomplete. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request is not application/json. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The daemon extension manager is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    change_extension_lifecycle_api_extensions__extension_id__lifecycle_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                extension_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LifecycleChangeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LifecycleAdmissionResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Extension changes are read-only or the browser origin is not accepted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The operation does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description State changed, work is pending, or dependent confirmation is incomplete. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request is not application/json. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The daemon extension manager is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    read_extension_settings_api_extensions__extension_id__settings_get: {
+        parameters: {
+            query?: {
+                /** @description JSON-encoded ExtensionScope */
+                scope?: string | null;
+                package_digest?: string | null;
+            };
+            header?: never;
+            path: {
+                extension_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionSettingsResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Extension changes are read-only or the browser origin is not accepted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The operation does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description State changed, work is pending, or dependent confirmation is incomplete. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request is not application/json. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The daemon extension manager is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    change_extension_settings_api_extensions__extension_id__settings_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                extension_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SettingsChangeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LifecycleAdmissionResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Extension changes are read-only or the browser origin is not accepted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The operation does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description State changed, work is pending, or dependent confirmation is incomplete. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request is not application/json. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The daemon extension manager is unavailable. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

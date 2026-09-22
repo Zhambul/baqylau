@@ -23,6 +23,8 @@ DASHBOARD_CLI_PATH = "dashboard/cli.py"
 BYTECODE_CACHE_DIRECTORY = "__pycache__"
 SERVICES_DIRECTORY_NAME = "services"
 FILE_ACCESS_ALLOWLIST = project_dependencies.MappingProxyType({
+    "extensions/discovery_bytes.py": "reads and copies bounded package bytes without executing feature code",
+    "extensions/artifact_files.py": "syncs checked package directories for atomic file publication",
     "api/application/file_upload_storage.py": "writes staged attachment bytes",
     "dashboard/cli_server.py": "redirects daemon output to the selected log file",
     "dashboard/dictation_credentials.py": "reads the installed dictation key",

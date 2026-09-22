@@ -42,7 +42,7 @@ def apply_prompt(
     read_model.apply(
         api_values.SESSION,
         session_data_contract.SessionDataChanges(
-            entry=session_entry,
+            entries=(session_entry,),
         ),
         cursor,
     )

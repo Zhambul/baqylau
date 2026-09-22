@@ -105,29 +105,34 @@ def test_canon_cursor_stamps_entries(main: repository_dependencies.SqliteDatabas
         question with one answer across both kinds of change.
     """
     store = sqlite_test_models.session_data_repository(main)
-    first = store.apply(
-        SESSION,
-        repository_dependencies.SessionDataChanges(
-            session=A_SESSION,
-            actors=(AN_ACTOR,),
-        ),
-        10,
-    )
-    second = store.apply(SESSION, sqlite_test_events.first_entry_change(), SECOND_ENTRY_CURSOR)
-    third = store.apply(
-        SESSION,
-        repository_dependencies.SessionDataChanges(
-            actors=(
-                standard_dependencies.replace(AN_ACTOR, status=standard_dependencies.actor_state.ActorStatus.WORKING),
+    cursors = (
+        store.apply(
+            SESSION,
+            repository_dependencies.SessionDataChanges(
+                session=A_SESSION,
+                actors=(AN_ACTOR,),
             ),
+            10,
         ),
-        THIRD_ENTRY_CURSOR,
+        store.apply(SESSION, sqlite_test_events.first_entry_change(), SECOND_ENTRY_CURSOR),
+        store.apply(
+            SESSION,
+            repository_dependencies.SessionDataChanges(
+                actors=(
+                    standard_dependencies.replace(
+                        AN_ACTOR, status=standard_dependencies.actor_state.ActorStatus.WORKING,
+                    ),
+                ),
+            ),
+            THIRD_ENTRY_CURSOR,
+        ),
     )
-    assert (first, second, third) == (10, SECOND_ENTRY_CURSOR, THIRD_ENTRY_CURSOR)
     session_record = store.read(SESSION)
+    delta = store.delta(SESSION, SECOND_ENTRY_CURSOR - 1)
+    assert cursors == (10, SECOND_ENTRY_CURSOR, THIRD_ENTRY_CURSOR)
     assert session_record is not None
-    assert session_record.cursor == THIRD_ENTRY_CURSOR
-    assert store.entries_page(SESSION, limit=10).entries[0].cursor == SECOND_ENTRY_CURSOR
+    assert (session_record.cursor, delta.cursor) == (THIRD_ENTRY_CURSOR, THIRD_ENTRY_CURSOR)
+    assert [entry.entry_id for entry in delta.entries] == [FIRST_ENTRY_ID]
     assert store.progress() == THIRD_ENTRY_CURSOR
 
 
@@ -159,18 +164,18 @@ def test_stale_process_cannot_hand_out_cursor(main: repository_dependencies.Sqli
     first.apply(SESSION, sqlite_test_events.first_entry_change(), 1)
     rebuilding = sqlite_test_models.session_data_repository(main)
     rebuilding.apply(
-        SESSION, repository_dependencies.SessionDataChanges(entry=sqlite_test_migrations.an_entry("e100")), 100,
+        SESSION, repository_dependencies.SessionDataChanges(entries=(sqlite_test_migrations.an_entry("e100"),)), 100,
     )
     assert (
         first.apply(
             SESSION,
-            repository_dependencies.SessionDataChanges(entry=sqlite_test_migrations.an_entry("e101")),
+            repository_dependencies.SessionDataChanges(entries=(sqlite_test_migrations.an_entry("e101"),)),
             REBUILT_NEXT_CURSOR,
         )
         == REBUILT_NEXT_CURSOR
     )
     entries = first.entries_page(SESSION, limit=10).entries
-    assert [entry.cursor for entry in entries] == [1, 100, 101]
+    assert [entry.entry_id for entry in entries] == [FIRST_ENTRY_ID, "e100", "e101"]
 
 
 def test_entry_is_written_once_however_often_its(main: repository_dependencies.SqliteDatabase) -> None:
@@ -187,7 +192,7 @@ def test_page_is_read_as_of_cursor_so_it_agrees(main: repository_dependencies.Sq
     for ordinal in range(1, 6):
         store.apply(
             SESSION,
-            repository_dependencies.SessionDataChanges(entry=sqlite_test_migrations.an_entry(f"e{ordinal}")),
+            repository_dependencies.SessionDataChanges(entries=(sqlite_test_migrations.an_entry(f"e{ordinal}"),)),
             ordinal,
         )
     whole = store.entries_page(SESSION, limit=10)

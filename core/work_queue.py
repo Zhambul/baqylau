@@ -2,6 +2,7 @@
 """Combine work notices and wait for data or a known deadline."""
 
 from enum import Enum, auto
+from math import isfinite
 from threading import Condition
 from time import monotonic
 
@@ -9,7 +10,9 @@ from time import monotonic
 class WorkKind(Enum):
     """Name the stages that can have pending work."""
 
+    EXTENSIONS = auto()
     SOURCES = auto()
+    EXTENSION_SOURCES = auto()
     RAW = auto()
     CANONICAL = auto()
 
@@ -56,6 +59,24 @@ class WorkQueue:
                 timeout = min(self._deadlines.values()) - now if self._deadlines else None
                 self._condition.wait(timeout)
             return set()
+
+    def set_deadline(self, work_kind: WorkKind, delay: float | None, key: str) -> None:
+        """Replace or clear one owned deadline without changing other producers.
+
+        Raises:
+            ValueError: If a supplied delay is not finite.
+
+        """
+        if delay is not None and not isfinite(delay):
+            message = "work deadline delay must be finite"
+            raise ValueError(message)
+        with self._condition:
+            identity = work_kind, key
+            if delay is None:
+                self._deadlines.pop(identity, None)
+            else:
+                self._deadlines[identity] = monotonic() + max(0, delay)
+            self._condition.notify()
 
     def close(self) -> None:
         """Release a waiting worker at shutdown."""

@@ -1,0 +1,4 @@
+{
+  "entry": ["src/index.svelte.ts", "src/**/*.test.ts", "tests/**/*.spec.ts"],
+  "project": ["src/**/*.{ts,svelte}", "host/**/*.ts", "tests/**/*.ts"]
+}

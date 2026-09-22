@@ -1,0 +1,5 @@
+node_modules
+dist
+host-dist
+test-results
+playwright-report

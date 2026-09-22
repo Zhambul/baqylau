@@ -18,6 +18,10 @@ from api.sessiondata.models.entry_attention_bodies import (
     QuestionChoiceResponse as QuestionChoiceResponse,
     QuestionResponse as QuestionResponse,
 )
+from api.sessiondata.models.entry_extension_bodies import (
+    ExtensionBodyResponse as ExtensionBodyResponse,
+    ExtensionSchemaRefResponse as ExtensionSchemaRefResponse,
+)
 from api.sessiondata.models.entry_lifecycle_bodies import (
     AssignmentFinishedBodyResponse as AssignmentFinishedBodyResponse,
     AssignmentStartedBodyResponse as AssignmentStartedBodyResponse,
@@ -81,6 +85,7 @@ type EntryBodyResponse = (
     | AssignmentFinishedBodyResponse
     | ModelChangeBodyResponse
     | EffortChangeBodyResponse
+    | ExtensionBodyResponse
 )
 
 type EntryType = EntryTypeName

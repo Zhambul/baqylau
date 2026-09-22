@@ -5,6 +5,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import pytest
+
+from repository.impl.sqlite.interpretations import SqliteInterpretationRepository
 from tests import (
     canonical_sessiondata_components as sessiondata_components,
     canonical_sessiondata_fixtures as session_fixtures,
@@ -57,8 +60,11 @@ def test_one_event_commits_its_entry_and_its_rows(tmp_path: Path) -> None:
     session_record = read_model.read(session_values.SESSION)
     assert session_record is not None
     entries = read_model.entries_page(session_values.SESSION, limit=10).entries
+    delta = read_model.delta(session_values.SESSION, session_record.cursor - 1)
     assert [entry.entry_type for entry in entries] == ["shell_started"]
-    assert entries[0].cursor == session_record.cursor
+    assert ([entry.entry_type for entry in delta.entries], delta.cursor) == (
+        ["shell_started"], session_record.cursor,
+    )
     # One read, one revision: the entry and the status it implies arrive
     # together, so no poll can see the command without the actor running it.
     delta = read_model.delta(session_values.SESSION, entries[0].cursor - 1)
@@ -154,14 +160,14 @@ def test_replaying_an_event_writes_its_entry_once(tmp_path: Path) -> None:
 
 
 def test_writer_that_raises_is_audited_and_loop(tmp_path: Path) -> None:
-    """Nothing restarts this thread, so no single fact may end it."""
+    """Keep failed core work pending; the engine owns bounded stage retries."""
     database = sessiondata_components.repository.databases.main_database(str(tmp_path / "main.db"))
     events = sessiondata_components.repository.canonical_events.SqliteCanonicalEventRepository(database)
     read_model = sessiondata_components.repository.session_data.SqliteSessionDataRepository(database)
     audit = loop_models.RecordingAudit()
     loop = sessiondata_components.engine.loop.ReactionLoop(
         sessiondata_components.engine.loop.ReactionLoopDependencies(
-            canonical_event_repository=events,
+            canonical_fact_reader=SqliteInterpretationRepository(database),
             session_data_repository=read_model,
             reactions=(),
             session_entry_writer=sessiondata_components.engine.entries.EntryWriter(),
@@ -174,9 +180,9 @@ def test_writer_that_raises_is_audited_and_loop(tmp_path: Path) -> None:
     )
     loop_support.record_events(database, events, session_fixtures.alive())
 
-    assert loop.tick() == STARTUP_EVENT_COUNT
+    with pytest.raises(RuntimeError, match="cannot project event"):
+        loop.tick()
     assert loop_support.failure_locations(audit) == [
-        "reactions (session data)",
         "reactions (session data)",
     ]
     # The mark did not move: the next tick sees the same facts again.

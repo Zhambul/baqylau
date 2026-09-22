@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 from domain import (
     entry_attention,
     entry_conversation,
+    entry_extensions,
     entry_lifecycle,
     entry_resources,
     entry_shells,
@@ -49,6 +50,7 @@ class EntryTypeName(StrEnum):
     ASSIGNMENT_FINISHED = "assignment_finished"
     MODEL_CHANGE = "model_change"
     EFFORT_CHANGE = "effort_change"
+    EXTENSION = "extension"
 
 
 ENTRY_TYPES: Mapping[type[EntryBody], EntryTypeName] = MappingProxyType(
@@ -78,6 +80,7 @@ ENTRY_TYPES: Mapping[type[EntryBody], EntryTypeName] = MappingProxyType(
         entry_lifecycle.AssignmentFinishedBody: EntryTypeName.ASSIGNMENT_FINISHED,
         entry_lifecycle.ModelChangeBody: EntryTypeName.MODEL_CHANGE,
         entry_lifecycle.EffortChangeBody: EntryTypeName.EFFORT_CHANGE,
+        entry_extensions.ExtensionEntryBody: EntryTypeName.EXTENSION,
     },
 )
 

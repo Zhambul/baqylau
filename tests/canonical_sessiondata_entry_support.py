@@ -11,16 +11,29 @@ if typing.TYPE_CHECKING:
     from tests.canonical_sessiondata_components import domain as session_domain
 
 
+def entries_of(
+    payload: session_domain.event_base.EventPayload, **kwargs: typing.Unpack[folding.CommittedArguments],
+) -> tuple[session_domain.entries.SessionEntry, ...]:
+    """Convert one event payload to its ordered feed entries.
+
+    Returns:
+        The feed entries, empty if the payload creates none.
+
+    """
+    return sessiondata_components.engine.entries.EntryWriter().entries(folding.committed(payload, **kwargs))
+
+
 def entry_of(
     payload: session_domain.event_base.EventPayload, **kwargs: typing.Unpack[folding.CommittedArguments],
 ) -> session_domain.entries.SessionEntry | None:
-    """Convert one event payload to a feed entry.
+    """Convert one event payload to its first feed entry.
 
     Returns:
-        The entry, or None if the payload creates no entry.
+        The first entry, or None if the payload creates no entry.
 
     """
-    return sessiondata_components.engine.entries.EntryWriter().entry(folding.committed(payload, **kwargs))
+    entries = entries_of(payload, **kwargs)
+    return entries[0] if entries else None
 
 
 def required_entry(

@@ -88,10 +88,10 @@ def test_history_error_still_notifies_listeners(tmp_path: Path, monkeypatch: pyt
     listener = Mock()
     loop, read_model, audit = loop_support.loop_over(tmp_path, fixtures.alive(), listener=listener)
     monkeypatch.setattr(
-        loop.dependencies.canonical_event_repository,
-        "page_from",
+        loop.dependencies.canonical_fact_reader,
+        "current_fact_page",
         Mock(side_effect=[
-            loop.dependencies.canonical_event_repository.page_from(0, len(fixtures.alive())),
+            loop.dependencies.canonical_fact_reader.current_fact_page(0, len(fixtures.alive())),
             RuntimeError("history read failed"),
         ]),
     )

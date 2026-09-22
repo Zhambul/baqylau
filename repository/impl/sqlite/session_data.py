@@ -18,7 +18,11 @@ from typing import TYPE_CHECKING
 from domain import entries
 from domain.lifecycle import LifecycleState
 from repository.contract import session_data as contracts
-from repository.impl.sqlite import session_data_aggregate as aggregate_mapper, session_data_write as write_mapper
+from repository.impl.sqlite import (
+    session_data_aggregate as aggregate_mapper,
+    session_data_progress,
+    session_data_write as write_mapper,
+)
 
 if TYPE_CHECKING:
     import sqlite3
@@ -71,10 +75,12 @@ class _SqliteSessionDataWrite(_SqliteSessionDataState):
 
         """
         with self.sqlite_database.read() as connection:
-            found = connection.execute(
-                "SELECT canonical_cursor FROM reaction_progress WHERE id=1",
-            ).fetchone()
-        return 0 if found is None else int(found["canonical_cursor"])
+            return session_data_progress.read_progress(connection)
+
+    def advance_past_extensions(self, canonical_cursor: int) -> None:
+        """Advance only this core consumer, without a session or a display notice."""
+        with self.sqlite_database.write(notify_readers=False) as connection:
+            session_data_progress.advance_extensions(connection, canonical_cursor)
 
     def clear(self) -> None:
         """Clear clear."""
@@ -91,7 +97,7 @@ class _SqliteSessionDataWrite(_SqliteSessionDataState):
         with self.sqlite_database.read() as connection:
             found = connection.execute(
                 "SELECT MAX(value) AS value FROM ("
-                "SELECT MAX(cursor) AS value FROM session_entries "
+                "SELECT MAX(commit_cursor) AS value FROM session_entries "
                 "UNION ALL SELECT MAX(revision) FROM session_data "
                 "UNION ALL SELECT MAX(revision) FROM session_data_actors)",
             ).fetchone()
@@ -121,7 +127,8 @@ class _SqliteSessionDataAggregateRead(_SqliteSessionDataState):
                 (session_id_text,),
             ).fetchall()
             newest = connection.execute(
-                "SELECT MAX(cursor) AS cursor, MAX(occurred_at) AS occurred_at FROM session_entries WHERE session_id=?",
+                "SELECT MAX(commit_cursor) AS cursor, MAX(occurred_at) AS occurred_at "
+                "FROM session_entries WHERE session_id=?",
                 (session_id_text,),
             ).fetchone()
         return aggregate_mapper.aggregate(session_row, actor_rows, newest["cursor"], newest["occurred_at"])
@@ -139,7 +146,7 @@ class _SqliteSessionDataAggregateRead(_SqliteSessionDataState):
                 "SELECT * FROM session_data_actors ORDER BY session_id, actor_id",
             ).fetchall()
             entry_cursors = connection.execute(
-                "SELECT session_id, MAX(cursor) AS cursor, MAX(occurred_at) AS occurred_at "
+                "SELECT session_id, MAX(commit_cursor) AS cursor, MAX(occurred_at) AS occurred_at "
                 "FROM session_entries GROUP BY session_id",
             ).fetchall()
         return aggregate_mapper.aggregates(session_rows, actor_rows, entry_cursors)
@@ -276,7 +283,8 @@ class _SqliteSessionDataEntryRead(_SqliteSessionDataState):
         """
         with self.sqlite_database.read() as connection:
             entry_rows = connection.execute(
-                "SELECT * FROM session_entries WHERE session_id=? AND cursor > ? ORDER BY cursor",
+                "SELECT * FROM session_entries WHERE session_id=? AND commit_cursor > ? "
+                "ORDER BY commit_cursor, position",
                 (str(session_id), cursor),
             ).fetchall()
             session_row = connection.execute(
@@ -290,7 +298,7 @@ class _SqliteSessionDataEntryRead(_SqliteSessionDataState):
         revisions = [int(row[REVISION_COLUMN]) for row in actor_rows]
         if session_row is not None:
             revisions.append(int(session_row[REVISION_COLUMN]))
-        revisions.extend(int(row["cursor"]) for row in entry_rows)
+        revisions.extend(int(row["commit_cursor"]) for row in entry_rows)
         return contracts.SessionDelta(
             session=None if session_row is None else aggregate_mapper.session_facts(session_row),
             actors=tuple(aggregate_mapper.actor_facts(row) for row in actor_rows),
@@ -364,7 +372,7 @@ def _running_related_rows(
         session_ids,
     ).fetchall()
     entry_cursors = connection.execute(
-        "SELECT session_id, MAX(cursor) AS cursor, "  # noqa: S608 -- Only ? placeholders vary; values are bound.
+        "SELECT session_id, MAX(commit_cursor) AS cursor, "  # noqa: S608 -- Only ? placeholders vary; values are bound.
         "MAX(occurred_at) AS occurred_at FROM session_entries "
         f"WHERE session_id IN ({placeholders}) GROUP BY session_id",
         session_ids,

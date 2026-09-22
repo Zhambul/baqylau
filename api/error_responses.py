@@ -28,7 +28,13 @@ def configure(web: FastAPI) -> None:
     web.add_exception_handler(Exception, _internal_error)
 
 
-def _error_body(message: str, status_code: int) -> Response:
+def error_body(message: str, status_code: int) -> Response:
+    """Render the shared error model with the normal response security headers.
+
+    Returns:
+        The checked public error body for a known request failure.
+
+    """
     return Response(
         ErrorResponse(error=message).model_dump_json(),
         status_code,
@@ -39,7 +45,7 @@ def _error_body(message: str, status_code: int) -> Response:
 
 def _http_error(_request: Request, error: StarletteHTTPException) -> Response:
     message = "not found" if str(error.detail) == FRAMEWORK_NOT_FOUND else str(error.detail)
-    return _error_body(message, error.status_code)
+    return error_body(message, error.status_code)
 
 
 def _validation_error(_request: Request, error: RequestValidationError) -> Response:
@@ -47,12 +53,12 @@ def _validation_error(_request: Request, error: RequestValidationError) -> Respo
     location_parts = (str(part) for part in first["loc"] if part != "body")
     location = ".".join(location_parts)
     message = f"{location}: {first['msg']}" if location else str(first["msg"])
-    return _error_body(message, HTTPStatus.BAD_REQUEST)
+    return error_body(message, HTTPStatus.BAD_REQUEST)
 
 
 def _application_input_error(_request: Request, error: Exception) -> Response:
     message = error.args[0] if error.args else str(error)
-    return _error_body(str(message), HTTPStatus.BAD_REQUEST)
+    return error_body(str(message), HTTPStatus.BAD_REQUEST)
 
 
 def _internal_error(request: Request, _error: Exception) -> Response:
@@ -60,4 +66,4 @@ def _internal_error(request: Request, _error: Exception) -> Response:
     action = "POST" if request.method == "POST" else "request"
     path = PathAudit(path=request.url.path[:AUDIT_PATH_CHARACTER_LIMIT])
     audit.error("", f"dashboard {action}", path)
-    return _error_body("internal", HTTPStatus.INTERNAL_SERVER_ERROR)
+    return error_body("internal", HTTPStatus.INTERNAL_SERVER_ERROR)

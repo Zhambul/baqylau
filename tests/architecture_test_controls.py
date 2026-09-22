@@ -32,6 +32,7 @@ RAW_RESPONSE_ROUTES = (
     "record_hook_delivery",
     "global_stream",
     "session_stream",
+    "extension_changes",
 )
 type RegisteredHandler = tuple[str, str, str | None, list[str] | None]
 
@@ -103,7 +104,7 @@ def key_value_table_violations(schema: str) -> tuple[list[str], int]:
         "session_entries.payload",
     }
     tables = standard_dependencies.re.findall(
-        r"CREATE TABLE IF NOT EXISTS (\w+)\((.*?)\n\);",
+        r'CREATE TABLE IF NOT EXISTS (\w+)\((.*?)\n\s*\)(?:;|\s*""")',
         schema,
         standard_dependencies.re.DOTALL,
     )

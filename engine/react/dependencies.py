@@ -9,7 +9,7 @@ from audit.failures import ErrorRecorder
 from core.change_signal import ChangeSignal
 from engine.sessiondata.contract import AppliedActorListener, SessionDataWriter, SessionEntryWriter
 from harness.contract import CanonicalEventReaction, HarnessReactorContext, HarnessReactorProvider
-from repository.contract.facts import CanonicalEventRepository
+from repository.contract.interpretations import CanonicalFactReader
 from repository.contract.session_data import SessionDataRepository
 
 
@@ -17,7 +17,7 @@ from repository.contract.session_data import SessionDataRepository
 class ReactionLoopDependencies:
     """Contain the stores and services that the reaction loop uses."""
 
-    canonical_event_repository: CanonicalEventRepository
+    canonical_fact_reader: CanonicalFactReader
     session_data_repository: SessionDataRepository
     reactions: tuple[CanonicalEventReaction, ...]
     session_entry_writer: SessionEntryWriter

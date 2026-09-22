@@ -1,9 +1,10 @@
 # Copyright (c) 2026 Zhambyl Yermagambet
 """Read-only structured diagnostics for application pipeline progress."""
 
+from http import HTTPStatus
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from api.diagnostics.models import (
     AuditProblemResponse,
@@ -14,8 +15,13 @@ from api.diagnostics.models import (
     TerminalProcessDiagnosticResponse,
     TerminalWindowDiagnosticResponse,
 )
-from app.provider_databases import Diagnostics
+from api.diagnostics.raw_event_audit_models import (
+    RawEventAuditResponse,
+    raw_event_audit_response,
+)
+from app.provider_databases import Diagnostics, RawEventAudits
 from app.provider_runtime import InstalledTerminal
+from domain.ids import RawEventId
 from terminal.models.viewport import ScreenReadRequest
 
 router = APIRouter(prefix="/api/diagnostics")
@@ -84,6 +90,26 @@ def report(
             for problem in found.audit_problems
         ),
     )
+
+
+@router.get("/raw-events/{raw_event_id}")
+def raw_event_audit(
+    raw_event_id: str,
+    audits: RawEventAudits,
+) -> RawEventAuditResponse:
+    """Return the bounded audit of one raw event.
+
+    Returns:
+        The bounded raw-event audit.
+
+    Raises:
+        HTTPException: If no raw event has the selected identity.
+
+    """
+    found = audits.audit(RawEventId(raw_event_id))
+    if found is None:
+        raise HTTPException(HTTPStatus.NOT_FOUND, "raw event not found")
+    return raw_event_audit_response(found)
 
 
 @router.get("/terminal")

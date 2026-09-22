@@ -1,0 +1,3 @@
+packaging>=26,<27
+pydantic>=2.13,<3
+baqylau-extension-api==0.1.0a1

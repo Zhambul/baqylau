@@ -6,6 +6,7 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING
 
+from repository.impl.sqlite.interpretations import SqliteInterpretationRepository
 from tests import (
     canonical_sessiondata_components as sessiondata_components,
     canonical_sessiondata_fixtures as session_fixtures,
@@ -44,7 +45,7 @@ def loop_over(
     audit = loop_models.RecordingAudit()
     loop = sessiondata_components.engine.loop.ReactionLoop(
         sessiondata_components.engine.loop.ReactionLoopDependencies(
-            canonical_event_repository=events,
+            canonical_fact_reader=SqliteInterpretationRepository(database),
             session_data_repository=read_model,
             reactions=() if reaction is None else (reaction,),
             session_entry_writer=sessiondata_components.engine.entries.EntryWriter(),

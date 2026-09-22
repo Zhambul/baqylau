@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "baqylau-policy-fixture"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["baqylau-extension-api==0.1.0a1"]
+
+[tool.setuptools]
+py-modules = ["sample_feature", "feature_backend"]
+package-dir = {"" = "src"}
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

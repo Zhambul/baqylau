@@ -1,6 +1,5 @@
-# The api/ layer's runtime dependencies — the repo's ONLY third-party runtime
-# deps; everything else is stdlib. (pydantic arrives as fastapi's own
-# dependency.) docs/http-api.md records the decision.
+# Host runtime dependencies. Feature packages use separate locked environments.
+# The public extension SDK declares its dependencies in its package metadata.
 fastapi>=0.115
 uvicorn>=0.30
 pyyaml>=6.0        # the /openapi.yaml document
@@ -8,3 +7,6 @@ cryptography>=43.0 # Web Push VAPID and payload encryption
 psutil>=6.0        # process identity and ancestry without a subprocess per hook
 bashlex>=0.18      # parse shell redirects without executing the command
 watchdog>=6,<7     # native file change events for engine inputs
+uv>=0.7.4,<1       # isolated, offline extension dependency environments
+filelock>=3.32.6,<4 # native process ownership for one extension runtime store
+-e ./packages/extension-api  # public contracts shared with external extension workers

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from harness.models import translation_stages as stages
 from tests import canonical_foundation_components as foundation_components, foundation_dependencies
 
 MAIN_DATABASE_NAME = "main.db"
@@ -65,6 +66,7 @@ class FixedTranslator:
 
     def translate(
         self, raw_event: foundation_components.raw_events.RawEvent,
+        *, translation_stage: stages.TranslationStage = stages.TranslationStage.COMPLETE,
     ) -> foundation_components.raw_events.TranslationResult:
         """Record an input event and return the fixed translation.
 
@@ -77,7 +79,7 @@ class FixedTranslator:
         self.raw_events.append(raw_event)
         if isinstance(self.translation, foundation_components.raw_events.TranslationError):
             raise self.translation
-        return self.translation
+        return stages.select_result(self.translation, translation_stage)
 
     def release_session(self, session_id: foundation_dependencies.domain.domain_ids.SessionId) -> None:
         """Process release session."""

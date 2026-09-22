@@ -7,9 +7,9 @@ Three protocols, one per aggregate:
     RawEventAuditRepository the forensic join across all four tables
     CanonicalEventRepository      the interpretations, and every canonical read
 
-`record_translation` is the only multi-table write in the system and it is ONE
-method: interpretation, facts and interpretation events in one transaction, decided inside the
-repository. No caller ever holds a connection.
+`record_translation` writes a complete core interpretation: its verdict, facts,
+and source links commit in one transaction inside the repository. Current reads
+exclude unpublished histories and extension facts. No caller holds a connection.
 """
 
 from __future__ import annotations
@@ -30,7 +30,11 @@ if TYPE_CHECKING:
 
 
 class RawEventRepository(Protocol):
-    """Owns `raw_events`. Append-only; nothing here interprets."""
+    """Own the core harness branch of `raw_events` without interpreting it.
+
+    ObservationRepository supplies extension writes and mixed ordered reads.
+    This narrow contract keeps harness callers on their strict core models.
+    """
 
     def record(self, raw_events: Sequence[RawEvent]) -> None:
         """Record.

@@ -5,6 +5,7 @@ import { formatRoute, parseHash, startupNavigation } from './route';
 const ROUTES = [
   '#/',
   '#/stats',
+  '#/settings/extensions',
   '#/launching',
   '#/s/session-one',
   '#/s/session-one/jobs',
@@ -43,6 +44,9 @@ describe('hash routes', () => {
 
   it.each([
     '#/unknown',
+    '#/settings',
+    '#/settings/unknown',
+    '#/settings/extensions/extra',
     '#/s/',
     '#/s/session/a',
     '#/s/session/m',

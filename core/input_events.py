@@ -2,6 +2,7 @@
 """Receive native input changes without scanning on a timer."""
 
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING
@@ -9,6 +10,7 @@ from typing import TYPE_CHECKING
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
+from core.input_paths import InputGroup, InputPaths, existing_parent
 from core.kernel_events import KernelEvents
 
 if TYPE_CHECKING:
@@ -24,7 +26,7 @@ class InputEvents(FileSystemEventHandler):
         self._profiles = profiles
         self._observer = Observer()
         self._watches: dict[Path, ObservedWatch] = {}
-        self._outputs: set[Path] = set()
+        self._paths = InputPaths()
         self._lock = Lock()
         self._kernel = KernelEvents(changed)
 
@@ -33,9 +35,16 @@ class InputEvents(FileSystemEventHandler):
         self._observer.start()
         self._kernel.start()
 
-    def watch_files(self, paths: set[Path]) -> None:
+    def watch_files(self, paths: set[Path], *, input_group: InputGroup = InputGroup.CORE) -> None:
         """Register direct writes before the next read, including replacement files."""
-        if self._kernel.update_files(paths):
+        with self._lock:
+            if input_group is InputGroup.CORE:
+                self._paths = replace(self._paths, core_files=frozenset(paths))
+            else:
+                self._paths = replace(self._paths, additional=frozenset(paths))
+        if input_group is InputGroup.ADDITIONAL:
+            self.update(set(self._paths.source_directories), set(self._paths.output_files))
+        if self._kernel.update_files(set(self._paths.core_files | self._paths.additional)):
             self._changed()
 
     def watch_processes(self, process_ids: set[int]) -> None:
@@ -44,14 +53,16 @@ class InputEvents(FileSystemEventHandler):
 
     def update(self, source_directories: set[Path], output_files: set[Path]) -> None:
         """Watch current inputs, including the parents of missing files."""
-        roots = {*self._profiles, *source_directories, *(path.parent for path in output_files)}
-        roots = {_existing_parent(root) for root in roots}
+        with self._lock:
+            self._paths = replace(
+                self._paths, source_directories=frozenset(source_directories), output_files=frozenset(output_files),
+            )
+        roots = self._paths.roots(self._profiles)
+        roots = {existing_parent(root) for root in roots}
         roots = {
             root for root in roots
             if not any(parent in roots for parent in root.parents)
         }
-        with self._lock:
-            self._outputs = output_files
         for root in self._watches.keys() - roots:
             self._observer.unschedule(self._watches.pop(root))
         for root in roots - self._watches.keys():
@@ -69,7 +80,7 @@ class InputEvents(FileSystemEventHandler):
         )
         with self._lock:
             relevant = any(
-                path in self._outputs or _is_harness_input(path)
+                self._paths.matches(path, is_directory=event.is_directory) or _is_harness_input(path)
                 for path in paths
             )
         if relevant:
@@ -90,9 +101,3 @@ def _is_harness_input(path: Path) -> bool:
             and any(part in {"tasks", "teams"} for part in path.parts)
         )
     )
-
-
-def _existing_parent(path: Path) -> Path:
-    while not path.is_dir() and path != path.parent:
-        path = path.parent
-    return path.resolve()

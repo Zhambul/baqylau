@@ -9,8 +9,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from api import worker_plans
-from app import provider_runtime as runtime_providers, provider_uploads as upload_providers
-from app.injection import Instances, resolve
+from app import provider_extension_runtime, provider_runtime as runtime_providers, provider_uploads as upload_providers
+from app.injection import Instances, resolve, seed
+from extensions.manager_contract import ExtensionManager
 from terminal.contract import TerminalPlugin
 
 if TYPE_CHECKING:
@@ -42,6 +43,10 @@ class _ManagedWorker:
 
     def join(self) -> None:
         self.thread.join(timeout=2)
+        if self.thread.is_alive() and self.plan.requires_join:
+            name = self.plan.name
+            message = f"daemon worker did not stop: {name}"
+            raise RuntimeError(message)
 
 
 @dataclass
@@ -49,6 +54,16 @@ class _WorkerGroup:
     workers: tuple[_ManagedWorker, ...]
     model_terminal: TerminalPlugin
     terminal_plugin: TerminalPlugin
+    extensions: ExtensionManager
+
+    def start(self, plans: tuple[worker_plans.WorkerPlan, ...]) -> None:
+        """Retain each started thread if a later thread fails to start."""
+        try:
+            for plan in plans:
+                self.workers += (_ManagedWorker.start(plan),)
+        except BaseException:
+            self.close()
+            raise
 
     def close(self) -> None:
         for worker in self.workers:
@@ -59,15 +74,27 @@ class _WorkerGroup:
         for worker in self.workers:
             worker.join()
         self.terminal_plugin.close()
+        self.extensions.close()
 
 
-def _start_workers(instances: Instances) -> _WorkerGroup:
-    managed_workers = tuple(_ManagedWorker.start(plan) for plan in worker_plans.plans(instances))
-    return _WorkerGroup(
-        managed_workers,
-        resolve(instances, runtime_providers.model_terminal),
-        resolve(instances, runtime_providers.terminal_plugin),
+def _start_workers(instances: Instances, extensions: ExtensionManager) -> _WorkerGroup:
+    try:
+        group, plans = _prepare_workers(instances, extensions)
+    except BaseException:
+        extensions.close()
+        raise
+    group.start(plans)
+    return group
+
+
+def _prepare_workers(
+    instances: Instances, extensions: ExtensionManager,
+) -> tuple[_WorkerGroup, tuple[worker_plans.WorkerPlan, ...]]:
+    group = _WorkerGroup(
+        (), resolve(instances, runtime_providers.model_terminal),
+        resolve(instances, runtime_providers.terminal_plugin), extensions,
     )
+    return group, worker_plans.plans(instances)
 
 
 @contextmanager
@@ -75,7 +102,10 @@ def background_workers(instances: Instances) -> Iterator[None]:
     """Start daemon workers on entry and stop them on exit."""
     # Attachments are pruned from the row, not from directory timestamps.
     resolve(instances, upload_providers.uploads).prune()
-    workers = _start_workers(instances)
+    factory = resolve(instances, provider_extension_runtime.extension_manager_factory)
+    extensions = factory.open_manager()
+    seed(instances, provider_extension_runtime.extension_runtime, provider_extension_runtime.RuntimeManager(extensions))
+    workers = _start_workers(instances, extensions)
     try:
         yield
     finally:

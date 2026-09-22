@@ -3,9 +3,14 @@
 
 from types import MappingProxyType
 
+from extensions.configuration import ROOTS_ENVIRONMENT
+
+EXTENSION_ROOT_FLAG = "--extension-root"
+
 LAUNCH_VARIABLES = MappingProxyType({
     "--port": "BAQYLAU_DASHBOARD_PORT",
     "--data-dir": "BAQYLAU_DATA_DIR",
+    EXTENSION_ROOT_FLAG: ROOTS_ENVIRONMENT,
 })
 
 

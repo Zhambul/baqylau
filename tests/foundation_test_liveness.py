@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from repository.impl.sqlite.interpretations import SqliteInterpretationRepository
 from tests import (
     canonical_foundation_components as foundation_components,
     foundation_dependencies,
@@ -120,7 +121,7 @@ def build_reaction_loop(
     sessions = foundation_dependencies.repository.SqliteSessionRepository(database, harnesses)
     return foundation_dependencies.engine.ReactionLoop(
         foundation_dependencies.engine.ReactionLoopDependencies(
-            canonical_event_repository=foundation_dependencies.repository.SqliteCanonicalEventRepository(database),
+            canonical_fact_reader=SqliteInterpretationRepository(database),
             session_data_repository=foundation_dependencies.repository.SqliteSessionDataRepository(database),
             reactions=(
                 foundation_components.reaction.PaneCanonicalEventReaction(

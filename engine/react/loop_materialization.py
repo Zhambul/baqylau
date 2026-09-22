@@ -72,6 +72,13 @@ class _ReactionLoopMaterializationContext(ReactionLoopContext, Protocol):
     ) -> None:
         """Record an empty entry body."""
 
+    def _audit_empty_bodies(
+        self,
+        canonical_event: event_base.CanonicalEvent[event_base.EventPayload],
+        session_entries: tuple[entries.SessionEntry, ...],
+    ) -> None:
+        """Record every empty entry body."""
+
     def _announce(
         self,
         listeners: tuple[sessiondata_contract.AppliedActorListener, ...],
@@ -97,9 +104,9 @@ class ReactionLoopMaterialization:
         session_id = canonical_event.session_id
         try:
             changed_actors = self._apply_materialized_event(canonical_event, states)
-        except Exception:  # noqa: BLE001 -- Audit failed materialization without sending a change notice.
+        except Exception:
             self._audit_failure("session data", _context(canonical_event))
-            return
+            raise
         self._announce(listeners, session_id, changed_actors, canonical_event)
 
     def _apply_materialized_event(
@@ -112,12 +119,11 @@ class ReactionLoopMaterialization:
             canonical_event.session_id,
         )
         after = self._next_state(canonical_event, before)
-        entry = self.dependencies.session_entry_writer.entry(canonical_event)
-        if entry is not None:
-            self._audit_empty_body(canonical_event, entry)
+        entries = self.dependencies.session_entry_writer.entries(canonical_event)
+        self._audit_empty_bodies(canonical_event, entries)
         changed_actors = _changed_actors(before, after)
         changes = session_data.SessionDataChanges(
-            entry=entry,
+            entries=entries,
             session=None if after.session == before.session else after.session,
             actors=changed_actors,
         )
@@ -151,6 +157,14 @@ class ReactionLoopMaterialization:
                 listener.applied(session_id, actors)
             except Exception:  # noqa: BLE001 -- Audit one listener failure and continue with other listeners.
                 self._audit_failure(type(listener).__name__, _context(canonical_event))
+
+    def _audit_empty_bodies(
+        self: _ReactionLoopMaterializationContext,
+        canonical_event: event_base.CanonicalEvent[event_base.EventPayload],
+        session_entries: tuple[entries.SessionEntry, ...],
+    ) -> None:
+        for session_entry in session_entries:
+            self._audit_empty_body(canonical_event, session_entry)
 
     def _audit_empty_body(
         self: _ReactionLoopMaterializationContext,

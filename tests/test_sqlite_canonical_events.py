@@ -6,6 +6,7 @@ from __future__ import annotations
 from tests import (
     sqlite_domain_dependencies as domain_dependencies,
     sqlite_repository_dependencies as repository_dependencies,
+    sqlite_schema_fixture,
     sqlite_test_dependencies as test_dependencies,
     sqlite_test_migrations,
     sqlite_test_models,
@@ -94,7 +95,7 @@ def test_expiry_returns_what_it_removed_so_caller(main: repository_dependencies.
 def test_version_twenty_four_names_stored_tool(tmp_path: standard_dependencies.Path) -> None:
     """Verify version twenty four names stored tool count fields."""
     database_path = str(tmp_path / MAIN_DATABASE_NAME)
-    old_database = repository_dependencies.sqlite_databases.main_database(database_path)
+    old_database = sqlite_schema_fixture.baseline_database(database_path)
     test_dependencies.SqliteSessionDataRepository(old_database).apply(
         SESSION, repository_dependencies.SessionDataChanges(session=A_SESSION, actors=(AN_ACTOR,)), 1,
     )

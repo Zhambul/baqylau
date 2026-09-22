@@ -10,7 +10,7 @@ from harness import contract
 from harness.models.interrupts import InterruptRegistry
 from harness.registry import HarnessRegistry
 from harness.services.controls import HarnessControlService
-from repository.contract import facts, session_data, sessions, shell_output
+from repository.contract import facts, interpretations, session_data, sessions, shell_output
 from terminal.adapter import TerminalAdapter
 
 
@@ -40,7 +40,7 @@ class InterpreterServices:
 class ReactionData:
     """Hold canonical and aggregate writers for the reaction loop."""
 
-    canonical_event_repository: facts.CanonicalEventRepository
+    canonical_fact_reader: interpretations.CanonicalFactReader
     session_data_repository: session_data.SessionDataRepository
     event_reactions: tuple[contract.CanonicalEventReaction, ...]
     entry_writer: session_contract.SessionEntryWriter

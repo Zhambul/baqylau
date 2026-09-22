@@ -6,12 +6,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from domain.ids import SessionId
+from domain.records import RecordedTranslationDecision
 from repository.contract.diagnostics import (
     AuditProblem,
     DiagnosticsCheckpoint,
     DiagnosticsReport,
     InterpretationProblem,
 )
+from repository.impl.sqlite.current_facts import current_tables
 from repository.mapper.raw_payloads import restored
 
 if TYPE_CHECKING:
@@ -21,6 +23,11 @@ if TYPE_CHECKING:
 
 DECISION_COLUMN = "decision"
 DIAGNOSTIC_PAYLOAD_BYTE_LIMIT = 300
+ACCEPTED_DECISIONS = frozenset((
+    RecordedTranslationDecision.TRANSLATED,
+    RecordedTranslationDecision.IGNORED_NONSEMANTIC,
+    RecordedTranslationDecision.SUPPRESSED,
+))
 
 
 def _diagnostic_payload(row: sqlite3.Row) -> str:
@@ -73,10 +80,11 @@ class SqliteDiagnosticsRepository:
         """
         with self.main_database.read() as connection:
             raw_rows = connection.execute(
-                "SELECT raw_events.id, raw_events.source_type, raw_events.source_position, "
+                "SELECT raw_events.id, raw_events.source_type, raw_events.source_position, "  # noqa: S608 -- Fixed repository views.
                 "raw_events.payload, raw_events.payload_codec, "
                 "interpretations.decision, interpretations.reason "
-                "FROM raw_events LEFT JOIN interpretations USING(raw_event_id) "
+                f"FROM raw_events LEFT JOIN {current_tables(connection).interpretations} "
+                "AS interpretations USING(raw_event_id) "
                 "WHERE raw_events.id>? AND raw_events.id<=? ORDER BY raw_events.id",
                 (after_raw_event, through_raw_event),
             ).fetchall()
@@ -90,7 +98,7 @@ class SqliteDiagnosticsRepository:
                 payload=_diagnostic_payload(row),
             )
             for row in raw_rows
-            if row[DECISION_COLUMN] not in {"translated", "ignored_nonsemantic"}
+            if row[DECISION_COLUMN] not in ACCEPTED_DECISIONS
         )
         errors: tuple[AuditProblem, ...] = ()
         if self.audit_database.exists():
@@ -127,7 +135,7 @@ class SqliteDiagnosticsRepository:
                 "SELECT COUNT(*) AS count FROM pending_raw_events",
             ).fetchone()
             canonical = connection.execute(
-                "SELECT COALESCE(MAX(cursor), 0) AS cursor FROM canonical_events",
+                f"SELECT COALESCE(MAX(cursor), 0) AS cursor FROM {current_tables(connection).canonical}",  # noqa: S608 -- Fixed repository view.
             ).fetchone()
             reaction = connection.execute(
                 "SELECT canonical_cursor FROM reaction_progress WHERE id=1",

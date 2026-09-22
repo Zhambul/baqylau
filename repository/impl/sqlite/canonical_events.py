@@ -1,10 +1,9 @@
 # Copyright (c) 2026 Zhambyl Yermagambet
 """Canonical facts and their interpretation audits.
 
-`record_translation` is the one multi-table write in the system. It is a single
-method so that the transaction is decided here rather than by the caller: three
-tables, one `BEGIN IMMEDIATE`, and nothing above the contract line ever holds a
-connection.
+`record_translation` owns one complete core interpretation transaction. It
+writes the verdict, facts, and source links together. Callers never hold a
+connection. Current reads exclude unpublished histories and extension rows.
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ from typing import TYPE_CHECKING
 from core.work_queue import WorkKind
 from domain import event_session, ids, records
 from repository.contract.facts import CanonicalEventRepository
-from repository.impl.sqlite import rows
+from repository.impl.sqlite import current_facts, rows
 from repository.mapper import facts as mapper
 
 if TYPE_CHECKING:
@@ -98,14 +97,15 @@ class SqliteCanonicalEventRepository(CanonicalEventRepository):
 
         """
         with self.sqlite_database.read() as connection:
+            tables = current_facts.current_tables(connection)
             row = connection.execute(
-                "SELECT * FROM canonical_events WHERE event_id=?",
+                f"SELECT * FROM {tables.canonical} WHERE event_id=? AND session_id IS NOT NULL",  # noqa: S608 -- Fixed repository view.
                 (str(event_id),),
             ).fetchone()
             if row is None:
                 return None
             interpretation_events = connection.execute(
-                "SELECT raw_event_id FROM interpretation_events WHERE event_id=? ORDER BY raw_event_id",
+                f"SELECT raw_event_id FROM {tables.links} WHERE event_id=? ORDER BY raw_event_id",  # noqa: S608 -- Fixed repository view.
                 (row["event_id"],),
             ).fetchall()
         return mapper.row_canonical_event(
@@ -121,9 +121,10 @@ class SqliteCanonicalEventRepository(CanonicalEventRepository):
 
         """
         with self.sqlite_database.read() as connection:
+            tables = current_facts.current_tables(connection)
             found = connection.execute(
-                "SELECT session_id FROM canonical_events "
-                "WHERE event_type='session.started' "
+                f"SELECT session_id FROM {tables.canonical} "  # noqa: S608 -- Fixed repository view.
+                "WHERE event_type='session.started' AND session_id IS NOT NULL "
                 "GROUP BY session_id "
                 "ORDER BY MAX(COALESCE(occurred_at, accepted_at)) DESC",
             ).fetchall()
@@ -143,8 +144,10 @@ class SqliteCanonicalEventRepository(CanonicalEventRepository):
             message = "event page limit must be positive"
             raise ValueError(message)
         with self.sqlite_database.read() as connection:
+            tables = current_facts.current_tables(connection)
             found = connection.execute(
-                "SELECT * FROM canonical_events WHERE cursor>? ORDER BY cursor LIMIT ?",
+                f"SELECT * FROM {tables.canonical} "  # noqa: S608 -- Fixed repository view.
+                "WHERE cursor>? AND session_id IS NOT NULL ORDER BY cursor LIMIT ?",
                 (cursor, limit),
             ).fetchall()
         return tuple(mapper.row_canonical_event(rows.canonical_event(row)) for row in found)
@@ -183,18 +186,19 @@ def _append(
     event: CanonicalEvent[EventPayload],
     accepted_at: float,
 ) -> records.CanonicalStorageResult:
+    tables = current_facts.current_tables(connection)
     existing = connection.execute(
-        "SELECT 1 FROM canonical_events WHERE event_id=?",
+        f"SELECT session_id FROM {tables.canonical} WHERE event_id=?",  # noqa: S608 -- Fixed repository view.
         (str(event.event_id),),
     ).fetchone()
     if existing is not None:
-        # A canonical event is an IDEMPOTENT projection: the identity names
-        # the fact, so re-observing it is a no-op that only adds an interpretation event.
-        # Several independent sources legitimately converge here and may
-        # render one fact differently; the first writer stays authoritative.
-        # Nothing is lost by not comparing the bodies — the later rendering
-        # is fully recoverable from its own raw event, stored verbatim and
-        # linked by the interpretation-event row written beside this.
+        if existing["session_id"] is None:
+            message = "core canonical identity conflicts with an extension fact"
+            raise ValueError(message)
+        # Keep the first accepted core body in the current history. A later
+        # observation adds its source link, not another accepted body. The
+        # mixed interpretation writer must also retain transformed proposals;
+        # original raw bytes alone do not record a later transform result.
         return records.CanonicalStorageResult.DEDUPLICATED
     connection.execute(
         f"INSERT INTO canonical_events({_INSERT_COLUMNS}) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",

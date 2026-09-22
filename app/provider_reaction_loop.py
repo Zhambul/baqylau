@@ -20,7 +20,7 @@ def reaction_loop(
     """
     return loop.ReactionLoop(
         loop.ReactionLoopDependencies(
-            canonical_event_repository=reaction_data.canonical_event_repository,
+            canonical_fact_reader=reaction_data.canonical_fact_reader,
             session_data_repository=reaction_data.session_data_repository,
             reactions=reaction_data.event_reactions,
             session_entry_writer=reaction_data.entry_writer,

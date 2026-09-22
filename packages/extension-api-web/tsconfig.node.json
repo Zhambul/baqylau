@@ -1,0 +1,5 @@
+{
+  "extends": "@baqylau/dev-tools/tsconfig/node",
+  "compilerOptions": { "allowJs": true, "checkJs": true },
+  "include": ["vite.config.ts", "scripts/*.mjs"]
+}

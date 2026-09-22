@@ -46,6 +46,11 @@ _.server_port
 # sqlite3.Connection attribute — set to shape rows, never read by us.
 _.row_factory
 
+# SQLite reads each PackageValues tuple by position in catalog executemany.
+# These named fields document those columns; the driver does not use attributes.
+PackageValues.issue_code
+PackageValues.issue_detail
+
 # inspect/FastAPI contract: `singleton` rewrites the signature the framework
 # reads off a provider, so the attribute is assigned here and read by
 # `inspect.signature` — never by a caller of ours.
@@ -75,6 +80,25 @@ control_names  # HarnessDescriptionResponse; serialized for the control menu.
 supports_terminal_input  # HarnessDescriptionResponse; serialized for the composer.
 recorded  # RecordedResponse; serialized for telemetry clients.
 request_options  # RateLimitsRequest; Pydantic serializes this field as params.
+
+# FastAPI serializes these exact extension-state fields. Private-daemon HTTP
+# tests read both fields; they are not unused host service methods.
+ExtensionRuntimeResponse.committed_packages
+ExtensionRuntimeResponse.requested
+SettingsSnapshot.lifecycle_revision  # Serialized in settings GET; used by checked client edits.
+
+# The lifecycle mapper selects these enums by value. Pydantic publishes every
+# member in OpenAPI and JSON. test_lifecycle_http_vocabulary checks exact host
+# parity and serialization. Keep these roots separate from pending host work.
+RuntimePhase.PREPARING
+RuntimePhase.AWAITING_BOUNDARY
+RuntimePhase.CLOSING
+RuntimePhase.CLOSED
+LifecycleKind.ENABLE
+LifecycleKind.DISABLE
+LifecycleKind.RELOAD
+LifecycleKind.RESTORE
+AdmissionStatus.REPLAYED
 
 # `notify/presence.py`'s RouteDecision/RouteCandidate: read whole by
 # `dataclasses.asdict(decision)` (notify/notifier.py, the `notify-route`
@@ -118,6 +142,8 @@ why  # rejected input and pane-command audit detail
 rate  # dictation audit rate
 payload_base64  # raw-event audit output
 payload_bytes  # harness audit input size
+payload_byte_length  # RawEventAuditResponse; read by the diagnostics JSON serialization
+canonical_event_count  # RawEventAuditResponse; read by the diagnostics JSON serialization
 ttl_seconds  # Deepgram grant response
 control  # control audit gesture name
 ms  # control audit duration
