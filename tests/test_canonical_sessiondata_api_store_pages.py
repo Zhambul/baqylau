@@ -154,10 +154,10 @@ def test_pending_question_ends_with_its_turn(session_data_store: SqliteSessionDa
     read_model.apply(
         api_values.SESSION,
         session_data_contract.SessionDataChanges(
-            entry=api_entries.entry(
+            entries=(api_entries.entry(
                 entry_attention.QuestionAskedBody(domain_ids.AttentionId("att-3"), ()),
                 entry_id=domain_ids.CanonicalEventId("asked-3"),
-            ),
+            ),),
         ),
         1,
     )
@@ -166,10 +166,10 @@ def test_pending_question_ends_with_its_turn(session_data_store: SqliteSessionDa
     read_model.apply(
         api_values.SESSION,
         session_data_contract.SessionDataChanges(
-            entry=api_entries.entry(
+            entries=(api_entries.entry(
                 entry_conversation.TurnFinishedBody(TurnState.ABORTED),
                 entry_id=domain_ids.CanonicalEventId("aborted-3"),
-            ),
+            ),),
         ),
         2,
     )
