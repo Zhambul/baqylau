@@ -8,11 +8,12 @@ from repository.impl.sqlite.databases import main_database
 from repository.impl.sqlite.goal_dismissals import SqliteGoalDismissalRepository
 from repository.impl.sqlite.session_data import SqliteSessionDataRepository
 from tests import canonical_sessiondata_api_values as fixture
+from tests.sqlite_schema_fixture import baseline_database
 
 
 def test_goal_dismissal_upgrade_keeps_sessions(tmp_path: Path) -> None:
     """Upgrade a version 24 file and retain its session."""
-    database = main_database(str(tmp_path / "main.db"))
+    database = baseline_database(str(tmp_path / "main.db"))
     SqliteSessionDataRepository(database).apply(fixture.SESSION, SessionDataChanges(session=fixture.FACTS), 1)
     with database.write() as connection:
         connection.execute("DROP TABLE goal_dismissals")

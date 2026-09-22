@@ -14,6 +14,7 @@ from sdk.client_adapters import (
     DIAGNOSTICS_REPORT,
     GLOBAL_STREAM,
     PANE_COMMAND,
+    RAW_EVENT_AUDIT,
     SESSION_STREAM,
     TERMINAL_DIAGNOSTICS,
 )
@@ -289,6 +290,15 @@ class DiagnosticsResource:
             },
         )
         return self.transport.get(f"/api/diagnostics/report?{query}", DIAGNOSTICS_REPORT)
+
+    def raw_event_audit(self, raw_event_id: str) -> application_models.raw_event_audit_models.RawEventAuditResponse:
+        """Return the bounded audit of one raw event.
+
+        Returns:
+            The bounded raw-event audit response.
+
+        """
+        return self.transport.get(f"/api/diagnostics/raw-events/{raw_event_id}", RAW_EVENT_AUDIT)
 
     def wait_until_drained(self, timeout: float = 30.0) -> application_models.models.DiagnosticsCheckpointResponse:
         """Wait until drained.

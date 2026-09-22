@@ -56,6 +56,14 @@ def _stored_version(connection: sqlite3.Connection) -> int | None:
     return None if row is None else int(row["version"])
 
 
+def _commit_write(connection: sqlite3.Connection) -> None:
+    try:
+        connection.commit()
+    except BaseException:
+        connection.rollback()
+        raise
+
+
 @dataclass(frozen=True)
 class SqlitePragmas:
     """The default is the event store's policy — the one deliberate one."""
@@ -101,9 +109,7 @@ class SqliteSchemaManager:
             if self.sqlite_pragmas.journal_mode:
                 journal_mode = self.sqlite_pragmas.journal_mode
                 connection.execute(f"PRAGMA journal_mode={journal_mode}")
-            stored_version = _stored_version(connection)
-            if stored_version is not None:
-                self._migrate(connection, stored_version)
+            self._migrate(connection)
             connection.executescript(self.schema)
             self._verify_version(connection)
             connection.commit()
@@ -122,20 +128,29 @@ class SqliteSchemaManager:
             message = _version_message(self.path, int(row["version"]), self.schema_version)
             raise SchemaVersionMismatchError(message)
 
-    def _migrate(self, connection: sqlite3.Connection, stored_version: int) -> None:
+    def _migrate(self, connection: sqlite3.Connection) -> None:
+        # The connection context does not start a transaction before DDL.
+        # Lock before reading the version so concurrent owners cannot apply
+        # the same migration. Publish the complete pending chain together.
+        with connection:
+            connection.execute("BEGIN IMMEDIATE")
+            stored_version = _stored_version(connection)
+            if stored_version is not None:
+                self._migrate_from_version(connection, stored_version)
+
+    def _migrate_from_version(self, connection: sqlite3.Connection, stored_version: int) -> None:
         if stored_version > self.schema_version:
             raise self._version_mismatch(stored_version)
         for target_version in range(stored_version + 1, self.schema_version + 1):
             statements = self._migrations.get(target_version)
             if statements is None:
                 raise self._version_mismatch(stored_version)
-            with connection:
-                for statement in statements:
-                    connection.execute(statement)
-                connection.execute(
-                    "UPDATE schema_version SET version=?, applied_at=? WHERE id=1",
-                    (target_version, time.time()),
-                )
+            for statement in statements:
+                connection.execute(statement)
+            connection.execute(
+                "UPDATE schema_version SET version=?, applied_at=? WHERE id=1",
+                (target_version, time.time()),
+            )
 
     def _version_mismatch(self, stored_version: int) -> SchemaVersionMismatchError:
         return SchemaVersionMismatchError(_version_message(self.path, stored_version, self.schema_version))
@@ -251,7 +266,7 @@ class SqliteDatabase(SqliteSchemaManager):
         except BaseException:
             connection.rollback()
             raise
-        connection.commit()
+        _commit_write(connection)
         if notify_readers and self.changes is not None and connection.total_changes > changes_before:
             self.changes.publish()
         if self.work_queue is not None and connection.total_changes > changes_before:

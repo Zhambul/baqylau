@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from api.common.models.replies.error_response import ErrorResponse
 from tests import (
     http_library_dependencies as library_dependencies,
     http_test_application_builders,
@@ -39,10 +40,18 @@ def assert_legacy_telemetry_routes_are_gone(server: http_test_pane_models.Runnin
 def validate_route_response(
     server: http_test_pane_models.RunningDaemon, route: library_dependencies.fastapi.routing.APIRoute, path: str,
 ) -> None:
-    """Validate a successful response against the route's declared model."""
+    """Validate the response for this request-only application.
+
+    Extension state needs a daemon owner. Private-daemon lifecycle tests check
+    its successful response; this fixture must return the declared refusal.
+    """
     status, _, body = http_test_controls.get_response(server, path)
+    if path == "/api/extensions/state":
+        assert status == library_dependencies.http.client.SERVICE_UNAVAILABLE, (path, body)
+        ErrorResponse.model_validate_json(body.raw)
+        return
     assert status == library_dependencies.http.client.OK, (path, body)
-    library_dependencies.TypeAdapter(route.response_model).validate_python(body.json)
+    library_dependencies.TypeAdapter(route.response_model).validate_json(body.raw)
 
 
 def assert_plane_security(server: http_test_pane_models.RunningDaemon) -> None:

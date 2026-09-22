@@ -35,6 +35,7 @@ CODEX_PACKAGE = "codex"
 OUR_PACKAGES = architecture_packages.owned_packages()
 ACTORS_REGISTRY = "actors"
 FOLDED_REGISTRY = frozenset(("folded",))
+ENVIRONMENT_FIELD = "environment"
 
 
 def test_json_allowlist_is_only_foreign_documents() -> None:
@@ -109,11 +110,13 @@ def test_owned_packages_never_use_raw() -> None:
             "LAUNCH_RESPONSES",
             "LAUNCH_STATUS",
         },
+            "api/extensions/routes.py": {"CATALOG_RESPONSES"},
+            "api/extensions/lifecycle_routes.py": {"LIFECYCLE_RESPONSES"},
         "api/hooks/routes.py": {"HOOK_RESPONSES"},
         "api/middleware.py": {"headers"},
         "api/openapi_document.py": {"FrameworkDocument"},
         "api/responses.py": {"Documented", "EVERY_ROUTE", "documented", "statuses"},
-        "api/runtime.py": {"base_environment", "environment"},
+        "api/runtime_config.py": {"base_environment", ENVIRONMENT_FIELD},
         "api/sse.py": {"NO_STORE"},
         "api/telemetry/models/browser_events_request.py": {"connection", "details"},
         "api/terminal/panes.py": {"PANE_RESPONSES"},
@@ -165,6 +168,20 @@ def test_owned_packages_never_use_raw() -> None:
         "engine/sessiondata/contract.py": {ACTORS_REGISTRY, "merged"},
         "engine/sessiondata/naming.py": {"EMPTY_DISPLAY_BY_HARNESS"},
         "engine/sessiondata/session_tasks.py": {"known"},
+        # This maps package paths to typed file identities, not feature JSON.
+        "extensions/discovery_manifest.py": {"files"},
+        "extensions/environment_commands.py": {ENVIRONMENT_FIELD},
+        "extensions/impl/process/launch.py": {"LAUNCH_ENVIRONMENT"},
+        # Logical fact lookup, not an untyped fact document.
+            "extensions/models/interpretation_trace.py": {"candidates"},
+            # Exact package and logical-fact indexes; no feature document dictionaries.
+            "extensions/interpretation_selection.py": {"_packages"},
+            "extensions/interpretation_checks.py": {"known"},
+            "extensions/interpretation_pipeline.py": {"candidates"},
+            "extensions/models/interpretation_facts.py": {"cause_graph", "graph"},
+            # Typed scope schedules and active reader lookup, never feature JSON.
+            "extensions/source_resources.py": {"scopes"},
+            "extensions/source_selection.py": {"select_readers", "readers"},
         "harness/impl/claude_code/canonical/idle_event_source.py": {"_notification_positions", "positions"},
         "harness/impl/claude_code/canonical/message_background_values.py": {"BACKGROUND_OUTCOMES"},
         "harness/impl/claude_code/canonical/message_idle_events.py": {"_notifications_by_actor", "notifications"},
@@ -231,7 +248,7 @@ def test_owned_packages_never_use_raw() -> None:
         "harness/impl/codex/controls/controller_handler_registry.py": {"HANDLERS"},
         "harness/impl/codex/controls/modeldialog_steps.py": {"EFFORT_LABEL"},
         "harness/impl/codex/usage.py": {"subprocess_environment"},
-        "harness/impl/codex/usage_process.py": {"environment"},
+        "harness/impl/codex/usage_process.py": {ENVIRONMENT_FIELD},
         "harness/impl/codex/usage_rows.py": {"WINDOW_LABELS"},
         "harness/models/interrupts.py": {"_marked_at"},
         "harness/models/selections.py": {"SelectionStates", "_efforts", "_models", "remaining_states"},
@@ -253,6 +270,8 @@ def test_owned_packages_never_use_raw() -> None:
         "notify/presence.py": {"viewing"},
         "repository/impl/sqlite/audit_read.py": {"counts", "error_counts"},
         "repository/impl/sqlite/connection.py": {"EMPTY_MIGRATIONS"},
+        # Retained package lookup and the typed cause graph passed to graphlib.
+        "repository/impl/sqlite/interpretation_acceptance.py": {"packages"},
         "repository/impl/sqlite/raw_event_audits.py": {"by_raw_event"},
         "repository/impl/sqlite/raw_events.py": {"latest_positions"},
         "repository/impl/sqlite/schema.py": {"MAIN_MIGRATIONS", "migrations"},
@@ -282,7 +301,7 @@ def test_owned_packages_never_use_raw() -> None:
         "terminal/impl/kitty/remote_tree.py": {"user_vars"},
         "terminal/impl/kitty/tabs.py": {"colors"},
         "terminal/impl/pty/keys.py": {"NAMED_KEYS"},
-        "terminal/impl/pty/registry.py": {"child_environment", "environment", "launch_environment", "windows"},
+        "terminal/impl/pty/registry.py": {"child_environment", ENVIRONMENT_FIELD, "launch_environment", "windows"},
         "terminal/impl/pty/runtime.py": {"found_identities", "identities", "observed"},
         "terminal/impl/pty/window.py": {"descendant_identities", "tags"},
         "terminal/processes.py": {"_children", "children"},

@@ -10,11 +10,11 @@ from pydantic import BaseModel, TypeAdapter
 
 from api.controls.models.launch_session_request import LaunchSessionRequest
 from api.sessiondata.models.session_data import SessionDataListResponse
-from sdk import client as sdk_client
+from sdk import application_models, client as sdk_client
 from sdk.client import (
     LAUNCH_TIMEOUT_SECONDS,
 )
-from tests.sdk_test_resources import sessions_resource
+from tests.sdk_test_resources import diagnostics_resource, sessions_resource
 from tests.sdk_test_support import _transport_response
 
 WORKING_DIRECTORY = "/work"
@@ -128,3 +128,44 @@ def test_session_launch_sends_explicit_account() -> None:
     assert document.account_id == "account-one"
     assert statuses == {HTTPStatus.ACCEPTED, HTTPStatus.CONFLICT}
     assert timeout == pytest.approx(LAUNCH_TIMEOUT_SECONDS)
+
+
+class AuditTransport:
+    """Answer one bounded raw-event audit request."""
+
+    def __init__(self) -> None:
+        """Create an empty request record."""
+        self.paths: list[str] = []
+
+    def get[Response](self, path: str, adapter: TypeAdapter[Response]) -> Response:
+        """Record the path and answer a bounded audit.
+
+        Returns:
+            The bounded raw-event audit response.
+
+        """
+        self.paths.append(path)
+        return _transport_response(
+            adapter,
+            application_models.raw_event_audit_models.RawEventAuditResponse(
+                raw_event_id="raw-one",
+                session_id="session-one",
+                harness="codex",
+                source_type="hook",
+                source_name="hook",
+                source_position="1",
+                observed_at=1.0,
+                encoding="utf-8",
+                payload_byte_length=4,
+            ),
+        )
+
+
+def test_raw_event_audit_uses_the_bounded_route() -> None:
+    """Verify the diagnostics resource reads one bounded raw-event audit."""
+    transport = AuditTransport()
+    found = diagnostics_resource(transport).raw_event_audit("raw-one")
+
+    assert transport.paths == ["/api/diagnostics/raw-events/raw-one"]
+    assert found.raw_event_id == "raw-one"
+    assert found.steps == ()

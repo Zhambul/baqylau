@@ -2,9 +2,11 @@
 # stdlib-only; pygments (syntax highlighting) and wenmode (markdown rendering in
 # the mirror, core/mdrender.py) are the two optional runtime niceties, pinned
 # here so renderer goldens/tests are reproducible.
-pytest>=8
-pytest-timeout>=2.3
-pytest-xdist>=3.5
+# Common lint and test tools come from the same policy used by external packages.
+-e ./packages/dev-tools
+# Offline test wheel builds use the SDK's standard build backend and wheel packer.
+setuptools>=77
+wheel>=0.45,<1
 # Gherkin scenarios for the LIVE-harness suite (tests/e2e, `make test-drift`).
 # pytest-bdd rather than behave because it compiles a .feature into ordinary
 # pytest tests: that suite is all fixtures (a spawned daemon, a pseudo-terminal,
@@ -28,21 +30,11 @@ httpx>=0.28
 pyte>=0.8
 pygments>=2.17
 wenmode>=0.9
-# Linters (make lint) — pinned exactly so CI findings match local runs. vulture
-# is the cross-module dead-code pass ruff cannot do. vulture_allowlist.py lists
-# names that frameworks and protocols read by contract.
-ruff==0.15.21
-# WPS adds design and consistency checks that Ruff does not implement. It is a
-# Flake8 plug-in, so its Flake8 dependency comes with this package.
-wemake-python-styleguide==1.7.1
-vulture==2.16
-# Type checker (make typecheck) — config in mypy.ini. Pinned exactly for the
-# same reason ruff is: a version bump that reports one new error must be a
-# deliberate commit, not a red build on a machine that resolved a newer wheel.
-mypy==2.3.0
+# Exact common pins are in packages/dev-tools/src/baqylau_dev/policy/requirements.txt.
 # Stubs for the two typed third-party imports. Without them mypy reports the
 # imports themselves as untyped, which strict mode treats as an error.
 # (AppKit ships neither stubs nor py.typed and is declared in mypy.ini instead.)
 types-PyYAML==6.0.12.20260815
 types-Pygments==2.20.0.20260728
 types-psutil==7.2.2.20260518
+types-jsonschema==4.26.0.20260518

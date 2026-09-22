@@ -1,0 +1,23 @@
+# Copyright (c) 2026 Zhambyl Yermagambet
+"""Keep a small independent product module in the shared quality fixture."""
+
+import sys
+
+
+def display_name(name: str) -> str:
+    """Build a name for the fixture's display.
+
+    Returns:
+        A named display string.
+
+    """
+    return f"Extension: {name}"
+
+
+def main() -> None:
+    """Run the fixture through its declared product entry."""
+    sys.stdout.write(display_name("sample"))
+
+
+if __name__ == "__main__":
+    main()

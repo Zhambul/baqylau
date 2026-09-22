@@ -7,6 +7,7 @@
     "node": ">=22.12 <23"
   },
   "packageManager": "npm@10.9.8",
+  "prettier": "@baqylau/dev-tools/prettier",
   "scripts": {
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json && tsc -p tsconfig.node.json",
@@ -20,8 +21,8 @@
     "test:coverage": "vitest run --coverage"
   },
   "devDependencies": {
+    "@baqylau/dev-tools": "file:../../packages/dev-tools-web",
     "@axe-core/playwright": "4.13.0",
-    "@eslint/js": "10.0.1",
     "@playwright/test": "1.62.1",
     "@sveltejs/vite-plugin-svelte": "7.3.0",
     "@testing-library/jest-dom": "7.0.1",
@@ -31,17 +32,13 @@
     "@types/node": "22.20.1",
     "@vitest/coverage-v8": "4.1.11",
     "eslint": "10.9.0",
-    "eslint-plugin-svelte": "3.23.0",
-    "globals": "17.11.0",
     "jsdom": "30.0.1",
     "knip": "6.32.2",
     "openapi-typescript": "7.13.0",
     "prettier": "3.9.6",
-    "prettier-plugin-svelte": "4.1.1",
     "svelte": "5.56.10",
     "svelte-check": "4.7.6",
     "typescript": "5.9.3",
-    "typescript-eslint": "8.67.0",
     "vite": "8.2.2",
     "vitest": "4.1.11"
   },

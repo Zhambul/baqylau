@@ -7,6 +7,7 @@ from tests import (
     sqlite_domain_dependencies as domain_dependencies,
     sqlite_library_dependencies as library_dependencies,
     sqlite_repository_dependencies as repository_dependencies,
+    sqlite_schema_fixture,
     sqlite_test_dependencies as test_dependencies,
     sqlite_value_dependencies as standard_dependencies,
 )
@@ -91,7 +92,7 @@ def test_version_fifteen_finishes_resumed_run(migration: sqlite_test_models.Migr
 def test_version_sixteen_adds_covering_session(tmp_path: standard_dependencies.Path) -> None:
     """Verify version sixteen adds the covering session activity index."""
     database_path = str(tmp_path / MAIN_DATABASE_NAME)
-    old_database = repository_dependencies.sqlite_databases.main_database(database_path)
+    old_database = sqlite_schema_fixture.baseline_database(database_path)
     old_database.initialize()
     with old_database.write() as connection:
         connection.execute("DROP INDEX index_session_entries_session")

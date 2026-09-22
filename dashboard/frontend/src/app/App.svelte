@@ -14,6 +14,7 @@
   import SessionView from '../sessions/components/SessionView.svelte';
   import SessionActions from '../sessions/components/SessionActions.svelte';
   import StatsView from '../stats/components/StatsView.svelte';
+  import ExtensionsSettings from '../extensions/ExtensionsSettings.svelte';
   import BrandMark from '../shared/components/BrandMark.svelte';
   import SunMark from '../shared/components/SunMark.svelte';
   import ToastStack from '../shared/components/ToastStack.svelte';
@@ -77,6 +78,10 @@
 
   function showStats(): void {
     appState.navigate({ kind: 'stats' });
+  }
+
+  function showSettings(): void {
+    appState.navigate({ kind: 'settings' });
   }
 
   function toggleNotifications(): void {
@@ -323,6 +328,9 @@
     >
       {appState.notificationsEnabled ? '◉ alerts' : '○ alerts off'}
     </button>
+    <button id="settingsbtn" class="ghost" type="button" onclick={showSettings}
+      >Settings</button
+    >
     <button
       id="notifbtn"
       class="ghost"
@@ -374,6 +382,8 @@
 <main id="view" inert={newSessionOpen}>
   {#if appState.route.kind === 'stats'}
     <StatsView />
+  {:else if appState.route.kind === 'settings'}
+    <ExtensionsSettings />
   {:else if appState.route.kind === 'launching'}
     <LaunchingView {appState} />
   {:else if appState.route.kind === 'session'}

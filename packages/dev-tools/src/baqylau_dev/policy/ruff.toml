@@ -1,0 +1,62 @@
+target-version = "py312"
+line-length = 120           # longest existing line is 118; not a style target
+preview = true
+
+[lint]
+select = ["ALL"]
+# The startup test compiles its entry file without executing it. Preserve its
+# specific wemake exception when Ruff checks noqa comments.
+external = ["WPS421"]
+ignore = [
+    # These rules require opposite class-docstring layouts. Ruff recommends
+    # D211 and D212 when a project selects all rules.
+    "D203",
+    "D213",
+    # Wemake WPS410 forbids __all__. Explicit aliases keep public imports
+    # visible to strict mypy without an export list.
+    "PLC0414",
+    # Wemake WPS602 forbids static methods and permits instance methods.
+    # Protocol implementations and test methods can be stateless.
+    "PLR6301",
+    # Wemake WPS218 limits assertion counts. Keep related conditions together
+    # instead of requiring a separate assertion for each condition.
+    "PT018",
+]
+
+[lint.flake8-type-checking]
+runtime-evaluated-base-classes = ["pydantic.BaseModel"]
+runtime-evaluated-decorators = [
+    "dataclasses.dataclass",
+    "fastapi.APIRouter.get", "fastapi.APIRouter.post", "fastapi.APIRouter.put",
+    "fastapi.APIRouter.patch", "fastapi.APIRouter.delete",
+]
+
+[lint.flake8-copyright]
+author = "Zhambyl Yermagambet"
+
+[lint.isort]
+# Keep aliased imports together to meet the wemake import-statement limit.
+combine-as-imports = true
+
+[lint.flake8-tidy-imports.banned-api]
+# A response is a MODEL, and pydantic is the only thing that encodes one.
+# JSONResponse takes any object at all and reflects it onto the wire, which is
+# how 26 routes came to answer with shapes their own `response_model` did not
+# describe — FastAPI validates nothing it did not serialize itself. The
+# architecture suite says the same thing about api/ as a whole
+# (test_no_response_anywhere_is_a_hand_built_document); this is the half that
+# fails in under a second, on the line that did it.
+"fastapi.responses.JSONResponse".msg = "Return a response MODEL. A route names its type and returns one; an error body is api/app.py's ErrorResponse; an SSE frame is a model too (api/sse.py)."
+"starlette.responses.JSONResponse".msg = "Return a response MODEL — see the note on fastapi.responses.JSONResponse."
+
+# A document of OURS is a dataclass or a pydantic model, and something else
+# encodes it: domain.codec.encode_document for anything stored or carried as
+# evidence, pydantic for anything on the wire. Hand-building one as a dict
+# literal is how the canonical envelope came to have its twelve field names
+# written out in four places, none of them checked against the others.
+#
+# The exemptions are per-file, below, and every one of them is a FOREIGN
+# document — another program's bytes, whose shape is not ours to declare.
+# tests/test_canonical_architecture.py holds that list to exactly that.
+"json.dumps".msg = "Build a dataclass and encode it (domain.codec.encode_document), or a model and let pydantic. A dict literal is not a document."
+"json.loads".msg = "Decode into a declared shape: domain.codec.decode_document for ours, and for a harness's own records, the translator that owns that vocabulary."

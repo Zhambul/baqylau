@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol
 
+from harness.models.translation_stages import TranslationStage
+
 if TYPE_CHECKING:
     from domain.event_base import CanonicalEvent, EventPayload
     from domain.ids import SessionId
@@ -75,8 +77,16 @@ class HarnessTelemetryGateway(Protocol):
 class HarnessTranslator(Protocol):
     """Translate harness-native raw events."""
 
-    def translate(self, raw_event: RawEvent) -> TranslationResult:
-        """Translate one raw event."""
+    def translate(
+        self, raw_event: RawEvent, *, translation_stage: TranslationStage = TranslationStage.COMPLETE,
+    ) -> TranslationResult:
+        """Translate one pass without giving activity control of session lifecycle.
+
+        LIFECYCLE receives the original input once, before extension calls. It
+        must not process tools or turns. ACTIVITY receives each surviving or
+        added input and must not change required session state. Release memory
+        only after the host accepts a required session finish.
+        """
         ...
 
     def release_session(self, session_id: SessionId) -> None:
@@ -87,8 +97,10 @@ class HarnessTranslator(Protocol):
 class CoreTranslator(Protocol):
     """Translate raw events from Baqylau services."""
 
-    def translate(self, raw_event: RawEvent) -> TranslationResult:
-        """Translate one raw event."""
+    def translate(
+        self, raw_event: RawEvent, *, translation_stage: TranslationStage = TranslationStage.COMPLETE,
+    ) -> TranslationResult:
+        """Translate a core input under the same lifecycle and activity split."""
         ...
 
 

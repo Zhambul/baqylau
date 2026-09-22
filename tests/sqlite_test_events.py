@@ -217,7 +217,7 @@ def first_entry_change() -> repository_dependencies.SessionDataChanges:
         The first fixture entry as one read-model change.
 
     """
-    return repository_dependencies.SessionDataChanges(entry=sqlite_test_migrations.an_entry(FIRST_ENTRY_ID))
+    return repository_dependencies.SessionDataChanges(entries=(sqlite_test_migrations.an_entry(FIRST_ENTRY_ID),))
 
 
 def store_version_four_actor(

@@ -96,7 +96,7 @@ def lifecycle_hook_events(
     if hook_name == "SessionStart":
         return session_events(raw_event, hook)
     if hook_name == "SessionEnd":
-        return _session_end_events(raw_event, hook)
+        return session_end_events(raw_event, hook)
     if hook_name == "Stop":
         return [
             turn_finished(raw_event, turn_semantics, native_identity, Outcome.SUCCEEDED),
@@ -107,10 +107,16 @@ def lifecycle_hook_events(
     return None
 
 
-def _session_end_events(
+def session_end_events(
     raw_event: RawEvent,
     hook: records.HookPayload,
 ) -> list[CanonicalEvent[EventPayload]]:
+    """Build session finish facts without changing turn state.
+
+    Returns:
+        The finish fact for the observed native run.
+
+    """
     session_finished = event_session.SessionFinished(
         Outcome.SUCCEEDED,
         hook.reason or None,

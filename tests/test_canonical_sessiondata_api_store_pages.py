@@ -42,7 +42,7 @@ def test_page_taken_at_snapshots_cursor(session_data_store: SqliteSessionDataRep
         read_model.apply(
             api_values.SESSION,
             session_data_contract.SessionDataChanges(
-                entry=api_entries.entry(
+                entries=(api_entries.entry(
                     entry_conversation.MessageBody(
                         domain_ids.MessageId(f"m{ordinal}"),
                         messaging.MessageRole.USER,
@@ -50,7 +50,7 @@ def test_page_taken_at_snapshots_cursor(session_data_store: SqliteSessionDataRep
                         domain_content.TextContent(api_values.PROMPT_TEXT),
                     ),
                     entry_id=domain_ids.CanonicalEventId(f"event-{ordinal}"),
-                ),
+                ),),
             ),
             ordinal + 1,
         )
@@ -66,7 +66,7 @@ def test_page_taken_at_snapshots_cursor(session_data_store: SqliteSessionDataRep
     read_model.apply(
         api_values.SESSION,
         session_data_contract.SessionDataChanges(
-            entry=api_entries.entry(
+            entries=(api_entries.entry(
                 entry_conversation.MessageBody(
                     domain_ids.MessageId("m4"),
                     messaging.MessageRole.USER,
@@ -74,7 +74,7 @@ def test_page_taken_at_snapshots_cursor(session_data_store: SqliteSessionDataRep
                     domain_content.TextContent("more"),
                 ),
                 entry_id=domain_ids.CanonicalEventId("event-4"),
-            ),
+            ),),
         ),
         5,
     )
@@ -94,20 +94,20 @@ def test_pending_question_is_derived_and_stops(session_data_store: SqliteSession
     read_model.apply(
         api_values.SESSION,
         session_data_contract.SessionDataChanges(
-            entry=api_entries.entry(
+            entries=(api_entries.entry(
                 entry_attention.QuestionAskedBody(domain_ids.AttentionId("att-1"), ()),
                 entry_id=domain_ids.CanonicalEventId("asked-1"),
-            ),
+            ),),
         ),
         1,
     )
     read_model.apply(
         api_values.SESSION,
         session_data_contract.SessionDataChanges(
-            entry=api_entries.entry(
+            entries=(api_entries.entry(
                 entry_attention.PlanProposedBody(domain_ids.AttentionId("att-2"), domain_content.TextContent("do it")),
                 entry_id=domain_ids.CanonicalEventId("proposed-2"),
-            ),
+            ),),
         ),
         2,
     )
@@ -119,23 +119,23 @@ def test_pending_question_is_derived_and_stops(session_data_store: SqliteSession
     read_model.apply(
         api_values.SESSION,
         session_data_contract.SessionDataChanges(
-            entry=api_entries.entry(
+            entries=(api_entries.entry(
                 entry_attention.QuestionAnsweredBody(
                     domain_ids.AttentionId("att-1"),
                     (attention.AttentionAnswer(domain_ids.QuestionId("q1"), ("Yes",)),),
                 ),
                 entry_id=domain_ids.CanonicalEventId("answered-1"),
-            ),
+            ),),
         ),
         3,
     )
     read_model.apply(
         api_values.SESSION,
         session_data_contract.SessionDataChanges(
-            entry=api_entries.entry(
+            entries=(api_entries.entry(
                 entry_attention.PlanResolvedBody(domain_ids.AttentionId("att-2"), outcomes.PlanState.APPROVED),
                 entry_id=domain_ids.CanonicalEventId("resolved-2"),
-            ),
+            ),),
         ),
         4,
     )
@@ -149,7 +149,7 @@ def test_entries_of_one_kind_are_read(session_data_store: SqliteSessionDataRepos
     read_model.apply(
         api_values.SESSION,
         session_data_contract.SessionDataChanges(
-            entry=api_entries.entry(
+            entries=(api_entries.entry(
                 entry_conversation.MessageBody(
                     domain_ids.MessageId(api_values.MESSAGE_ID_TEXT),
                     messaging.MessageRole.USER,
@@ -157,21 +157,21 @@ def test_entries_of_one_kind_are_read(session_data_store: SqliteSessionDataRepos
                     domain_content.TextContent(api_values.PROMPT_TEXT),
                 ),
                 entry_id=domain_ids.CanonicalEventId("message-1"),
-            ),
+            ),),
         ),
         1,
     )
     read_model.apply(
         api_values.SESSION,
         session_data_contract.SessionDataChanges(
-            entry=api_entries.entry(
+            entries=(api_entries.entry(
                 entry_shells.ShellStartedBody(
                     domain_ids.ShellId("sh1"),
                     domain_content.TextContent("make test"),
                     outcomes.ExecutionMode.FOREGROUND,
                 ),
                 entry_id=domain_ids.CanonicalEventId("shell-1"),
-            ),
+            ),),
         ),
         2,
     )

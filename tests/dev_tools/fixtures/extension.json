@@ -1,0 +1,11 @@
+{
+  "extension_id": "sample",
+  "name": "Policy fixture",
+  "description": "Check a separate backend with the shared tools.",
+  "package_version": "0.1.0",
+  "api_requires": "==0.1.0a1",
+  "quality_policy": "0.1.0a1",
+  "backend": { "module": "feature_backend", "factory": "build_extension" },
+  "capabilities": ["lifecycle"],
+  "e2e": [{ "case_id": "worker", "path": "tests/e2e/test_worker.py", "surfaces": ["worker"] }]
+}

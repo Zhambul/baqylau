@@ -22,7 +22,10 @@ jobs:
         with:
           node-version: "22.22.3"
           cache: npm
-          cache-dependency-path: dashboard/frontend/package-lock.json
+          cache-dependency-path: |
+            dashboard/frontend/package-lock.json
+            packages/dev-tools-web/package-lock.json
+            packages/extension-api-web/package-lock.json
       # The repo's shebangs are baked to the owner's pyenv interpreter
       # (retarget_python.py's speed hack); --revert restores the portable
       # `#!/usr/bin/env python3` so the few shebang-exec'd paths
@@ -35,7 +38,12 @@ jobs:
       - run: .venv/bin/python -m pip install --upgrade pip
       - run: .venv/bin/python -m pip install -r requirements.txt -r requirements-dev.txt
       - run: .venv/bin/python -m pip check
+      - run: make policy-check
       - run: npm install --global npm@10.9.8
+      - run: npm ci
+        working-directory: packages/dev-tools-web
+      - run: npm run build
+        working-directory: packages/dev-tools-web
       - run: npm ci
         working-directory: dashboard/frontend
       # Lint before test: ruff and mypy are both pinned in requirements-dev.txt,

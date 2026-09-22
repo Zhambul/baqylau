@@ -6,11 +6,11 @@ import typing
 from domain import naming as naming_models
 from naming.audit import NamingAudit
 from naming.jobs import NamingJobWorker
-from repository.impl.sqlite.databases import main_database
 from repository.impl.sqlite.naming import SqliteNamingJobRepository
 from tests.automatic_naming_models_one import Audit, FixedModels, RawEvents, Sessions
 from tests.automatic_naming_namer_helper import namer
 from tests.automatic_naming_session_helper import session
+from tests.sqlite_schema_fixture import baseline_database
 
 if typing.TYPE_CHECKING:
     from audit.recorder import AuditRecorder
@@ -62,7 +62,7 @@ def assert_failed_naming_job(
 
 def remove_naming_schema(database_path: str) -> None:
     """Remove the naming table and set version 13 for the migration test."""
-    database = main_database(database_path)
+    database = baseline_database(database_path)
     database.initialize()
     with database.write() as connection:
         connection.execute("DROP TABLE naming_jobs")

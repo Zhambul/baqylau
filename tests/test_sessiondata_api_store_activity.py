@@ -41,7 +41,7 @@ def test_last_activity_is_newest_entry_not_stored(
     read_model.apply(
         api_values.SESSION,
         session_data_contract.SessionDataChanges(
-            entry=api_entries.entry(
+            entries=(api_entries.entry(
                 entry_conversation.MessageBody(
                     domain_ids.MessageId(api_values.MESSAGE_ID_TEXT),
                     messaging.MessageRole.USER,
@@ -49,7 +49,7 @@ def test_last_activity_is_newest_entry_not_stored(
                     domain_content.TextContent(api_values.PROMPT_TEXT),
                 ),
                 occurred_at=api_values.LATEST_ACTIVITY_TIME,
-            ),
+            ),),
         ),
         2,
     )

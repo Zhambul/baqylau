@@ -86,14 +86,15 @@ class SessionDataWriter(Protocol):
 
 
 class SessionEntryWriter(Protocol):
-    """The one appender: a feed-worthy event becomes exactly one immutable row.
+    """The one appender: a feed-worthy event becomes its ordered immutable rows.
 
     Its own shape because it is the one writer that does not fold. Nothing it
-    produces is ever revised, so there is no state for it to carry.
+    produces is ever revised, so there is no state for it to carry. One event
+    can produce several entries; their order is the order of the tuple.
     """
 
-    def entry(self, canonical_event: CanonicalEvent[EventPayload]) -> SessionEntry | None:
-        """Return the entry."""
+    def entries(self, canonical_event: CanonicalEvent[EventPayload]) -> tuple[SessionEntry, ...]:
+        """Return the entries."""
         ...
 
 

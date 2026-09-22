@@ -1,0 +1,237 @@
+[
+  {
+    "kind": "turn_started",
+    "prompt_message_id": "message/1"
+  },
+  {
+    "kind": "turn_finished",
+    "state": "aborted"
+  },
+  {
+    "kind": "message",
+    "message_id": "message/2",
+    "role": "assistant",
+    "phase": "end_turn",
+    "content": {
+      "text": "Hello \u4e16\u754c",
+      "media_type": "text/markdown"
+    },
+    "recipient_actor_id": "actor/2",
+    "reply_to": "message/1"
+  },
+  {
+    "kind": "reasoning",
+    "reasoning_id": "reasoning/1",
+    "content": {
+      "json_text": "{\"step\":1}"
+    }
+  },
+  {
+    "kind": "shell_started",
+    "shell_id": "shell/1",
+    "command": {
+      "text": "git status --short",
+      "media_type": "text/plain"
+    },
+    "execution": "background"
+  },
+  {
+    "kind": "shell_output",
+    "shell_id": "shell/1",
+    "stream": "error",
+    "mode": "replace",
+    "content": {
+      "text": "warning",
+      "media_type": "text/plain"
+    }
+  },
+  {
+    "kind": "shell_backgrounded",
+    "shell_id": "shell/1"
+  },
+  {
+    "kind": "shell_finished",
+    "shell_id": "shell/1",
+    "state": "failed",
+    "exit_code": 2,
+    "result": {
+      "json_text": "{\"exit\":2}"
+    }
+  },
+  {
+    "kind": "file",
+    "path": "new/name.py",
+    "action": "renamed",
+    "state": "succeeded",
+    "previous_path": "old/name.py",
+    "lines_added": 3,
+    "lines_removed": 2,
+    "content": {
+      "text": "new\n",
+      "media_type": "text/plain"
+    },
+    "line_start": 1,
+    "line_end": 4
+  },
+  {
+    "kind": "search",
+    "tool": "rg",
+    "query": {
+      "text": "pattern",
+      "media_type": "text/plain"
+    },
+    "state": "succeeded",
+    "result": {
+      "json_text": "{\"matches\":[\"a.py:1\"]}"
+    }
+  },
+  {
+    "kind": "web",
+    "url": "https://example.com/page",
+    "state": "failed",
+    "result": {
+      "text": "Fetch failed",
+      "media_type": "text/plain"
+    }
+  },
+  {
+    "kind": "browser",
+    "action": "click",
+    "state": "succeeded",
+    "result": {
+      "json_text": "{\"target\":\"button\"}"
+    }
+  },
+  {
+    "kind": "worktree",
+    "action": "entered",
+    "state": "succeeded",
+    "arguments": {
+      "text": "/work/tree",
+      "media_type": "text/plain"
+    }
+  },
+  {
+    "kind": "skill_started",
+    "skill_id": "skill/1",
+    "name": "review",
+    "arguments": {
+      "json_text": "{\"scope\":\"worktree\"}"
+    }
+  },
+  {
+    "kind": "skill_finished",
+    "skill_id": "skill/1",
+    "state": "cancelled",
+    "result": {
+      "text": "Stopped",
+      "media_type": "text/plain"
+    }
+  },
+  {
+    "kind": "question_asked",
+    "attention_id": "attention/1",
+    "questions": [
+      {
+        "prompt_id": "question/1",
+        "title": "Select scope",
+        "prompt": "Which files?",
+        "multiple": true,
+        "choices": [
+          {
+            "label": "Changed",
+            "description": "Changed files only"
+          },
+          {
+            "label": "All",
+            "description": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "kind": "question_answered",
+    "attention_id": "attention/1",
+    "answers": [
+      {
+        "prompt_id": "question/1",
+        "labels": [
+          "Changed",
+          "All"
+        ]
+      }
+    ],
+    "feedback": "Include tests"
+  },
+  {
+    "kind": "plan_proposed",
+    "attention_id": "attention/2",
+    "plan": {
+      "text": "1. Read\n2. Change\n3. Check",
+      "media_type": "text/markdown"
+    }
+  },
+  {
+    "kind": "plan_resolved",
+    "attention_id": "attention/2",
+    "state": "changes_requested",
+    "feedback": "Add checks",
+    "edited": true
+  },
+  {
+    "kind": "compaction_started",
+    "before_tokens": 1200
+  },
+  {
+    "kind": "compaction_finished",
+    "before_tokens": 1200,
+    "after_tokens": 300,
+    "context": {
+      "text": "Retained context",
+      "media_type": "text/plain"
+    }
+  },
+  {
+    "kind": "assignment_started",
+    "assignment_id": "assignment/1",
+    "assigned_actor_name": "Reviewer",
+    "prompt": {
+      "text": "Review files",
+      "media_type": "text/plain"
+    }
+  },
+  {
+    "kind": "assignment_finished",
+    "assignment_id": "assignment/1",
+    "state": "failed",
+    "result": {
+      "text": "Check failed",
+      "media_type": "text/plain"
+    }
+  },
+  {
+    "kind": "model_change",
+    "current": "model-2",
+    "previous": "model-1",
+    "automatic": true
+  },
+  {
+    "kind": "effort_change",
+    "current": "high",
+    "previous": "low"
+  },
+  {
+    "kind": "extension",
+    "owner": "test.sample",
+    "entry_type": "test.sample.card",
+    "source_event_id": "fact/native/1",
+    "schema_ref": {
+      "owner": "test.sample",
+      "name": "text",
+      "version": 1,
+      "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "document": "\"card\""
+  }
+]

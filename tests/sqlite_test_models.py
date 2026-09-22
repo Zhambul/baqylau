@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from tests import (
     sqlite_repository_dependencies as repository_dependencies,
+    sqlite_schema_fixture,
     sqlite_test_dependencies as test_dependencies,
     sqlite_value_dependencies as standard_dependencies,
 )
@@ -32,7 +33,7 @@ class MigrationDatabase:
     def __init__(self, tmp_path: standard_dependencies.Path) -> None:
         """Create and initialize the database in the test directory."""
         self.path = str(tmp_path / MAIN_DATABASE_NAME)
-        self.old = repository_dependencies.sqlite_databases.main_database(self.path)
+        self.old = sqlite_schema_fixture.baseline_database(self.path)
         self.old.initialize()
 
     def set_version(self, version: int) -> None:

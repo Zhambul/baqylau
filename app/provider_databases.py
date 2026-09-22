@@ -9,8 +9,13 @@ from app.injection import singleton
 from app.provider_notifications import ApplicationUpdates
 from app.provider_work_queue import EngineWork
 from core import data
-from repository.contract import diagnostics as diagnostics_contract
-from repository.impl.sqlite import connection, databases, diagnostics as sqlite_diagnostics
+from repository.contract import diagnostics as diagnostics_contract, facts as facts_contract
+from repository.impl.sqlite import (
+    connection,
+    databases,
+    diagnostics as sqlite_diagnostics,
+    raw_event_audits as sqlite_raw_event_audits,
+)
 
 
 @singleton
@@ -78,4 +83,21 @@ def diagnostics(
 Diagnostics = Annotated[
     diagnostics_contract.DiagnosticsRepository,
     Depends(diagnostics),
+]
+
+
+@singleton
+def raw_event_audits(database: MainDb) -> facts_contract.RawEventAuditRepository:
+    """Return the raw-event audit repository over a read-only handle.
+
+    Returns:
+        Raw-event audit repository.
+
+    """
+    return sqlite_raw_event_audits.SqliteRawEventAuditRepository(databases.read_only(database))
+
+
+RawEventAudits = Annotated[
+    facts_contract.RawEventAuditRepository,
+    Depends(raw_event_audits),
 ]

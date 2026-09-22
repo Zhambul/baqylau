@@ -1,0 +1,9 @@
+# Copyright (c) 2026 Zhambyl Yermagambet
+"""Check the independent package's product behavior."""
+
+from sample_feature import display_name
+
+
+def test_display_name() -> None:
+    """Keep the selected name in the display string."""
+    assert display_name("sample") == "Extension: sample"

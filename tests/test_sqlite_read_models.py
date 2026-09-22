@@ -50,7 +50,7 @@ def test_deltas_answer_only_what_changed(main: repository_dependencies.SqliteDat
     boundary = stored.cursor
     store.apply(
         SESSION,
-        repository_dependencies.SessionDataChanges(entry=sqlite_test_migrations.an_entry(FIRST_ENTRY_ID)),
+        repository_dependencies.SessionDataChanges(entries=(sqlite_test_migrations.an_entry(FIRST_ENTRY_ID),)),
         2,
     )
     store.apply(
@@ -83,14 +83,14 @@ def test_entry_body_decodes_as_shape_its_own_type(main: repository_dependencies.
     store.apply(
         SESSION,
         repository_dependencies.SessionDataChanges(
-            entry=standard_dependencies.replace(
+            entries=(standard_dependencies.replace(
                 sqlite_test_migrations.an_entry(FIRST_ENTRY_ID),
                 body=library_dependencies.entry_shells.ShellStartedBody(
                     domain_dependencies.domain_ids.ShellId("sh1"),
                     library_dependencies.domain_content.TextContent("make test"),
                     domain_dependencies.outcomes.ExecutionMode.BACKGROUND,
                 ),
-            ),
+            ),),
         ),
         1,
     )
@@ -109,7 +109,7 @@ def test_clearing_read_model_keeps_replayed_canon(main: repository_dependencies.
     store.apply(
         SESSION,
         repository_dependencies.SessionDataChanges(
-            session=A_SESSION, entry=sqlite_test_migrations.an_entry(FIRST_ENTRY_ID),
+            session=A_SESSION, entries=(sqlite_test_migrations.an_entry(FIRST_ENTRY_ID),),
         ),
         REPLAYED_ENTRY_CURSOR,
     )
@@ -120,12 +120,14 @@ def test_clearing_read_model_keeps_replayed_canon(main: repository_dependencies.
     assert (
         store.apply(
             SESSION,
-            repository_dependencies.SessionDataChanges(entry=sqlite_test_migrations.an_entry(FIRST_ENTRY_ID)),
+            repository_dependencies.SessionDataChanges(entries=(sqlite_test_migrations.an_entry(FIRST_ENTRY_ID),)),
             REPLAYED_ENTRY_CURSOR,
         )
         == REPLAYED_ENTRY_CURSOR
     )
-    assert store.entries_page(SESSION, limit=10).entries[0].cursor == REPLAYED_ENTRY_CURSOR
+    delta = store.delta(SESSION, 0)
+    replayed = (delta.cursor, [entry.entry_id for entry in delta.entries])
+    assert replayed == (REPLAYED_ENTRY_CURSOR, [FIRST_ENTRY_ID])
 
 
 def test_list_view_reads_every_session_with_its(main: repository_dependencies.SqliteDatabase) -> None:
@@ -143,7 +145,7 @@ def test_list_view_reads_every_session_with_its(main: repository_dependencies.Sq
     )
     store.apply(
         SESSION,
-        repository_dependencies.SessionDataChanges(entry=sqlite_test_migrations.an_entry(FIRST_ENTRY_ID)),
+        repository_dependencies.SessionDataChanges(entries=(sqlite_test_migrations.an_entry(FIRST_ENTRY_ID),)),
         LATEST_ENTRY_CURSOR,
     )
     listed = {session_record.session.session_id: session_record for session_record in store.visible()}
@@ -178,7 +180,7 @@ def test_running_list_does_not_read_finished(main: repository_dependencies.Sqlit
     )
     store.apply(
         SESSION,
-        repository_dependencies.SessionDataChanges(entry=sqlite_test_migrations.an_entry(FIRST_ENTRY_ID)),
+        repository_dependencies.SessionDataChanges(entries=(sqlite_test_migrations.an_entry(FIRST_ENTRY_ID),)),
         LATEST_ENTRY_CURSOR,
     )
     running = store.running()

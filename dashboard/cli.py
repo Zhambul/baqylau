@@ -23,6 +23,7 @@ the default, and nothing that worked before stops working.
 
   --port N        the port to bind (or to ask, for stop/status)
   --data-dir DIR  the whole data directory: main.db, audit.db, uploads
+  --extension-root DIR  a package root; repeat for more roots
   --log FILE      send this daemon's own output there (serve, and start's child)
   --harness-executable HARNESS=FILE
   --harness-config-dir HARNESS=DIR

@@ -10,6 +10,7 @@ from sdk.client_catalog_resources import (
     InsightsResource,
     UploadsResource,
 )
+from sdk.client_extension_catalog import ExtensionsResource
 from sdk.client_preferences import PreferencesResource
 from sdk.client_service_resources import (
     DiagnosticsResource,
@@ -69,6 +70,7 @@ class _RuntimeClientResources:
     _terminal: TerminalResource
     _streams: StreamsResource
     _diagnostics: DiagnosticsResource
+    _extensions: ExtensionsResource
 
     @property
     def transport(self) -> transport.HttpTransport:
@@ -95,6 +97,11 @@ class _RuntimeClientResources:
         """The diagnostics resource."""
         return self._diagnostics
 
+    @property
+    def extensions(self) -> ExtensionsResource:
+        """The extension catalog resource."""
+        return self._extensions
+
 
 class BaqylauClient(_ApplicationClientResources, _RuntimeClientResources):
     """Represent baqylau client."""
@@ -112,6 +119,7 @@ class BaqylauClient(_ApplicationClientResources, _RuntimeClientResources):
         self._terminal = TerminalResource(self._transport)
         self._streams = StreamsResource(self._transport)
         self._diagnostics = DiagnosticsResource(self._transport)
+        self._extensions = ExtensionsResource(self._transport)
 
     def close(self) -> None:
         """Close close."""

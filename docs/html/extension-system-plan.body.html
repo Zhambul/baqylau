@@ -1,0 +1,279 @@
+<!--doc
+title: Extension system plan
+eyebrow: Baqylau · Design proposal
+lede: Add one extension runtime, clear data contracts, and extension views for the web dashboard and Kitty.
+meta: Date: 2026-09-14, Status: Proposed, Scope: System design and delivery plan
+toc: yes
+width: normal
+-->
+
+<h2>Proposed design</h2>
+
+<p>Add a small extension runtime to baqylau. Keep each extension in a separate package outside the main source tree. Each package can provide data transforms, stored data, commands, web views, and Kitty views. One manifest declares these parts.</p>
+
+<p>Use a separate worker process for each enabled backend extension. Use versioned messages between the worker and the host. Load web modules from each extension package at runtime. Let Kitty receive extension display data through the daemon.</p>
+
+<p>The first release assumes trusted local extensions. A worker process gives failure control and a clear restart boundary. It does not restrict access to the user's files. Web code also runs with the dashboard's access. Support for untrusted code would need a separate security design.</p>
+
+<p>This is a plan. No application code has changed. The proposed refactor is part of the design to review before implementation.</p>
+
+<h2>What the current code supports</h2>
+
+<p>The current code has useful boundaries. These are the main changes needed at each boundary:</p>
+
+<div class="table-wrap">
+  <table>
+    <caption>Table 1. Current code and required changes</caption>
+    <thead><tr><th>Area</th><th>Current behavior</th><th>Required change</th></tr></thead>
+    <tbody>
+      <tr><th>Harness plugins</th><td><code>harness/contracts/plugin.py</code> groups sources, translation, reactions, and controls. Discovery loads repository packages at startup.</td><td>Add a separate external extension runtime. Use the existing harness boundaries as inputs.</td></tr>
+      <tr><th>Translation</th><td><code>engine/interpret/translation.py</code> translates a raw event, stores the result, then runs input reactions.</td><td>Add transforms before translation and before canonical storage. Validate their output before any reaction.</td></tr>
+      <tr><th>Canonical facts</th><td><code>domain/events.py</code> declares a fixed event vocabulary. <code>repository/contract/facts.py</code> treats canonical events as stored facts.</td><td>Add one typed extension envelope with an extension ID, type name, schema version, and validated data.</td></tr>
+      <tr><th>Derived facts and entries</th><td><code>engine/sessiondata/contract.py</code> defines pure writers. <code>engine/react/loop_materialization.py</code> stores the resulting changes in one transaction.</td><td>Add extension writers and a validated transform of the proposed changes before storage.</td></tr>
+      <tr><th>Web dashboard</th><td><code>dashboard/frontend/src/app/route.ts</code> declares fixed tabs. Entry response types and display branches are also fixed.</td><td>Add extension routes, view slots, and one extension entry response type.</td></tr>
+      <tr><th>Kitty</th><td><code>client/_pane_rendering.py</code> selects mirror or scoreboard output. <code>terminal/contract.py</code> already supports pane operations.</td><td>Add extension display blocks, pane selection, and typed input actions.</td></tr>
+      <tr><th>Tests</th><td><code>docs/testing.md</code> describes isolated daemons, typed clients, browser tests, replay tests, and live Kitty tests.</td><td>Package the required test support so external extensions can use the same test paths.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>Use the existing meaning of “fact.” Canonical events are stored facts. Session facts and actor facts are derived state. Both need extension support, but they do not need separate event systems.</p>
+
+<h2>Data flow and transform rules</h2>
+
+<p>Store the original observation first. Apply extension transforms to the data that the next stage receives. Store the transform decisions with their source references.</p>
+
+<div class="pipeline">
+  <div class="stage"><span class="stage-index">1</span><span class="stage-name">Record input</span><span class="stage-note">Keep the original bytes</span></div>
+  <div class="stage"><span class="stage-index">2</span><span class="stage-name">Transform raw input</span><span class="stage-note">Then run translation</span></div>
+  <div class="stage"><span class="stage-index">3</span><span class="stage-name">Transform facts</span><span class="stage-note">Then validate and store</span></div>
+  <div class="stage"><span class="stage-index">4</span><span class="stage-name">Build derived data</span><span class="stage-note">Transform and store changes</span></div>
+  <div class="stage"><span class="stage-index">5</span><span class="stage-name">Update views</span><span class="stage-note">Web and Kitty</span></div>
+</div>
+
+<p>Expose a small set of contracts. The following names are proposed API names:</p>
+
+<div class="table-wrap">
+  <table>
+    <caption>Table 2. Extension contracts</caption>
+    <thead><tr><th>Contract</th><th>Input</th><th>Allowed result</th></tr></thead>
+    <tbody>
+      <tr><th><code>source</code></th><td>A declared file watch, process result, or submitted observation.</td><td>Add raw events through host storage. Record source position and identity.</td></tr>
+      <tr><th><code>transform_raw</code></th><td>A recorded input batch.</td><td>Keep, replace, drop, or add derived inputs before translation. Preserve the original observations.</td></tr>
+      <tr><th><code>transform_canonical</code></th><td>A proposed canonical event batch.</td><td>Keep, replace, drop, or add canonical facts before storage and reactions.</td></tr>
+      <tr><th><code>project</code></th><td>Committed facts and prior extension state.</td><td>Build extension records, feed entries, and counts. Use the same writer during replay.</td></tr>
+      <tr><th><code>transform_projection</code></th><td>Proposed session, actor, entry, and extension record changes.</td><td>Change, suppress, or add valid changes before one atomic write.</td></tr>
+      <tr><th><code>present</code></th><td>Stored records and view context.</td><td>Add or replace display content, filter visible entries, and add tabs, panes, actions, or status items.</td></tr>
+      <tr><th><code>command</code> and <code>observe</code></th><td>A user action or a committed event.</td><td>Start work outside the transform path. Submit results as new recorded observations.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>A transform returns explicit operations. A drop includes a reason. The host validates the whole output batch. It checks schemas, identities, references, and session state rules. For example, a transform cannot leave an actor that refers to a removed session. Display filters can hide an item without changing session state.</p>
+
+<p>Preserve core event types. Add one extension event envelope and one extension entry envelope. An extension owns names such as <code>adapters.logs.started</code>. Its package supplies schemas. Persist the schema and a plain display summary with the data. The host can still read history when the extension is disabled, removed, or upgraded.</p>
+
+<p>Add a typed scope to extension observations and facts: session, workspace, repository, or installation. Core session events keep their required session and actor IDs. An extension event has its own scope branch in the stored envelope. Session writers receive only session events. This lets the Git pane work when no coding session is active. Extend source routing to identify an extension source without requiring a harness plugin.</p>
+
+<p>Transforms use only supplied input and recorded state. Network requests, file reads, model calls, and commands run as separate work. Their results become recorded inputs. Replay then has the data needed to repeat the transform.</p>
+
+<p>Apply transforms in a fixed order. Required dependencies and explicit <code>before</code>/<code>after</code> rules define that order. Use the extension ID to order otherwise equal entries. Reject cycles at activation. A later transform receives the earlier transform's result. Added events continue from the next transform. They do not restart the same chain.</p>
+
+<p>Generated records need stable IDs based on the logical source operation and an extension output key. A retry must produce the same ID. Do not use arrival time or a random value. Record parent references and limit generated output to stop extension event cycles.</p>
+
+<p>Keep logical identity separate from interpretation revision. Repeated observations reuse the accepted result for that logical fact in the active history revision. A settings change cannot overwrite it with different bytes. A history rebuild creates a new revision linked to the same sources.</p>
+
+<h2>Storage, history, and failures</h2>
+
+<p>Keep database access in <code>repository/</code>. Extensions receive storage methods for their own records. Each collection has a schema, scope, key, and revision. Support the filters and indexes required by the first extensions. The worker does not receive a database connection.</p>
+
+<p>Extend the current storage transactions. Commit accepted facts, transform decisions, and source links together. Commit derived records, feed entries, and the consumer cursor together. Send change notices only after commit.</p>
+
+<p>For each processed batch, record the active extension versions, package hashes, order, settings revision, decisions, output references, and errors. Keep non-secret settings snapshots. Store secret references without copying secret values into the audit record.</p>
+
+<p>Give each transform a time limit and an output limit. On a worker crash, timeout, or invalid result, discard that extension's partial result. Continue with its input unchanged and record the failure. Repeated failures stop the extension and show a failed state. A queue limit must not cause silent loss of original events.</p>
+
+<p>Slow commands use a separate queue. They cannot hold the event worker. Record command progress and outcome. After a crash, check an external command's result before a retry. A push or commit must not run twice because a reply was lost.</p>
+
+<p>Disabling an extension changes future processing. It does not undo facts already accepted. Remove its active views and commands, but keep history and settings. Use a generic display for stored extension entries.</p>
+
+<p>Provide a separate, explicit history rebuild. First support rebuilding extension data and display entries from stored facts. If canonical transforms must be applied again, build a new interpretation revision from raw history. Compare it before activation. Switch revisions atomically and reset client cursors. Keep the prior revision for recovery. Replay must not send messages, run Git commands, or repeat other external actions.</p>
+
+<h2>Packages and runtime loading</h2>
+
+<p>Use a configured extension directory outside this repository. <code>EXTENSION_ROOT</code> below means that directory. A development link can point to a separate source checkout.</p>
+
+<pre class="tree"><span class="dir">EXTENSION_ROOT/</span>
+└── <span class="dir">adapters/</span>
+    ├── extension.json
+    ├── <span class="dir">backend/</span>        <span class="note"># Worker code and package dependencies</span>
+    ├── <span class="dir">schemas/</span>        <span class="note"># Events, records, settings, commands</span>
+    ├── <span class="dir">web/dist/</span>       <span class="note"># Built JavaScript and CSS</span>
+    └── <span class="dir">tests/e2e/</span>      <span class="note"># Tests owned by this extension</span></pre>
+
+<p>The manifest declares the ID, package version, host API range, worker entry point, web assets, contracts, dependencies, settings schema, and E2E test entry points. Backend code and web code are optional. A display-only extension does not need an idle worker.</p>
+
+<p>Read manifests without executing extension code. Find packages at startup and when the user selects <b class="ui">Rescan</b>. The user can enable, disable, or reload an extension while the daemon runs. A development watcher can request the same reload operation after a complete build.</p>
+
+<ol class="procedure">
+  <li><span class="step-title">Validate the candidate package</span>Check versions, schemas, dependencies, asset paths, and package identity. Keep an incompatible extension visible with a reason.</li>
+  <li><span class="step-title">Prepare the worker</span>Start its process with its own dependency environment. Complete the API handshake and prepare any data migration.</li>
+  <li><span class="step-title">Activate one new runtime revision</span>Finish the current event transaction. Switch the active extension set at that boundary. Each batch uses one fixed revision.</li>
+  <li><span class="step-title">Update both displays</span>Publish the new extension catalog through the existing change streams. Replace web mounts and Kitty contributions.</li>
+  <li><span class="step-title">Release the old revision</span>Drain or cancel work, remove subscriptions, close owned resources, and stop the old process. Reject late replies from it.</li>
+</ol>
+
+<p>If preparation fails, retain the active version and data. During disable, stop accepting new extension commands first. Let an active external action finish or report its state before stopping its worker. Retain a package version while active work still uses it.</p>
+
+<p>Use <a href="https://www.jsonrpc.org/specification">JSON-RPC 2.0</a> over local process streams for worker calls. Test an existing implementation such as <a href="https://explodinglabs.com/jsonrpcserver/examples/">jsonrpcserver</a> in the first prototype. Select and pin the library after checking bidirectional calls, timeouts, and shutdown. Use <a href="https://python-jsonschema.readthedocs.io/en/stable/">jsonschema</a> to validate extension schemas. The project-specific work is the extension contract and process lifecycle.</p>
+
+<h2>Web and Kitty extension views</h2>
+
+<p>Define named display slots with stable IDs. The first set covers feed entries, session tabs, workspace pages, toolbar actions, status items, and settings panels. Extension routes use an extension ID and a view ID. Keep the existing route forms valid.</p>
+
+<h3>Web dashboard</h3>
+
+<p>Each extension builds an independent JavaScript module and CSS file. The module exports a mount function that returns update and dispose functions. Pass a host API, current scope, theme values, and an abort signal. The public boundary contains data and callbacks, with no dependency on private Svelte stores.</p>
+
+<p>Use <a href="https://vite.dev/guide/build#library-mode">Vite library mode</a> for the package build. A Svelte extension can implement its view with the documented <a href="https://svelte.dev/docs/svelte/imperative-component-api">mount and unmount APIs</a>. Bundle its UI runtime for the first release. This adds some download size but avoids a shared private runtime contract.</p>
+
+<p>The host serves declared assets at URLs that contain the extension ID and package hash. Import them at runtime. No main dashboard build is needed when an extension changes. Use a dedicated view root and scoped styles. Supply shared theme values through the SDK.</p>
+
+<p>On disable or reload, dispose the view and release its timers, subscriptions, and host API handles. JavaScript modules can stay in the browser module cache; disposal ends their active work. A new package hash gives the new module a new URL. Add a recovery view for mount and update errors.</p>
+
+<p>Extensions can decorate or replace supported core views. A replacement names its target explicitly. If two extensions claim the same exclusive target, report the conflict and require a selected owner. Additive contributions use stable ordering.</p>
+
+<h3>Kitty</h3>
+
+<p>Add a terminal display contract based on the existing render primitives. An extension returns blocks such as text, tables, diffs, trees, status values, and action references. The client owns width handling, colors, wrapping, resize, and terminal escape output.</p>
+
+<p>Expose feed renderers, mirror sections, scoreboard items, and named panes. Add a pane selector and typed key or click actions. Send actions to the extension command API with the active repository or session scope.</p>
+
+<p>The same backend records supply both frontends. Web views can use richer layouts. Kitty views use the terminal block contract and can request a pane through the existing terminal service. Test the contract with a real diff, a file tree, and thread navigation before fixing its first version.</p>
+
+<h2>Extension discovery and cooperation</h2>
+
+<p>Expose <code>extensions.list()</code>, <code>extensions.get(id)</code>, and lifecycle subscriptions through the SDK. Return package version, enabled state, health, and available contracts. An installed extension is not necessarily active.</p>
+
+<p>An extension can publish versioned events, query methods, and command methods through the host. Other extensions use these declared interfaces. Keep cross-extension calls out of deterministic transforms unless their recorded input already contains the required result.</p>
+
+<p>Required dependencies control activation order. Optional dependencies add features when available. If a required dependency is disabled, stop its dependents in the same runtime change and show the affected list. An optional dependency change removes only the related integration.</p>
+
+<p>For the example pair, the adapters extension publishes a versioned command activity contract. It includes <code>adapters commit</code> and <code>adapters push</code>. The Git extension optionally consumes that contract and updates its repository view. Both extensions still have useful behavior when the other is absent.</p>
+
+<p>Use the session, actor, shell, and invocation identities to link records. If one operation appears in more than one source, show one operation with multiple source links. Matching only command text or time is not sufficient.</p>
+
+<h2>Settings page</h2>
+
+<p>Add a top-level <b class="ui">Settings</b> page with an <b class="ui">Extensions</b> section. Each row shows name, version, source path, enabled state, health, and dependency problems. Add enable, disable, reload, rescan, and diagnostic controls.</p>
+
+<p>Select an extension to see its description, declared access, dependencies, settings, and recent failures. Show states such as disabled, starting, enabled, stopping, failed, and incompatible. A failed activation must not appear as enabled.</p>
+
+<p>Generate standard fields from the settings schema: text, number, choice, boolean, list, and secret reference. An extension can supply a custom settings panel through the same web view contract. Both forms use the same validated settings API.</p>
+
+<p>Start with installation settings and explicit workspace overrides. Each schema declares the supported scope. Save a settings revision atomically. Reject stale writes from another browser. Distinguish display changes from data-processing changes, and explain when a history rebuild is needed. Secret fields are write-only and use host credential storage.</p>
+
+<p>Extension query and command routes use the current origin and read-only checks. The host checks that the extension and command are still active when a request runs. Changing the browser UI alone must not change that result.</p>
+
+<h2>Future adapters extension</h2>
+
+<p>Start from canonical shell start, progress, and finish events. These already carry a shell ID and output order. Add command recognition inside the extension. Parse shell syntax with the existing parser package. Request structured CLI output where available.</p>
+
+<p>Assign each detected invocation its own identity. A shell command can contain several invocations. Track running, completed, failed, and canceled states. Large output uses stored content references and paging.</p>
+
+<p>The requested commands map to these extension views:</p>
+
+<div class="table-wrap">
+  <table>
+    <caption>Table 3. Adapters extension behavior</caption>
+    <thead><tr><th>Command</th><th>Recorded content</th><th>Display</th></tr></thead>
+    <tbody>
+      <tr><th><code>adapters logs</code></th><td>Query, target, time range, output, and result.</td><td>A distinct feed entry and a Logs tab next to Jobs and Monitors.</td></tr>
+      <tr><th><code>adapters deploy</code></th><td>Target, revision, progress, and result.</td><td>A deployment entry and a Deployments tab.</td></tr>
+      <tr><th><code>adapters jira</code></th><td>Issue references, reads, proposed changes, and confirmed results.</td><td>An issue entry and a Jira tab.</td></tr>
+      <tr><th><code>adapters metrics</code></th><td>Query, labels, time range, values, and result.</td><td>A metrics entry and a Metrics tab with plots or tables.</td></tr>
+      <tr><th><code>adapters slack</code></th><td>Channel and thread IDs, returned messages, read operations, and write outcomes.</td><td>A Slack tab and Kitty pane with a thread list and message details.</td></tr>
+      <tr><th><code>adapters commit</code> and <code>adapters push</code></th><td>Repository, invocation, operation, and outcome.</td><td>A command entry and an optional update to the Git extension.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>A command string alone does not contain Slack messages, metric values, or full deployment results. Inspect actual CLI output before fixing these schemas. If the output omits required data, add an opt-in structured observation source to the adapters CLI. This would be work in that CLI. Show incomplete data as incomplete. Mark a write as successful only after its result confirms success.</p>
+
+<h2>Future Git extension</h2>
+
+<p>Use a repository scope identified by the resolved worktree and Git directory. Several sessions can share one repository. Linked worktrees have separate working changes. Session views should refer to this shared repository state.</p>
+
+<p>Add a Git page or pane with a commit log, commit details, file tree, and diffs. Separate staged, unstaged, and untracked files. Let the user select the files to commit. Show binary files and large diffs with clear limits.</p>
+
+<p>Refresh on relevant recorded commands and file changes. Include direct Git commands, adapters commit, adapters push, and actions from this pane. Query Git to confirm the current repository state. A command start is not proof of a commit or push.</p>
+
+<p>Use Git's machine-readable command output for repository operations, including the documented <a href="https://git-scm.com/docs/git-status">porcelain status format</a>. Pass argument arrays and an explicit repository path. Keep a command queue per repository. Check the branch and index again before a write if they changed during review.</p>
+
+<p>Provide an editable commit message field and a <b class="ui">Generate message</b> action. Use the existing <code>inference/contract.py</code> service through the host API. Generate from the selected staged diff. Keep the message as a draft until the user selects <b class="ui">Commit</b>.</p>
+
+<p>The Push action shows the remote and branch. Show progress and failures from Git hooks, authentication, or a rejected push. A failed action keeps the user's draft and selection. The first version covers the requested read, commit, and push workflow.</p>
+
+<h2>Tests owned by each extension</h2>
+
+<p>Ship an installable extension SDK and test kit. Every extension keeps its E2E tests in its own package. Test the built package through the public host API and both declared display surfaces.</p>
+
+<p>The host test runner loads extension test declarations. CI checks that every declared feature has a relevant E2E case. The runner starts a private daemon, data directory, port, and workspace. It must not use the normal dashboard on port 8377.</p>
+
+<p>Use these test layers:</p>
+
+<div class="table-wrap">
+  <table>
+    <caption>Table 4. Test coverage</caption>
+    <thead><tr><th>Layer</th><th>Required checks</th><th>Owner</th></tr></thead>
+    <tbody>
+      <tr><th>Runtime E2E</th><td>External load, enable, disable, reload, settings, restart, missing dependency, version mismatch, crash, timeout, and stale reply.</td><td>Host conformance suite, run for each package.</td></tr>
+      <tr><th>Data E2E</th><td>Keep, change, drop, add, source audit, stable IDs, duplicate input, replay, and disabled-extension history.</td><td>Host suite and extension scenarios.</td></tr>
+      <tr><th>Web E2E</th><td>Built assets, settings, routes, stream reconnect, dynamic removal, errors, keyboard access, and layout.</td><td>Extension Playwright tests in Chromium and WebKit.</td></tr>
+      <tr><th>Kitty E2E</th><td>Actual pane output, resize, navigation, actions, reload, and disable while open.</td><td>Extension journeys through the existing live Kitty test path.</td></tr>
+      <tr><th>Cooperation E2E</th><td>Each extension alone, both together, either enabled first, dependency removal, and one failed worker.</td><td>Explicit integration scenarios.</td></tr>
+      <tr><th>Git E2E</th><td>Real temporary repositories, worktrees, staged changes, commit generation, commit, rejected push, and successful push.</td><td>Git extension, with a local bare remote.</td></tr>
+      <tr><th>Adapters E2E</th><td>Quoted commands, multiple invocations, streamed output, partial data, failed writes, thread content, and duplicate observations.</td><td>Adapters extension, with controlled CLI fixtures and separate live checks.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>Keep fixture replay and live integration checks distinct. Fixtures give repeatable tests. Live checks detect changes in harness or CLI formats. Apply the existing harness coverage rules to extension scenarios. Record a reason for a harness-specific limit.</p>
+
+<p>Add performance checks for a representative recorded session. Measure event delay, queue growth, worker memory, and view update cost with extensions disabled and enabled. Choose time limits from this measurement. Test that a failed extension does not stop normal session processing.</p>
+
+<h2>Delivery order</h2>
+
+<p>Build the extension system in reviewable stages. Each stage has an observable completion condition:</p>
+
+<div class="table-wrap">
+  <table>
+    <caption>Table 5. Implementation stages</caption>
+    <thead><tr><th>Stage</th><th>Work</th><th>Completion condition</th></tr></thead>
+    <tbody>
+      <tr><th>1. Contracts and prototype</th><td>Define manifests, event envelopes, transform rules, lifecycle, and display slots. Test worker messaging and independent web mounting. Review the proposed refactor.</td><td>A small external package communicates with a private host. The contract can express a diff, a tree, and a thread view.</td></tr>
+      <tr><th>2. Runtime and settings</th><td>Add discovery, worker supervision, version checks, dependency order, extension storage, management API, and the Settings page.</td><td>Enable, disable, reload, and change settings without restarting the daemon. A failed package has a clear error.</td></tr>
+      <tr><th>3. Data integration</th><td>Add raw and canonical transforms, extension records, projection transforms, audit decisions, validation, and replay rules.</td><td>An external test extension changes, drops, and adds data at each declared stage. Retries do not create duplicates.</td></tr>
+      <tr><th>4. Both display hosts</th><td>Add web mounts and routes. Add Kitty display blocks, pane selection, and actions. Use common contribution rules for existing views where needed.</td><td>The same external package changes both displays without rebuilding the main application.</td></tr>
+      <tr><th>5. External test kit and cooperation</th><td>Package typed SDK access and test support. Add another independent test extension and lifecycle failure cases.</td><td>Each package runs its own E2E suite. Both work together without edits to the main code.</td></tr>
+      <tr><th>6. History and release checks</th><td>Complete controlled rebuilds, schema migration checks, resource cleanup, performance checks, and author documentation.</td><td>History survives extension removal and upgrade. Existing tests pass. The first host API version is ready.</td></tr>
+      <tr><th>7. Future feature extensions</th><td>Build adapters logs first. Add the remaining adapters views. Build Git reads, then commit and push. Add the cooperation cases.</td><td>The requested workflows use the published extension API and package-owned E2E tests.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>Stages 1–6 deliver the extension system. Stage 7 describes the future use cases from this request. Small test extensions in the first six stages prove the contracts before the full CLI and Git products are built.</p>
+
+<p>The core refactor affects translation, canonical storage, derived data, API response envelopes, web routing, and terminal rendering. Keep its scope at these boundaries. Update architecture tests to enforce the new contracts, including the rule that external extensions do not import private application modules.</p>
+
+<p>Run the existing <code>make test</code> and <code>make lint</code> checks during delivery. Run the applicable replay, browser, and real Kitty E2E layers before release. Planning did not require an application test run.</p>
+
+<h2>Decisions and limits</h2>
+
+<p>The proposed defaults are trusted local packages, one process per enabled backend extension, independent web bundles, host-rendered Kitty blocks, fixed transform order, and explicit history rebuilds. Enable and disable take effect without a daemon restart.</p>
+
+<p>The main cost is the addition of process messaging and lifecycle control. Batch calls and keep slow work off the transform path. The first prototype must check this cost before the full runtime is built.</p>
+
+<p>The repository code and current framework APIs were inspected for this plan. The adapters CLI output contract was not inspected. Its structured output, operation identities, and thread content remain the main unknowns for the future adapters extension.</p>
+
+<p>The HTML communication skill supplied the document structure and styles. The design decisions come from the code review and the requested behavior.</p>

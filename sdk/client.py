@@ -13,6 +13,7 @@ from sdk.client_catalog_resources import (
     InsightsResource as InsightsResource,
     UploadsResource as UploadsResource,
 )
+from sdk.client_extension_catalog import ExtensionsResource as ExtensionsResource
 from sdk.client_models import (
     ActionReceipt as ActionReceipt,
     GlobalStreamUpdate as GlobalStreamUpdate,

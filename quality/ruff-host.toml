@@ -1,0 +1,30 @@
+# Host paths and runtime annotation readers. Common rules live in the installed policy.
+include = ["*.py", "bin/claude-*.py", "bin/retarget_python.py"]
+namespace-packages = ["client"]
+
+[lint.flake8-type-checking]
+# Pydantic builds adapters from the standard dataclasses in the domain model.
+# Their annotations must be available at runtime.
+runtime-evaluated-base-classes = [
+    "audit.documents.AuditDocument",
+    "pydantic.BaseModel",
+    # Standalone pane documents inherit Pydantic validation through WireModel.
+    "_model_base.WireModel",
+]
+runtime-evaluated-decorators = [
+    # Pydantic also reads the annotations of standard dataclass documents.
+    "dataclasses.dataclass",
+    # The dependency resolver reads provider annotations when it builds nodes.
+    "app.injection.singleton",
+    # FastAPI reads route annotations to build validation and injection.
+    "fastapi.APIRouter.get",
+    "fastapi.APIRouter.post",
+    "fastapi.APIRouter.put",
+    "fastapi.APIRouter.patch",
+    "fastapi.APIRouter.delete",
+]
+
+[lint.extend-per-file-ignores]
+"client/*.py" = ["PLC2701"]
+".agents/skills/github-projects/scripts/test_*.py" = ["S101"]
+"domain/content.py" = ["TID251"]

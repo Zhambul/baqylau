@@ -115,7 +115,15 @@ def test_engine_imports_only_domain_and_harness() -> None:
     architecture_test_files.assert_imports(
         ENGINE_PACKAGE,
         {CORE_PACKAGE, AUDIT_PACKAGE, DOMAIN_PACKAGE, ENGINE_PACKAGE, REPOSITORY_PACKAGE},
-        allowed_modules=frozenset(("harness.contract", "harness.models", "harness.registry")),
+        allowed_modules=frozenset((
+            "harness.contract", "harness.models", "harness.registry", "extensions.manager_contract",
+            "extensions.source_processing_contract",
+            "extensions.processing_contract", "extensions.interpretation_contract",
+            "extensions.projection_pass",
+            "extensions.mapper.core_events", "extensions.models.interpretation_steps",
+            "extensions.models.interpretations", "extensions.models.observations",
+            "extensions.models.processing_input",
+        )),
     )
 
 

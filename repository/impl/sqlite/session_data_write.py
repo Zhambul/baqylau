@@ -3,11 +3,10 @@
 
 from __future__ import annotations
 
-import time
 from typing import TYPE_CHECKING
 
 from domain.entries import ENTRY_TYPES
-from repository.impl.sqlite import goal_dismissals
+from repository.impl.sqlite import extension_records, goal_dismissals, session_data_progress
 from repository.mapper.documents import encode_document
 
 if TYPE_CHECKING:
@@ -17,7 +16,8 @@ if TYPE_CHECKING:
     from repository.contract.session_data import SessionDataChanges
 
 _ENTRY_COLUMNS = (
-    "cursor, entry_id, session_id, entry_type, actor_id, parent_actor_id, turn_id, occurred_at, summary, payload"
+    "commit_cursor, position, entry_id, session_id, entry_type, actor_id, parent_actor_id, turn_id, "
+    "occurred_at, summary, payload"
 )
 
 
@@ -28,12 +28,23 @@ def apply_changes(
     canonical_cursor: int,
 ) -> None:
     """Write one canonical change set and its progress mark."""
-    if session_data_changes.entry is not None:
-        entry = session_data_changes.entry
+    write_changes(connection, session_id, session_data_changes, canonical_cursor)
+    session_data_progress.write_progress(connection, canonical_cursor)
+
+
+def write_changes(
+    connection: sqlite3.Connection,
+    session_id: SessionId,
+    session_data_changes: SessionDataChanges,
+    canonical_cursor: int,
+) -> None:
+    """Write one change set without advancing the core progress mark."""
+    for position, entry in enumerate(session_data_changes.entries):
         connection.execute(
-            f"INSERT OR IGNORE INTO session_entries({_ENTRY_COLUMNS}) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            f"INSERT OR IGNORE INTO session_entries({_ENTRY_COLUMNS}) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 canonical_cursor,
+                position,
                 str(entry.entry_id),
                 str(entry.session_id),
                 ENTRY_TYPES[type(entry.body)],
@@ -68,12 +79,8 @@ def apply_changes(
                 encode_document(actor).decode("utf-8"),
             ),
         )
-    connection.execute(
-        "INSERT INTO reaction_progress(id, canonical_cursor, updated_at) "
-        "VALUES(1, ?, ?) ON CONFLICT(id) DO UPDATE SET "
-        "canonical_cursor=excluded.canonical_cursor, updated_at=excluded.updated_at",
-        (canonical_cursor, time.time()),
-    )
+    if session_data_changes.records:
+        extension_records.apply_record_changes(connection, session_data_changes.records, canonical_cursor)
 
 
 def clear_read_model(connection: sqlite3.Connection) -> None:

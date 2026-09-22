@@ -8,7 +8,7 @@ from domain.event_base import CanonicalEvent, EventPayload
 from harness.contract import HarnessTranslator
 from harness.impl.opencode2 import output, payloads as native_payloads
 from harness.impl.opencode2.records import NativeRecord
-from harness.models import raw_event_builders as builders
+from harness.models import raw_event_builders as builders, translation_stages as stages
 from harness.models.raw_events import RawEvent, TranslationResult
 
 
@@ -44,7 +44,9 @@ def _phase(event_payload: EventPayload) -> str:
 class OpenCodeTranslator(HarnessTranslator):
     """Translate each stored native_record independently."""
 
-    def translate(self, raw_event: RawEvent) -> TranslationResult:
+    def translate(
+        self, raw_event: RawEvent, *, translation_stage: stages.TranslationStage = stages.TranslationStage.COMPLETE,
+    ) -> TranslationResult:
         """Translate one native native_record.
 
         Returns:
@@ -55,6 +57,8 @@ class OpenCodeTranslator(HarnessTranslator):
 
         """
         if raw_event.source_type == "foreground_output":
+            if translation_stage == stages.TranslationStage.LIFECYCLE:
+                return stages.empty_result(translation_stage)
             return output.translate(raw_event)
         native_record = NativeRecord.model_validate_json(raw_event.payload)
         if (
@@ -63,11 +67,10 @@ class OpenCodeTranslator(HarnessTranslator):
         ):
             message = "OpenCode2 event belongs to another session"
             raise ValueError(message)
-        if raw_event.source_type == "hook":
-            return TranslationResult(
-                _starts(raw_event, native_record),
-                records.RecordedTranslationDecision.TRANSLATED,
-            )
+        if raw_event.source_type == "hook" or translation_stage == stages.TranslationStage.LIFECYCLE:
+            return stages.select_result(TranslationResult(
+                _starts(raw_event, native_record), records.RecordedTranslationDecision.TRANSLATED,
+            ), translation_stage)
         events = tuple(
             builders.canonical_event(raw_event, builders.CanonicalEventDraft(
                 "native", native_record.event.id, _phase(payload), payload,
@@ -76,10 +79,10 @@ class OpenCodeTranslator(HarnessTranslator):
             ))
             for payload in native_payloads.payloads(native_record)
         )
-        return TranslationResult(
+        return stages.select_result(TranslationResult(
             (*_starts(raw_event, native_record), *events),
             records.RecordedTranslationDecision.TRANSLATED,
-        )
+        ), translation_stage)
 
     def release_session(self, session_id: ids.SessionId) -> None:
         """No session state is held by this translator."""

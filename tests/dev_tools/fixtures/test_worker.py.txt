@@ -1,0 +1,86 @@
+# Copyright (c) 2026 Zhambyl Yermagambet
+"""Check the package factory and lifecycle in a separate SDK worker process."""
+
+import asyncio
+import socket
+import sys
+from contextlib import AsyncExitStack
+from pathlib import Path
+
+from baqylau_extension_api.manifest.package import ExtensionManifest
+from baqylau_extension_api.models.environment import ExtensionEnvironment
+from baqylau_extension_api.models.lifecycle import ActivationReady, ActivationRequest, ExtensionInfo
+from baqylau_extension_api.runtime import methods
+from baqylau_extension_api.runtime.channel import RpcChannel, stream_channel
+from baqylau_extension_api.runtime.worker_models import WorkerLoadRequest, WorkerReady
+from pydantic import TypeAdapter
+
+ROOT = Path(__file__).resolve().parents[2]
+REVISION = "fixture-runtime"
+DEADLINE = 5
+DIGEST_SIZE = 64
+
+
+def test_worker_lifecycle() -> None:
+    """Load the manifest entry in a child, then use its declared capability."""
+    asyncio.run(_worker_round_trip())
+    assert "feature_backend" not in sys.modules
+
+
+async def _worker_round_trip() -> None:
+    endpoints = socket.socketpair()
+    async with AsyncExitStack() as cleanup:
+        with endpoints[0], endpoints[1]:
+            process = await _launch(endpoints[1].fileno())
+            cleanup.push_async_callback(_finish, process)
+            endpoints[1].close()
+            await _exercise_channel(endpoints[0])
+
+
+async def _launch(descriptor: int) -> asyncio.subprocess.Process:
+    return await asyncio.create_subprocess_exec(
+        sys.executable, "-I", "-B", "-m", "baqylau_extension_api.runtime.worker",
+        "--package-directory", str(ROOT),
+        "--rpc-fd", str(descriptor), "--runtime-revision", REVISION,
+        pass_fds=(descriptor,), cwd=ROOT, start_new_session=True,
+        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+    )
+
+
+async def _exercise_channel(endpoint: socket.socket) -> None:
+    streams = await asyncio.open_connection(sock=endpoint)
+    channel = stream_channel(*streams, REVISION, DEADLINE)
+    channel.start()
+    async with AsyncExitStack() as cleanup:
+        cleanup.push_async_callback(channel.close)
+        await _load_and_activate(channel)
+
+
+async def _load_and_activate(channel: RpcChannel) -> None:
+    request = _load_request()
+    ready = await channel.call(methods.LOAD, request, TypeAdapter(WorkerReady))
+    assert ready.extension_info == request.environment.extension_info
+    activated = await channel.call(
+        methods.ACTIVATE, ActivationRequest(runtime_revision=REVISION, settings_revision=0),
+        TypeAdapter(ActivationReady),
+    )
+    assert activated.runtime_revision == REVISION
+
+
+def _load_request() -> WorkerLoadRequest:
+    manifest = ExtensionManifest.model_validate_json((ROOT / "extension.json").read_bytes())
+    return WorkerLoadRequest(manifest=manifest, environment=ExtensionEnvironment(
+        runtime_revision=REVISION, extension_info=ExtensionInfo(
+            extension_id=manifest.extension_id, package_version=manifest.package_version,
+            api_version="0.1.0a1", package_digest="a" * DIGEST_SIZE,
+        ),
+    ))
+
+
+async def _finish(process: asyncio.subprocess.Process) -> None:
+    try:
+        await asyncio.wait_for(process.wait(), timeout=DEADLINE)
+    except TimeoutError:
+        process.kill()
+        await process.wait()
+    assert process.returncode == 0

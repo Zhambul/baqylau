@@ -17,6 +17,14 @@ dashboard/frontend/coverage/
 dashboard/frontend/playwright-report/
 dashboard/frontend/test-results/
 dashboard/static/build/
+packages/*/build/
+packages/*/dist/
+packages/*/src/*.egg-info/
+packages/*/node_modules/
+packages/*/coverage/
+packages/*/playwright-report/
+packages/*/test-results/
+.baqylau-dev/
 
 # Keep the shared GitHub Projects skill visible through Claude Code's skill path.
 !.claude/

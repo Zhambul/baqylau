@@ -1,0 +1,6 @@
+# The runner places these relative patterns in the selected project config.
+[lint.per-file-ignores]
+# Tests use assertions and can build foreign input records.
+"tests/**/*.py" = ["S101", "TID251"]
+# Vulture reads these files as names; Python does not execute them.
+"vulture_*.py" = ["B018", "F821"]

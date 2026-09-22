@@ -27,7 +27,7 @@ from api.application.models.preferences import (
 from api.application.models.resume import resumable_session_response as resumable_session_response
 from api.common.models.replies import health_response as health_response, saved_response as saved_response
 from api.common.models.streams import error_frame as error_frame
-from api.diagnostics import models as models
+from api.diagnostics import models as models, raw_event_audit_models as raw_event_audit_models
 from api.sessiondata.models import entry as entry, session_data as session_data, stream_frame as stream_frame
 from api.terminal.models.panes import (
     grow_request as grow_request,

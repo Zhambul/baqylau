@@ -19,6 +19,10 @@ type StatsRoute = {
   readonly kind: 'stats';
 };
 
+type SettingsRoute = {
+  readonly kind: 'settings';
+};
+
 type LaunchingRoute = {
   readonly kind: 'launching';
 };
@@ -49,7 +53,12 @@ export type NotFoundRoute = {
 };
 
 export type Route =
-  ListRoute | StatsRoute | LaunchingRoute | SessionRoute | NotFoundRoute;
+  | ListRoute
+  | StatsRoute
+  | SettingsRoute
+  | LaunchingRoute
+  | SessionRoute
+  | NotFoundRoute;
 
 export type StartupNavigation = {
   readonly hash: string;
@@ -82,6 +91,7 @@ export function startupNavigation(
 
 const LIST_ROUTE: ListRoute = { kind: 'list' };
 const STATS_ROUTE: StatsRoute = { kind: 'stats' };
+const SETTINGS_ROUTE: SettingsRoute = { kind: 'settings' };
 const LAUNCHING_ROUTE: LaunchingRoute = { kind: 'launching' };
 
 function decodeSegment(segment: string): string | null {
@@ -175,6 +185,13 @@ export function parseHash(hash: string): Route {
   if (segments.length === 1 && segments[0] === 'stats') {
     return STATS_ROUTE;
   }
+  if (
+    segments.length === 2 &&
+    segments[0] === 'settings' &&
+    segments[1] === 'extensions'
+  ) {
+    return SETTINGS_ROUTE;
+  }
   if (segments.length === 1 && segments[0] === 'launching') {
     return LAUNCHING_ROUTE;
   }
@@ -194,6 +211,8 @@ export function formatRoute(route: Exclude<Route, NotFoundRoute>): string {
       return '#/';
     case 'stats':
       return '#/stats';
+    case 'settings':
+      return '#/settings/extensions';
     case 'launching':
       return '#/launching';
     case 'session': {

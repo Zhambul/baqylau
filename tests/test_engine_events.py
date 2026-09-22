@@ -50,6 +50,7 @@ def interpreter() -> Mock:
     probe = Mock(spec=Interpreter)
     probe.translation = Mock()
     probe.puller = Mock()
+    probe.failures = Mock()
     repositories = Mock()
     repositories.shell_output.oldest_created_at.return_value = None
     probe.dependencies = Mock(repositories=repositories)

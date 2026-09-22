@@ -3,12 +3,39 @@
 
 from typing import cast
 
-from sdk.client import SessionsResource, StreamsResource, TerminalResource, UploadsResource
+from sdk.client import (
+    DiagnosticsResource,
+    ExtensionsResource,
+    SessionsResource,
+    StreamsResource,
+    TerminalResource,
+    UploadsResource,
+)
 from sdk.transport import HttpTransport
 
 
 def _transport(transport: object) -> HttpTransport:
     return cast("HttpTransport", transport)
+
+
+def diagnostics_resource(transport: object) -> DiagnosticsResource:
+    """Build a diagnostics resource.
+
+    Returns:
+        The resource with the given test transport.
+
+    """
+    return DiagnosticsResource(_transport(transport))
+
+
+def extensions_resource(transport: object) -> ExtensionsResource:
+    """Build an extensions resource.
+
+    Returns:
+        The resource with the given test transport.
+
+    """
+    return ExtensionsResource(_transport(transport))
 
 
 def sessions_resource(transport: object) -> SessionsResource:

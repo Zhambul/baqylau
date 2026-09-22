@@ -1,0 +1,54 @@
+{
+  "name": "@baqylau/extension-api",
+  "version": "0.1.0-alpha.1",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12 <23"
+  },
+  "packageManager": "npm@10.9.8",
+  "prettier": "@baqylau/dev-tools/prettier",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "overrides": {
+    "vite": "8.2.2",
+    "vitest": "4.1.11"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./host": {
+      "types": "./dist/host/index.d.ts",
+      "import": "./dist/host/index.js"
+    }
+  },
+  "scripts": {
+    "prepack": "npm run build",
+    "build": "tsc -p tsconfig.build.json",
+    "check": "tsc -p tsconfig.json && tsc -p tsconfig.node.json",
+    "generate": "node scripts/generate-wire.mjs",
+    "generate:check": "node scripts/generate-wire.mjs --check",
+    "lint": "eslint . --max-warnings 0 && knip",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:external": "node scripts/test-external.mjs"
+  },
+  "devDependencies": {
+    "@baqylau/dev-tools": "file:../dev-tools-web",
+    "@types/node": "22.20.1",
+    "@vitest/coverage-v8": "4.1.11",
+    "eslint": "10.9.0",
+    "jsdom": "30.0.1",
+    "knip": "6.32.2",
+    "openapi-typescript": "7.13.0",
+    "prettier": "3.9.6",
+    "typescript": "5.9.3",
+    "vite": "8.2.2",
+    "vitest": "4.1.11"
+  }
+}

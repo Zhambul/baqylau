@@ -36,6 +36,10 @@ class SessionDataWrite(Protocol):
         """Return the last applied canonical cursor."""
         ...
 
+    def advance_past_extensions(self, canonical_cursor: int) -> None:
+        """Skip only verified live extension facts, without display changes or a backward cursor."""
+        ...
+
     def clear(self) -> None:
         """Clear the read model and its progress mark."""
         ...

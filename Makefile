@@ -1,15 +1,33 @@
 PY ?= .venv/bin/python
+.DEFAULT_GOAL := frontend-install
 NPM ?= npm
 E2E_WORKERS ?= 6
 BROWSER_E2E_WORKERS ?= 4
 E2E_DIST ?= load
 FRONTEND_DIR = dashboard/frontend
 FRONTEND_MODULES = $(FRONTEND_DIR)/node_modules/.package-lock.json
+FRONTEND_POLICY = $(wildcard packages/dev-tools-web/*.mjs packages/dev-tools-web/*.json)
+DEV_TOOLS_WEB_DIR = packages/dev-tools-web
+DEV_TOOLS_WEB_MODULES = $(DEV_TOOLS_WEB_DIR)/node_modules/.package-lock.json
+DEV_TOOLS_WEB_BUILD = $(DEV_TOOLS_WEB_DIR)/dist/coverage.d.mts
+EXTENSION_WEB_DIR = packages/extension-api-web
+EXTENSION_WEB_MODULES = $(EXTENSION_WEB_DIR)/node_modules/.package-lock.json
 
-$(FRONTEND_MODULES): $(FRONTEND_DIR)/package.json $(FRONTEND_DIR)/package-lock.json
+$(DEV_TOOLS_WEB_MODULES): $(DEV_TOOLS_WEB_DIR)/package.json $(DEV_TOOLS_WEB_DIR)/package-lock.json
+	cd $(DEV_TOOLS_WEB_DIR) && $(NPM) ci
+
+$(DEV_TOOLS_WEB_BUILD): $(DEV_TOOLS_WEB_MODULES) $(FRONTEND_POLICY)
+	cd $(DEV_TOOLS_WEB_DIR) && $(NPM) run build
+
+$(FRONTEND_MODULES): $(FRONTEND_DIR)/package.json $(FRONTEND_DIR)/package-lock.json $(FRONTEND_DIR)/.npmrc $(DEV_TOOLS_WEB_BUILD)
 	cd $(FRONTEND_DIR) && $(NPM) ci
 
 frontend-install: $(FRONTEND_MODULES)
+
+$(EXTENSION_WEB_MODULES): $(EXTENSION_WEB_DIR)/package.json $(EXTENSION_WEB_DIR)/package-lock.json $(EXTENSION_WEB_DIR)/.npmrc $(DEV_TOOLS_WEB_BUILD)
+	cd $(EXTENSION_WEB_DIR) && $(NPM) ci
+
+extension-web-install: $(EXTENSION_WEB_MODULES)
 
 build-frontend: frontend-install
 	cd $(FRONTEND_DIR) && $(NPM) run build
@@ -19,14 +37,26 @@ test-frontend: frontend-install
 	cd $(FRONTEND_DIR) && $(NPM) run format:check
 	cd $(FRONTEND_DIR) && $(NPM) run check
 	cd $(FRONTEND_DIR) && $(NPM) run test:coverage
+	$(MAKE) --no-print-directory test-extension-web
+
+test-extension-web: extension-web-install
+	cd $(DEV_TOOLS_WEB_DIR) && $(NPM) run format:check
+	cd $(EXTENSION_WEB_DIR) && BAQYLAU_SDK_PYTHON=$(abspath $(PY)) $(NPM) run generate:check
+	cd $(EXTENSION_WEB_DIR) && $(NPM) run format:check
+	cd $(EXTENSION_WEB_DIR) && $(NPM) run check
+	cd $(EXTENSION_WEB_DIR) && $(NPM) run test:coverage
 
 test-browser: browser-static-e2e
 
 browser-static-e2e:
 	cd $(FRONTEND_DIR) && BAQYLAU_E2E_PYTHON=$(abspath $(PY)) BAQYLAU_E2E_WORKERS=$(BROWSER_E2E_WORKERS) $(NPM) run test:browser
 
-lint-frontend: frontend-install
+lint-frontend: frontend-install extension-web-install
 	cd $(FRONTEND_DIR) && $(NPM) run lint
+	cd $(DEV_TOOLS_WEB_DIR) && $(NPM) run check
+	cd $(EXTENSION_WEB_DIR) && $(NPM) run check
+	cd $(EXTENSION_WEB_DIR) && $(NPM) run build
+	cd $(EXTENSION_WEB_DIR) && $(NPM) run lint
 
 # The hermetic e2e suite (fake kitten, per-test tmp dirs). See docs/testing.md.
 # Parallel by default (pytest-xdist) — every test is tmpdir-isolated so this is
@@ -43,6 +73,10 @@ test: test-frontend test-browser test-python
 # Sequential run of the same suite.
 test-seq:
 	$(PY) -m pytest -q -m "not kitty" --ignore=tests/e2e
+
+# The public SDK tests use the installed package and no live harness.
+test-extension-api:
+	$(PY) -m pytest tests/extension_api -q
 
 # Everything, including the opt-in real-kitty smoke tests (needs kitty installed).
 test-all:
@@ -92,13 +126,20 @@ test-par: test
 # type gate went quiet instead of red, and stayed quiet for a whole refactor
 # while 523 errors accumulated behind it. The cheapest gate is not the most
 # important one.
-lint: lint-frontend typecheck deadcode wemake
-	$(PY) -m ruff check .
+lint: policy-check lint-frontend typecheck deadcode wemake
+	$(PY) -m baqylau_dev check --gate ruff
+
+policy-check:
+	$(PY) -m baqylau_dev check --gate parity
+	$(PY) -m baqylau_dev report
+
+policy-generate:
+	$(PY) -m baqylau_dev generate
 
 # WPS checks design rules that Ruff does not implement. setup.cfg records the
 # project rules that take precedence over conflicting WPS rules.
 wemake:
-	$(PY) -m flake8 . --config setup.cfg
+	$(PY) -m baqylau_dev check --gate wemake
 
 # Static types (mypy — config in mypy.ini; CI-enforced). The tree is strict:
 # an unannotated function is an error, and mypy.ini's per-package ratchet is
@@ -110,13 +151,12 @@ wemake:
 # `client` is in the list: those files are stdlib-only scripts, but they are the
 # programs every harness and the terminal actually run, so they get the same gate
 # as everything else.
-TYPECHECK_PATHS = api app bin client core dashboard audit domain engine harness notify repository sdk terminal tests
-
 typecheck:
-	$(PY) -m mypy $(TYPECHECK_PATHS)
+	$(PY) -m baqylau_dev check --gate types
 
 lint-fix:
-	$(PY) -m ruff check . --fix
+	$(PY) -m baqylau_dev check --gate parity
+	$(PY) -m ruff check --config ruff.toml . --fix
 
 # Dead code (vulture). Ruff's F rules see one file at a time — an unused import,
 # an unused local. Nothing there can tell you a function is called by NOBODY, so
@@ -132,17 +172,7 @@ lint-fix:
 # focused behavior gates.
 #
 # The allowlist is a vulture contract file, not a product source.
-DEADCODE_PATHS = api app bin client core dashboard audit domain engine harness notify repository terminal
-DEADCODE_ALLOWLIST = vulture_allowlist.py
-DEADCODE_EXCLUDES = dashboard/frontend
-# Call sites vulture cannot see: the framework invokes these, never our code.
-# Matched by SHAPE, not by router name — `router`, `web` and `guarded` are three
-# APIRouters today, and a fourth must not silently read as dead code.
-DEADCODE_DECORATORS = @*.get,@*.post,@*.put,@*.patch,@*.delete,@*.websocket,@model_validator,@field_validator
-
 deadcode:
-	$(PY) -m vulture $(DEADCODE_PATHS) $(DEADCODE_ALLOWLIST) \
-		--exclude "$(DEADCODE_EXCLUDES)" \
-		--ignore-decorators "$(DEADCODE_DECORATORS)"
+	$(PY) -m baqylau_dev check --gate deadcode
 
-.PHONY: frontend-install build-frontend test-frontend test-browser browser-static-e2e test-python test test-seq test-all e2e test-drift test-browser-drift browser-live-e2e terminal-live-e2e test-par lint lint-fix typecheck wemake deadcode
+.PHONY: frontend-install extension-web-install build-frontend test-frontend test-extension-web test-browser browser-static-e2e test-python test test-seq test-extension-api test-all e2e test-drift test-browser-drift browser-live-e2e terminal-live-e2e test-par lint lint-fix typecheck wemake deadcode policy-check policy-generate

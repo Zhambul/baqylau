@@ -1,0 +1,64 @@
+# Copyright (c) 2026 Zhambyl Yermagambet
+"""Keep backend code in the independent feature package."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+from baqylau_extension_api.contracts.lifecycle import ExtensionLifecycle
+from baqylau_extension_api.contracts.plugin import ExtensionCapabilities, ExtensionPlugin
+from baqylau_extension_api.models.lifecycle import ActivationReady, DeactivationResult, ExtensionInfo
+
+if TYPE_CHECKING:
+    from baqylau_extension_api.contracts.services import ExtensionHostServices
+    from baqylau_extension_api.models.lifecycle import ActivationRequest, ActivationResult, DeactivationRequest
+
+
+class FeatureLifecycle(ExtensionLifecycle):
+    """Prepare and release the external package."""
+
+    def activate(self, request: ActivationRequest) -> ActivationResult:
+        """Accept the selected revision.
+
+        Returns:
+            A ready result for that revision.
+
+        """
+        return ActivationReady(runtime_revision=request.runtime_revision)
+
+    def deactivate(self, request: DeactivationRequest) -> DeactivationResult:
+        """Release the selected revision.
+
+        Returns:
+            Confirmation with no pending jobs.
+
+        """
+        return DeactivationResult(runtime_revision=request.runtime_revision)
+
+
+@dataclass(frozen=True)
+class FeaturePlugin(ExtensionPlugin):
+    """Declare one backend and its typed capabilities."""
+
+    identity: ExtensionInfo
+
+    @property
+    def extension_info(self) -> ExtensionInfo:
+        """The immutable fixture package identity."""
+        return self.identity
+
+    @property
+    def capabilities(self) -> ExtensionCapabilities:
+        """The lifecycle implementation used by this package."""
+        return ExtensionCapabilities(lifecycle=FeatureLifecycle())
+
+
+def build_extension(services: ExtensionHostServices) -> ExtensionPlugin:
+    """Build the backend through the public factory contract.
+
+    Returns:
+        The feature package instance.
+
+    """
+    return FeaturePlugin(services.environment.extension_info)

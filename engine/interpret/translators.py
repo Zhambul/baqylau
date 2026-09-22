@@ -17,6 +17,7 @@ from domain import (
 )
 from engine.interpret import control_translator
 from harness.contract import CoreTranslator
+from harness.models import translation_stages as stages
 from harness.models.control_observations import SessionRenameObservation
 from harness.models.directives import (
     ProcessExit,
@@ -53,7 +54,9 @@ class ShellOutputTranslator(CoreTranslator):
     """
 
     @override
-    def translate(self, raw_event: RawEvent) -> TranslationResult:
+    def translate(
+        self, raw_event: RawEvent, *, translation_stage: stages.TranslationStage = stages.TranslationStage.COMPLETE,
+    ) -> TranslationResult:
         """Translate a shell output location.
 
         Returns:
@@ -62,7 +65,7 @@ class ShellOutputTranslator(CoreTranslator):
         """
         located = decode_document(event_shell.ShellOutputLocated, raw_event.payload)
         source_key = shells.shell_output_source_key(located.source_path)
-        return TranslationResult(
+        return stages.select_result(TranslationResult(
             (
                 canonical_event(
                     raw_event,
@@ -75,7 +78,7 @@ class ShellOutputTranslator(CoreTranslator):
                 ),
             ),
             records.RecordedTranslationDecision.TRANSLATED,
-        )
+        ), translation_stage)
 
 
 class LivenessTranslator(CoreTranslator):
@@ -87,7 +90,9 @@ class LivenessTranslator(CoreTranslator):
     """
 
     @override
-    def translate(self, raw_event: RawEvent) -> TranslationResult:
+    def translate(
+        self, raw_event: RawEvent, *, translation_stage: stages.TranslationStage = stages.TranslationStage.COMPLETE,
+    ) -> TranslationResult:
         """Translate a process exit.
 
         Returns:
@@ -97,17 +102,19 @@ class LivenessTranslator(CoreTranslator):
         observation = decode_document(ProcessExit, raw_event.payload)
         reason = "terminal_reassigned" if observation.state == "displaced" else "process_exited"
         finished = event_session.SessionFinished(outcomes.Outcome.UNKNOWN, reason)
-        return TranslationResult(
+        return stages.select_result(TranslationResult(
             (session_run_finished_event(raw_event, finished),),
             records.RecordedTranslationDecision.TRANSLATED,
-        )
+        ), translation_stage)
 
 
 class ResumeLivenessTranslator(CoreTranslator):
     """A resumed terminal window that closed finishes that resume run."""
 
     @override
-    def translate(self, raw_event: RawEvent) -> TranslationResult:
+    def translate(
+        self, raw_event: RawEvent, *, translation_stage: stages.TranslationStage = stages.TranslationStage.COMPLETE,
+    ) -> TranslationResult:
         """Translate a resumed process exit.
 
         Returns:
@@ -121,17 +128,19 @@ class ResumeLivenessTranslator(CoreTranslator):
             message = "resume liveness has no terminal window"
             raise ValueError(message)
         finished = event_session.SessionFinished(outcomes.Outcome.UNKNOWN, "terminal_closed")
-        return TranslationResult(
+        return stages.select_result(TranslationResult(
             (session_run_finished_event(raw_event, finished),),
             records.RecordedTranslationDecision.TRANSLATED,
-        )
+        ), translation_stage)
 
 
 class SessionResumeTranslator(CoreTranslator):
     """A confirmed resume launch reopens the known session and lead actor."""
 
     @override
-    def translate(self, raw_event: RawEvent) -> TranslationResult:
+    def translate(
+        self, raw_event: RawEvent, *, translation_stage: stages.TranslationStage = stages.TranslationStage.COMPLETE,
+    ) -> TranslationResult:
         """Translate a session resume.
 
         Returns:
@@ -148,14 +157,14 @@ class SessionResumeTranslator(CoreTranslator):
             effort=None,
             account=None,
         )
-        return TranslationResult(
+        return stages.select_result(TranslationResult(
             session_run_started_events(
                 raw_event,
                 started,
                 event_actor.ActorStarted("lead", messaging.ActorRole.LEAD),
             ),
             records.RecordedTranslationDecision.TRANSLATED,
-        )
+        ), translation_stage)
 
 
 class InterruptTranslator(CoreTranslator):
@@ -168,7 +177,9 @@ class InterruptTranslator(CoreTranslator):
     """
 
     @override
-    def translate(self, raw_event: RawEvent) -> TranslationResult:
+    def translate(
+        self, raw_event: RawEvent, *, translation_stage: stages.TranslationStage = stages.TranslationStage.COMPLETE,
+    ) -> TranslationResult:
         """Translate an interrupt.
 
         Returns:
@@ -176,7 +187,7 @@ class InterruptTranslator(CoreTranslator):
 
         """
         aborted = event_conversation.TurnAborted("interrupt acknowledged; no harness raw event confirmed it")
-        return TranslationResult(
+        return stages.select_result(TranslationResult(
             (
                 canonical_event(
                     raw_event,
@@ -189,14 +200,16 @@ class InterruptTranslator(CoreTranslator):
                 ),
             ),
             records.RecordedTranslationDecision.TRANSLATED,
-        )
+        ), translation_stage)
 
 
 class AutomaticTitleTranslator(CoreTranslator):
     """A generated title observation becomes a harness-independent fact."""
 
     @override
-    def translate(self, raw_event: RawEvent) -> TranslationResult:
+    def translate(
+        self, raw_event: RawEvent, *, translation_stage: stages.TranslationStage = stages.TranslationStage.COMPLETE,
+    ) -> TranslationResult:
         """Translate an automatic session title.
 
         Returns:
@@ -211,7 +224,7 @@ class AutomaticTitleTranslator(CoreTranslator):
             raise ValueError(message)
         observation = decode_document(SessionRenameObservation, raw_event.payload)
         changed = event_session.SessionTitleChanged(observation.title, observation.origin)
-        return TranslationResult(
+        return stages.select_result(TranslationResult(
             (
                 canonical_event(
                     raw_event,
@@ -224,4 +237,4 @@ class AutomaticTitleTranslator(CoreTranslator):
                 ),
             ),
             records.RecordedTranslationDecision.TRANSLATED,
-        )
+        ), translation_stage)
