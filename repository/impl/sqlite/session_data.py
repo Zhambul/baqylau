@@ -265,7 +265,7 @@ class _SqliteSessionDataEntryRead(_SqliteSessionDataState):
             Pending attention.
 
         """
-        return entries.pending_attention(self.entries_of_types(session_id, entries.ATTENTION_ENTRY_TYPES))
+        return entries.pending_attention(self.entries_of_types(session_id, entries.PENDING_ATTENTION_ENTRY_TYPES))
 
     def delta(self, session_id: SessionId, cursor: int) -> contracts.SessionDelta:
         """Return the delta.

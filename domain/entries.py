@@ -85,11 +85,17 @@ BODY_TYPES: Mapping[EntryTypeName, type[EntryBody]] = MappingProxyType(
     {entry_type: body_type for body_type, entry_type in ENTRY_TYPES.items()},
 )
 
-ATTENTION_ENTRY_TYPES: tuple[EntryTypeName, ...] = (
+PENDING_ATTENTION_ENTRY_TYPES: tuple[EntryTypeName, ...] = (
     EntryTypeName.QUESTION_ASKED,
     EntryTypeName.QUESTION_ANSWERED,
     EntryTypeName.PLAN_PROPOSED,
     EntryTypeName.PLAN_RESOLVED,
+    # The turn end closes the attentions of that actor. It is not an attention
+    # body, but the fold cannot answer without it: a harness cannot end a turn
+    # while its dialog waits, so an attention that outlives its turn has no one
+    # left to answer it. The actor link is used, not the turn id, because a
+    # source can lose the turn join and still record the turn end.
+    EntryTypeName.TURN_FINISHED,
 )
 
 
@@ -116,6 +122,10 @@ class SessionEntry:
 def pending_attention(entries: Sequence[SessionEntry]) -> tuple[SessionEntry, ...]:
     """Return unresolved questions and plans, from the oldest to the newest.
 
+    The supplied entries must carry PENDING_ATTENTION_ENTRY_TYPES: a turn end
+    is an input to the fold. An attention a source failed to resolve stays
+    pending until its turn ends, and no longer.
+
     Returns:
         Unresolved questions and plans, from the oldest to the newest.
 
@@ -133,4 +143,10 @@ def pending_attention(entries: Sequence[SessionEntry]) -> tuple[SessionEntry, ..
             (entry_attention.QuestionAnsweredBody, entry_attention.PlanResolvedBody),
         ):
             open_attentions.pop(entry_body.attention_id, None)
+        elif isinstance(entry_body, entry_conversation.TurnFinishedBody):
+            open_attentions = {
+                attention_id: open_entry
+                for attention_id, open_entry in open_attentions.items()
+                if open_entry.actor_id != entry.actor_id
+            }
     return tuple(open_attentions.values())
