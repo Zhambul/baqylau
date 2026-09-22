@@ -230,6 +230,34 @@ def test_claude_chrome_permission_returns_session() -> None:
     assert response.raw_events[0].payload == payload
 
 
+def test_claude_chrome_permission_with_mcp_server() -> None:
+    """Claude 2.1.x names the MCP server on the permission request itself.
+
+    A delivery this model refuses never reaches the reply, and the person
+    sees Claude's own dialog for a tool Baqylau is supposed to answer.
+    """
+    payload = json.dumps(
+        {
+            fixture.SESSION_ID_FIELD: fixture.CLAUDE_SESSION_ID,
+            fixture.TRANSCRIPT_PATH: fixture.WORK_CLAUDE_JSONL_PATH,
+            fixture.CWD_FIELD: fixture.WORK_PATH,
+            fixture.HOOK_EVENT_NAME_FIELD: fixture.PERMISSION_REQUEST_HOOK,
+            fixture.TOOL_NAME_FIELD: "mcp__claude-in-chrome__computer",
+            fixture.TOOL_INPUT_FIELD: {"action": "screenshot"},
+            "mcp_server": {"name": "claude-in-chrome", "source": "dynamic"},
+        },
+    ).encode()
+
+    response = claude_hooks.ClaudeHookGateway().receive_hook(hook_request(payload))
+
+    assert json.loads(response.reply) == {
+        fixture.HOOK_SPECIFIC_OUTPUT: {
+            "hookEventName": fixture.PERMISSION_REQUEST_HOOK,
+            "decision": {fixture.BEHAVIOR_FIELD: fixture.ALLOW},
+        },
+    }
+
+
 def test_claude_chrome_permission_does_not() -> None:
     """Verify claude chrome permission does not persist a native allow rule."""
     payload = json.dumps(

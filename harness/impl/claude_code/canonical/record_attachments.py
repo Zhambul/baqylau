@@ -46,6 +46,9 @@ class QueuedCommandAttachment(BaseModel):
     command_mode: Annotated[str | None, Field(alias="commandMode")] = None
     prompt: str | None = None
     is_meta: Annotated[bool | None, Field(alias="isMeta")] = None
+    # Claude 2.1.x marks a queued command that came from a person (corpus:
+    # true). A record it refuses loses the queued prompt.
+    human_turn: Annotated[bool | None, Field(alias="humanTurn")] = None
     origin: Origin | None = None
     source_uuid: str | None = None
     timestamp: str | None = None

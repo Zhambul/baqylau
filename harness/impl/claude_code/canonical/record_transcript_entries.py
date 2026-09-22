@@ -75,6 +75,8 @@ class UserRecord(BaseModel):
     permission_mode: Annotated[str | None, Field(alias="permissionMode")] = None
     prompt_id: Annotated[str | None, Field(alias="promptId")] = None
     prompt_source: Annotated[str | None, Field(alias="promptSource")] = None
+    # Claude Code 2.1.x names where the prompt came from (corpus: "human").
+    turn_origin: Annotated[str | None, Field(alias="turnOrigin")] = None
     source_tool_assistant_uuid: Annotated[str | None, Field(alias="sourceToolAssistantUUID")] = None
     source_tool_use_id: Annotated[str | None, Field(alias="sourceToolUseID")] = None
     tool_denial_kind: Annotated[str | None, Field(alias="toolDenialKind")] = None
@@ -113,6 +115,9 @@ class AssistantRecord(BaseModel):
     api_block_index: Annotated[int | None, Field(alias="apiBlockIndex")] = None
     effort: str | HookEffort | None = None
     per_turn_effort: Annotated[str | HookEffort | None, Field(alias="perTurnEffort")] = None
+    # Claude Code 2.1.x names the advisor model that reviewed the answer
+    # (corpus: every assistant record carries it, e.g. "claude-opus-5").
+    advisor_model: Annotated[str | None, Field(alias="advisorModel")] = None
     native_tool_inputs: Annotated[ForeignMetadata | None, Field(alias="wireToolInputs")] = None
     native_ingest_context: Annotated[ForeignMetadata | None, Field(alias="wireIngestContext")] = None
     attribution_agent: Annotated[str | None, Field(alias="attributionAgent")] = None

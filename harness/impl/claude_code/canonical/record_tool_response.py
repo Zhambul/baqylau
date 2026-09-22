@@ -154,6 +154,10 @@ class HookPayload(BaseModel):
     turn_id: ClaudeCodeTurnId | None = None
     notification_type: str | None = None
     permission_suggestions: list[PermissionUpdate] | None = None
+    # Claude Code 2.1.x names the MCP server beside a tool hook (corpus:
+    # {"name": "claude-in-chrome", "source": "dynamic"}). A hook that is
+    # refused is a Chrome permission that is never auto-approved.
+    mcp_server: ForeignMetadata | None = None
     prompt: str | None = None
     custom_instructions: str | None = None
     compact_summary: str | None = None

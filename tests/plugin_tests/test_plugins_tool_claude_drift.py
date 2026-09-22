@@ -164,6 +164,66 @@ def test_claude_message_usage_models_complete() -> None:
     assert usage.iterations[0].type.value == fixture.MESSAGE_FIELD
 
 
+def test_claude_new_record_fields_translate() -> None:
+    """Claude 2.1.x adds fields to transcript records.
+
+    Every assistant record carries the advisor model and the transformation
+    list, and a person's queued command is marked as a human turn. A model
+    that refuses them loses the whole conversation: the mirror shows nothing
+    of it and no Chrome tool call reaches the feed.
+    """
+    translator = ClaudeCanonicalTranslator()
+    assistant = translator.translate(
+        raw_event(
+            {
+                fixture.TYPE_FIELD: fixture.ASSISTANT,
+                "advisorModel": "claude-opus-5",
+                fixture.MESSAGE_FIELD: {
+                    fixture.CONTENT_FIELD: [
+                        {fixture.TYPE_FIELD: fixture.TEXT_FIELD, fixture.TEXT_FIELD: "done"},
+                    ],
+                    "input_transformations": [],
+                },
+            },
+            harness=CLAUDE_CODE_HARNESS,
+            source_type=fixture.TRANSCRIPT_SOURCE,
+            raw_event_id="claude-advisor-model",
+        ),
+    )
+    user = translator.translate(
+        raw_event(
+            {
+                fixture.TYPE_FIELD: fixture.USER,
+                "turnOrigin": "human",
+                fixture.MESSAGE_FIELD: {fixture.CONTENT_FIELD: "go"},
+            },
+            harness=CLAUDE_CODE_HARNESS,
+            source_type=fixture.TRANSCRIPT_SOURCE,
+            raw_event_id="claude-turn-origin",
+        ),
+    )
+    queued = translator.translate(
+        raw_event(
+            {
+                fixture.TYPE_FIELD: fixture.ATTACHMENT,
+                fixture.ATTACHMENT: {
+                    fixture.TYPE_FIELD: "queued_command",
+                    fixture.PROMPT_KIND: "Reply after the command",
+                    "commandMode": fixture.PROMPT_KIND,
+                    "humanTurn": True,
+                },
+            },
+            harness=CLAUDE_CODE_HARNESS,
+            source_type=fixture.TRANSCRIPT_SOURCE,
+            raw_event_id="claude-human-turn",
+        ),
+    )
+
+    assert assistant.decision == fixture.TRANSLATED
+    assert user.decision == fixture.TRANSLATED
+    assert queued.decision == fixture.TRANSLATED
+
+
 def test_claude_stop_hook_summary_uses_typed_hook() -> None:
     """Verify claude stop hook summary uses typed hook records."""
     summary = SystemRecord.model_validate(
