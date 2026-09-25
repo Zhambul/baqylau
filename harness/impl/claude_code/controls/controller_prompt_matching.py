@@ -6,11 +6,13 @@ import re
 from pydantic import ValidationError
 
 from harness.impl.claude_code.canonical import records, transcript
+from harness.impl.claude_code.canonical.transcript_user_text import pasted_text
 
 
 def _same_native_prompt(expected: str, observed: str) -> bool:
     expected_text = expected.strip()
-    observed_text = observed.strip()
+    # Claude Code records a pasted prompt inside its own tag, also in its queue.
+    observed_text = pasted_text(observed).strip()
     if not expected_text:
         return False
     if expected_text == observed_text:
