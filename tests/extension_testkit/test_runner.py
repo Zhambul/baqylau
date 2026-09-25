@@ -5,17 +5,18 @@ from __future__ import annotations
 
 import subprocess  # noqa: S404 -- Run the installed runner module without a shell.
 import sys
-from pathlib import Path
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import pytest
 from baqylau_extension_api.manifest.e2e import E2eCase, HarnessLimit
 from baqylau_extension_testkit.runner import COVERAGE_FAILED
 
+from tests import host_launcher
 from tests.extension_host import package_fixture
 
-ROOT = Path(__file__).resolve().parents[2]
-HOST_EXECUTABLE = ROOT / "bin" / "baqylau-dashboard"
+if TYPE_CHECKING:
+    from pathlib import Path
+
 OWNER = "test.runner"
 CASE_PATH = "tests/e2e/test_web.py"
 WEB: Final = "web"
@@ -43,7 +44,7 @@ def runner_output(package: Path) -> subprocess.CompletedProcess[str]:
     """
     return subprocess.run(  # noqa: S603 -- Fixed arguments, no shell.
         (sys.executable, "-I", "-m", "baqylau_extension_testkit.runner", str(package)), cwd=package,
-        env={"PATH": "/usr/bin:/bin", "BAQYLAU_HOST_EXECUTABLE": str(HOST_EXECUTABLE)},
+        env={"PATH": "/usr/bin:/bin", "BAQYLAU_HOST_EXECUTABLE": str(host_launcher.host_executable())},
         capture_output=True, text=True, check=False, timeout=RUN_SECONDS,
     )
 

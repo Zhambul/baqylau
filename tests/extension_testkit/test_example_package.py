@@ -11,11 +11,11 @@ from pathlib import Path
 
 import pytest
 
+from tests import host_launcher
 from tests.extension_host import environment_fixture, wheel_fixture
 
 ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE = ROOT / "examples" / "hello-extension"
-HOST_EXECUTABLE = ROOT / "bin" / "baqylau-dashboard"
 RUN_SECONDS = 300
 TEST_TIMEOUT_SECONDS = 420
 
@@ -43,7 +43,10 @@ def test_example_passes_its_own_case(tmp_path: Path) -> None:
     package = built_example(tmp_path)
     finished = subprocess.run(  # noqa: S603 -- Fixed arguments, no shell.
         (sys.executable, "-I", "-m", "baqylau_extension_testkit.runner", str(package)), cwd=package,
-        env={"PATH": os.defpath, "HOME": os.environ["HOME"], "BAQYLAU_HOST_EXECUTABLE": str(HOST_EXECUTABLE)},
+        env={
+            "PATH": os.defpath, "HOME": os.environ["HOME"],
+            "BAQYLAU_HOST_EXECUTABLE": str(host_launcher.host_executable()),
+        },
         capture_output=True, text=True, check=False, timeout=RUN_SECONDS,
     )
     assert finished.returncode == 0, finished.stdout + finished.stderr

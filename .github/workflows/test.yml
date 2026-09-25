@@ -63,6 +63,8 @@ jobs:
       - run: npx playwright install chromium webkit
         if: runner.os == 'macOS'
         working-directory: dashboard/frontend
+      # The Python browser tests use the browser build of the Python Playwright.
+      - run: .venv/bin/python -m playwright install --with-deps chromium
       - run: make test
         if: runner.os == 'macOS'
         env:

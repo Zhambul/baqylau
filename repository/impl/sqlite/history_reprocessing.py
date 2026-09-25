@@ -126,7 +126,8 @@ class SqliteHistoryReprocessingRepository:
             The candidate after the switch.
 
         """
-        with self.database.write() as connection_handle:
+        # The switch resets the session's projector cursors, so the projectors must run again.
+        with self.database.write(WorkKind.CANONICAL) as connection_handle:
             connection_handle.execute("PRAGMA defer_foreign_keys = ON")
             candidate = _row(connection_handle, history_revision)
             if candidate.state != ReprocessingState.SWITCHING:

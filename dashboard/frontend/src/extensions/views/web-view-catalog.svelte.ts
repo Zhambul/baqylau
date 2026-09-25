@@ -12,6 +12,7 @@ export class WebViewCatalog {
   runtimeRevision = $state<string | null>(null);
 
   private requests = 0;
+  private lifetime: AbortSignal | null = null;
 
   /** Apply only the newest request's reply; an older reply that ends later is stale. */
   async refresh(signal: AbortSignal): Promise<void> {
@@ -27,6 +28,7 @@ export class WebViewCatalog {
 
   /** Refresh now and then on a fixed period until the signal aborts. */
   follow(signal: AbortSignal): void {
+    this.lifetime = signal;
     const refresh = (): void => {
       this.refresh(signal).catch(() => undefined);
     };
@@ -35,6 +37,15 @@ export class WebViewCatalog {
     signal.addEventListener('abort', () => {
       clearInterval(timer);
     });
+  }
+
+  /**
+   * Refresh at once for a caller that saw a new runtime. The request follows
+   * the catalog's lifetime, so it continues when the caller's page closes.
+   */
+  refreshNow(): void {
+    if (this.lifetime === null) return;
+    this.refresh(this.lifetime).catch(() => undefined);
   }
 
   /** The additive views of one slot and scope kind, in the host order. */

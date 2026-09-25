@@ -6,16 +6,18 @@ from __future__ import annotations
 import os
 import subprocess  # noqa: S404 -- Run the installed runner module without a shell.
 import sys
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 from baqylau_extension_api.manifest.e2e import E2eCase, HarnessLimit
 
+from tests import host_launcher
 from tests.extension_host import package_fixture
 from tests.extension_web import view_server
 
-ROOT = Path(__file__).resolve().parents[2]
-HOST_EXECUTABLE = ROOT / "bin" / "baqylau-dashboard"
+if TYPE_CHECKING:
+    from pathlib import Path
+
 CASE_PATH = "tests/e2e/test_web.py"
 LIMIT = HarnessLimit(reason="The workspace page reads no session.")
 RUN_SECONDS = 240
@@ -65,7 +67,7 @@ def test_browser_case_runs_through_the_runner(tmp_path: Path) -> None:
     """The runner checks coverage, then the package's browser case mounts its view in headless Chromium."""
     package = browser_package(tmp_path)
     environment = {
-        "PATH": os.defpath, "BAQYLAU_HOST_EXECUTABLE": str(HOST_EXECUTABLE),
+        "PATH": os.defpath, "BAQYLAU_HOST_EXECUTABLE": str(host_launcher.host_executable()),
         # Playwright finds its installed browsers under the caller's home.
         "HOME": os.environ["HOME"],
     }

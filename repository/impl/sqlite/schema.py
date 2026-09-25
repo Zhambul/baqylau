@@ -665,8 +665,8 @@ _EXTENSION_JOB_TABLES = (
         revision INTEGER NOT NULL CHECK(revision >= 1),
         binding TEXT NOT NULL CHECK(json_valid(binding)),
         request TEXT NOT NULL CHECK(json_valid(request)),
-        result TEXT CHECK(json_valid(result)),
-        diagnostic TEXT CHECK(json_valid(diagnostic)),
+        result TEXT CHECK(result IS NULL OR json_valid(result)),
+        diagnostic TEXT CHECK(diagnostic IS NULL OR json_valid(diagnostic)),
         consumer_cursor INTEGER,
         created_at REAL NOT NULL,
         updated_at REAL NOT NULL,
@@ -765,8 +765,8 @@ _EXTENSION_PROJECTION_GENERATION_TABLES = (
         live_head INTEGER NOT NULL CHECK(live_head >= 0),
         created_at REAL NOT NULL,
         updated_at REAL NOT NULL,
-        comparison TEXT CHECK(json_valid(comparison)),
-        diagnostic TEXT CHECK(json_valid(diagnostic))
+        comparison TEXT CHECK(comparison IS NULL OR json_valid(comparison)),
+        diagnostic TEXT CHECK(diagnostic IS NULL OR json_valid(diagnostic))
     )
     """,
     "CREATE INDEX IF NOT EXISTS index_history_reprocessings_state ON history_reprocessings(state, created_at)",
@@ -796,8 +796,8 @@ _EXTENSION_PROJECTION_GENERATION_TABLES = (
         state TEXT NOT NULL CHECK(state IN ('building', 'migrating', 'ready', 'active', 'retired', 'failed')),
         created_at REAL NOT NULL,
         updated_at REAL NOT NULL,
-        comparison TEXT CHECK(json_valid(comparison)),
-        diagnostic TEXT CHECK(json_valid(diagnostic))
+        comparison TEXT CHECK(comparison IS NULL OR json_valid(comparison)),
+        diagnostic TEXT CHECK(diagnostic IS NULL OR json_valid(diagnostic))
     )
     """,
     (

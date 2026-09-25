@@ -6,14 +6,16 @@ from __future__ import annotations
 import os
 import subprocess  # noqa: S404 -- Run the installed modules without a shell.
 import sys
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
+from tests import host_launcher
 from tests.extension_host import wheel_fixture
 
-ROOT = Path(__file__).resolve().parents[2]
-HOST_EXECUTABLE = ROOT / "bin" / "baqylau-dashboard"
+if TYPE_CHECKING:
+    from pathlib import Path
+
 RUN_SECONDS = 300
 TEST_TIMEOUT_SECONDS = 420
 
@@ -45,7 +47,7 @@ def runner_environment(directory: Path) -> dict[str, str]:
     sdk_wheel = next(wheel_fixture.build_wheels(build).glob("baqylau_extension_api-*.whl"))
     return {
         "PATH": os.defpath, "HOME": os.environ["HOME"],
-        "BAQYLAU_HOST_EXECUTABLE": str(HOST_EXECUTABLE), "BAQYLAU_SDK_WHEEL": str(sdk_wheel),
+        "BAQYLAU_HOST_EXECUTABLE": str(host_launcher.host_executable()), "BAQYLAU_SDK_WHEEL": str(sdk_wheel),
     }
 
 

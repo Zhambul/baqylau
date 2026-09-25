@@ -205,6 +205,18 @@ describe('extension management state', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('polls until the recent list shows the end of an operation', async () => {
+    const preparing = { ...extensionOperation(), status: 'preparing' as const };
+    vi.mocked(api.readRecentOperations).mockResolvedValueOnce([preparing]);
+    await view.refresh();
+    expect(vi.getTimerCount()).toBe(1);
+    const succeeded = { ...preparing, status: 'succeeded' as const };
+    vi.mocked(api.readRecentOperations).mockResolvedValue([succeeded]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(view.operationsFor(EXTENSION_OWNER)).toEqual([succeeded]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('does not publish a late load or start overlapping requests after navigation', async () => {
     const pending = view.refresh();
     const overlapping = view.refresh();

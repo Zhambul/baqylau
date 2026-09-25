@@ -81,4 +81,29 @@ describe('web view catalog', () => {
     expect(catalog.runtimeRevision).toBe('runtime-two');
     expect(catalog.views).toEqual([]);
   });
+
+  it('refreshes now with its own lifetime, not the caller page', async () => {
+    vi.mocked(api.readWebViews).mockClear();
+    vi.mocked(api.readWebViews).mockResolvedValue({
+      runtime_revision: 'runtime-one',
+      views: [],
+    });
+    const catalog = new WebViewCatalog();
+    catalog.refreshNow();
+    expect(api.readWebViews).not.toHaveBeenCalled();
+
+    const lifetime = new AbortController();
+    catalog.follow(lifetime.signal);
+    vi.mocked(api.readWebViews).mockClear();
+    vi.mocked(api.readWebViews).mockResolvedValue({
+      runtime_revision: 'runtime-two',
+      views: [webView({})],
+    });
+    catalog.refreshNow();
+    await vi.waitFor(() => {
+      expect(catalog.runtimeRevision).toBe('runtime-two');
+    });
+    expect(api.readWebViews).toHaveBeenCalledWith(lifetime.signal);
+    lifetime.abort();
+  });
 });

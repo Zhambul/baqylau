@@ -207,6 +207,8 @@ export class ExtensionManagement {
       (this.runtime?.pending_operation !== null &&
         this.runtime?.pending_operation !== undefined) ||
       this.operation?.status === 'preparing' ||
+      // The recent list is read beside the operation, so it can be older.
+      this.operations.some((operation) => operation.status === 'preparing') ||
       this.runtime?.cleanup_pending === true ||
       this.runtime?.phase === 'preparing' ||
       this.runtime?.phase === 'awaiting_boundary'

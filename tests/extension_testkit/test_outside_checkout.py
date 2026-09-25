@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from tests import host_launcher
 from tests.extension_host import package_fixture, wheel_fixture
 
 if TYPE_CHECKING:
@@ -20,7 +21,6 @@ if TYPE_CHECKING:
 
 ROOT = Path(__file__).resolve().parents[2]
 KIT_ROOT = ROOT / "packages" / "extension-testkit"
-HOST_EXECUTABLE = ROOT / "bin" / "baqylau-dashboard"
 OWNER = "test.outside"
 COMMAND_SECONDS = 300
 TEST_TIMEOUT_SECONDS = 600
@@ -104,7 +104,7 @@ def external_package(directory: Path) -> Path:
 def test_package_tests_run_with_installed_kit(tmp_path: Path) -> None:
     """A clean venv gets the kit from local wheels; the package's test starts a private host and signs off."""
     python = installed_kit(tmp_path)
-    environment = {**CLEAN_ENVIRONMENT, "BAQYLAU_HOST_EXECUTABLE": str(HOST_EXECUTABLE)}
+    environment = {**CLEAN_ENVIRONMENT, "BAQYLAU_HOST_EXECUTABLE": str(host_launcher.host_executable())}
     command = (python, "-I", "-m", "pytest", "-q", "-p", "no:cacheprovider", TESTS)
     output = run(command, external_package(tmp_path), environment)
     assert "1 passed" in output

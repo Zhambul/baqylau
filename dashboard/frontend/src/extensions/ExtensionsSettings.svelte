@@ -32,11 +32,7 @@
       runtimeRevision === webViews.runtimeRevision
     )
       return;
-    const controller = new AbortController();
-    webViews.refresh(controller.signal).catch(() => undefined);
-    return () => {
-      controller.abort();
-    };
+    webViews.refreshNow();
   });
 
   onMount(() => {

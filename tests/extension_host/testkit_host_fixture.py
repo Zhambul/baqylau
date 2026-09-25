@@ -4,12 +4,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from baqylau_extension_testkit.client import HostClient
 from baqylau_extension_testkit.host_process import HostExecutable, HostProcess
 from baqylau_extension_testkit.signoff import signoff
+
+from tests import host_launcher
 
 if TYPE_CHECKING:
     from contextlib import ExitStack
@@ -17,8 +18,7 @@ if TYPE_CHECKING:
     from baqylau_extension_testkit.isolation import PrivateRoots
     from baqylau_extension_testkit.signoff_models import ReportDocument
 
-ROOT = Path(__file__).resolve().parents[2]
-EXECUTABLE = HostExecutable(ROOT / "bin" / "baqylau-dashboard")
+EXECUTABLE = HostExecutable(host_launcher.host_executable())
 
 
 @dataclass(frozen=True)
