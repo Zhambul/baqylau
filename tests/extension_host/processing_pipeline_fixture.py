@@ -20,6 +20,7 @@ from extensions import (
 )
 from extensions.models import interpretations, observations
 from extensions.registry_package import RegistryPackage
+from tests import storage_reads
 from tests.extension_api import source_example
 from tests.extension_host import (
     interpretation_context_fixture as contexts,
@@ -74,6 +75,15 @@ class PipelineCase:
             The number of committed interpretations.
 
         """
+        return self.batch().interpret_pending(self.probes.core, bool)
+
+    def batch(self) -> processing_batch.SelectedProcessingBatch:
+        """Build the production batch over the fixture runtime and real stores.
+
+        Returns:
+            The batch that live and replayed interpretation use.
+
+        """
         context = contexts.context(self.original, self.stored)
         snapshot = registry_snapshot.prepare_snapshot(1, context.binding.runtime_revision, (self._package(),))
         sources = Mock(
@@ -81,10 +91,9 @@ class PipelineCase:
             context=source_selection.SourceBatchContext(context.binding.manager_id, snapshot, (context.binding.scope,)),
             callbacks=Mock(clock=Mock(return_value=1000.0)),
         )
-        batch = processing_batch.SelectedProcessingBatch(sources, interpretation_resources.InterpretationStores(
+        return processing_batch.SelectedProcessingBatch(sources, interpretation_resources.InterpretationStores(
             self.original.original.store, self.original.store,
         ))
-        return batch.interpret_pending(self.probes.core, bool)
 
     def _pipeline(self) -> interpretation_pipeline.InterpretationPipeline:
         context = contexts.context(self.original, self.stored)
@@ -117,15 +126,17 @@ class PipelineCase:
         )
 
 
-def installed(path: Path, admission_limit: int = interpretations.MAX_INTERPRETATION_BYTES) -> PipelineCase:
+def installed(
+    path: Path, admission_limit: int = interpretations.MAX_INTERPRETATION_BYTES, *, prior_state: bool = True,
+) -> PipelineCase:
     """Install a declaration which selects both raw and canonical stages.
 
     Returns:
         Real originals plus typed, observable local call boundaries.
 
     """
-    original = storage.installed(path, declarations.combined_manifest())
-    stored = original.original.store.append_observations(original.original.request).accepted[0]
+    original = storage.installed(path, declarations.combined_manifest(prior_state=prior_state))
+    stored = storage_reads.append_observations(original.original.store, original.original.request).accepted[0]
     return PipelineCase(original, stored, probes(), admission_limit)
 
 

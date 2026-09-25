@@ -8,6 +8,8 @@ from fastapi import Depends
 
 from app import (
     provider_audit_storage,
+    provider_extension_health,
+    provider_extension_policy,
     provider_extension_registry,
     provider_extension_runtime,
     provider_fact_storage,
@@ -95,9 +97,27 @@ def interpretation_stores(
 
 
 @singleton
+def source_callbacks(
+    queue: provider_work_queue.EngineWork, audit: provider_audit_storage.Recorder,
+    health: provider_extension_health.Health,
+) -> source_resources.SourceCallbacks:
+    """Notify the engine, write failures to the audit, and count them for health.
+
+    Returns:
+        The callbacks of source processing.
+
+    """
+    return source_resources.SourceCallbacks(
+        partial(queue.put, WorkKind.SOURCES), CoalescingFailureRecorder(audit, "extension sources"), health=health,
+    )
+
+
+@singleton
 def extension_source_processing(
-    services: SourceServices, queue: provider_work_queue.EngineWork, audit: provider_audit_storage.Recorder,
+    services: SourceServices,
+    callbacks: Annotated[source_resources.SourceCallbacks, Depends(source_callbacks)],
     stores: Annotated[InterpretationStores, Depends(interpretation_stores)],
+    source_policy: provider_extension_policy.SourceLimits,
 ) -> processing_contract.ExtensionProcessing | None:
     """Build the event-driven source coordinator without opening a worker.
 
@@ -107,9 +127,7 @@ def extension_source_processing(
     """
     if services is None:
         return None
-    return processing_runtime.ProcessingRuntime(services, source_resources.SourceCallbacks(
-        partial(queue.put, WorkKind.SOURCES), CoalescingFailureRecorder(audit, "extension sources"),
-    ), stores)
+    return processing_runtime.ProcessingRuntime(services, callbacks, stores, source_policy)
 
 
 Processing = Annotated[

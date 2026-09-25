@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from repository.impl.sqlite.connection import SqliteDatabase
-from tests import sqlite_migration_fixture as snapshots
+from tests import sqlite_migration_fixture as snapshots, storage_reads
 from tests.extension_host import (
     observation_fixture as fixtures,
     observation_requests as requests,
@@ -29,7 +29,7 @@ def test_failed_queue_insert_restores_raw_store(tmp_path: Path) -> None:
         )
     before = snapshots.snapshot(case.store.database)
     with pytest.raises(sqlite3.IntegrityError, match="injected pending"):
-        case.store.append_observations(case.request)
+        storage_reads.append_observations(case.store, case.request)
     assert snapshots.snapshot(case.store.database) == before
 
 
@@ -40,9 +40,9 @@ def test_failed_commit_retains_no_original_input(tmp_path: Path, monkeypatch: py
     with closing(commits.fault_connection(case.store.database)) as connection:
         monkeypatch.setattr(SqliteDatabase, "_thread_connection", lambda _database: connection)
         with pytest.raises(sqlite3.OperationalError, match="injected COMMIT"):
-            case.store.append_observations(case.request)
+            storage_reads.append_observations(case.store, case.request)
         assert snapshots.snapshot(case.store.database) == before
-        accepted = case.store.append_observations(case.request).accepted
+        accepted = storage_reads.append_observations(case.store, case.request).accepted
         assert case.store.pending_observations(10) == accepted
 
 
@@ -50,7 +50,7 @@ def test_compression_preserves_exact_utf8_bytes(tmp_path: Path) -> None:
     """Stored compression does not normalize JSON spacing, Unicode, or line endings."""
     case = fixtures.installed(tmp_path)
     request = requests.document(case.request, UNICODE_DOCUMENT)
-    stored = case.store.append_observations(request).accepted[0]
+    stored = storage_reads.append_observations(case.store, request).accepted[0]
     assert fixtures.original(stored).candidate.document.json_text == UNICODE_DOCUMENT
     with case.store.database.read() as connection:
         row = connection.execute("SELECT payload, payload_codec FROM raw_events").fetchone()
@@ -61,8 +61,8 @@ def test_compression_preserves_exact_utf8_bytes(tmp_path: Path) -> None:
 def test_earlier_original_can_be_a_parent(tmp_path: Path) -> None:
     """A new observation can retain a stable reference to an earlier original."""
     case = fixtures.installed(tmp_path)
-    parent = case.store.append_observations(case.request).accepted[0]
+    parent = storage_reads.append_observations(case.store, case.request).accepted[0]
     request = requests.new_key(case.request, "child")
     request = requests.causes(request, (parent.observation.raw_event_id,))
-    child = case.store.append_observations(request).accepted[0]
+    child = storage_reads.append_observations(case.store, request).accepted[0]
     assert fixtures.original(child).candidate.causes == (parent.observation.raw_event_id,)

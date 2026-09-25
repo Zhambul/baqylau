@@ -11,6 +11,7 @@ from app.provider_databases import MainDb
 from extensions.artifact_contract import ExtensionArtifacts
 from extensions.artifacts import FilesystemExtensionArtifacts
 from extensions.capture_scanner import CapturingExtensionScanner
+from extensions.configuration import ARTIFACTS_DIRECTORY
 from extensions.discovery import FilesystemExtensionScanner
 from extensions.discovery_contract import ExtensionPackageScanner
 
@@ -23,7 +24,7 @@ def extension_artifacts(database: MainDb) -> ExtensionArtifacts:
         A store which creates its root only when it must capture a package.
 
     """
-    return FilesystemExtensionArtifacts(Path(database.path).parent / "extension-artifacts")
+    return FilesystemExtensionArtifacts(Path(database.path).parent / ARTIFACTS_DIRECTORY)
 
 
 Artifacts = Annotated[ExtensionArtifacts, Depends(extension_artifacts)]

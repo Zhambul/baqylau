@@ -46,23 +46,35 @@ class ExtensionChangesResource:
             ApiFailureError: If the stream reports an error or ends early.
 
         """
-        query = urlencode((
-            ("scope", scope.model_dump_json()),
-            ("history_revision", history_revision),
-            ("projection_generation", projection_generation),
-            ("cursor", cursor),
-        ))
-        path = f"/api/extensions/{extension_id}/changes?{query}"
+        path = _changes_path(extension_id, scope, (history_revision, projection_generation, cursor))
         with self.transport.event_stream(path) as lines:
             for event in sse.events(lines):
-                if event.event == "changes":
-                    frame = CHANGE_FRAME.validate_json(event.payload)
-                    return ExtensionChangeUpdate(cursor=frame.cursor, frame=frame)
-                if event.event == "reset":
-                    reset = CHANGE_RESET.validate_json(event.payload)
-                    return ExtensionChangeUpdate(cursor=reset.cursor, frame=reset)
                 if event.event == "error":
                     msg = f"GET {path} stream failed"
                     raise transport.ApiFailureError(msg)
+                update = _update(event)
+                if update is not None:
+                    return update
         msg = f"GET {path} ended before a change frame"
         raise transport.ApiFailureError(msg)
+
+
+def _changes_path(extension_id: str, scope: ExtensionScope, position: tuple[str, str, int]) -> str:
+    history_revision, projection_generation, cursor = position
+    query = urlencode((
+        ("scope", scope.model_dump_json()),
+        ("history_revision", history_revision),
+        ("projection_generation", projection_generation),
+        ("cursor", cursor),
+    ))
+    return f"/api/extensions/{extension_id}/changes?{query}"
+
+
+def _update(sse_event: sse.SseEvent) -> ExtensionChangeUpdate | None:
+    if sse_event.event == "changes":
+        frame = CHANGE_FRAME.validate_json(sse_event.payload)
+        return ExtensionChangeUpdate(cursor=frame.cursor, frame=frame)
+    if sse_event.event == "reset":
+        reset = CHANGE_RESET.validate_json(sse_event.payload)
+        return ExtensionChangeUpdate(cursor=reset.cursor, frame=reset)
+    return None

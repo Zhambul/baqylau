@@ -53,6 +53,7 @@ class ActiveExtensionRegistry(ExtensionRegistry):
         """
         checked = prepare_snapshot(
             snapshot.directory.catalog_revision, snapshot.directory.runtime_revision, snapshot.packages,
+            snapshot.relations,
         )
         with self._lock:
             self._require_open()

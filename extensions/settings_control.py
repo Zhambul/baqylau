@@ -11,7 +11,7 @@ from extensions import control_admission, lifecycle_plan_reads, settings_planner
 from extensions.control_policy import ExtensionControlPolicy, require_extension_write
 from extensions.lifecycle_control_contract import LifecycleRequestError
 from extensions.manager_contract import ExtensionManager
-from extensions.models import lifecycle_operations, lifecycle_state, settings_requests, settings_view
+from extensions.models import lifecycle_operations, lifecycle_state, scope_relations, settings_requests, settings_view
 from extensions.settings_control_contract import ExtensionSettingsControl
 from repository.contract.extension_catalog import ExtensionCatalogRepository
 
@@ -23,6 +23,7 @@ class SettingsControl(ExtensionSettingsControl):
     manager: ExtensionManager | None
     catalog: ExtensionCatalogRepository
     policy: ExtensionControlPolicy = field(default_factory=ExtensionControlPolicy)
+    relations: scope_relations.ScopeRelations | None = None
 
     def read_settings(
         self, extension_id: ExtensionId, request: settings_requests.SettingsReadRequest,
@@ -38,8 +39,9 @@ class SettingsControl(ExtensionSettingsControl):
         """
         manager = control_admission.require_manager(self.manager)
         state = lifecycle_plan_reads.read_planning_state(manager.read_state(), self.catalog)
+        related = () if self.relations is None else self.relations.related_scopes(request.scope)
         try:
-            return settings_views.read_settings_view(state, extension_id, request)
+            return settings_views.read_settings_view(state, extension_id, request, related)
         except ExtensionContractError as error:
             message = "accepted settings do not match the selected package schema"
             raise LifecycleRequestError(message) from error

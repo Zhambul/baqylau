@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import NamedTuple
 
+from _render_width import text_width
+
 RGB_COMPONENT_COUNT = 3
 
 
@@ -239,4 +241,4 @@ def _color_code(prefix: str, color: Color) -> str:
 
 
 def spans_width(spans: Iterable[Span]) -> int:
-    return sum(len(span.text) for span in spans)
+    return sum(text_width(span.text) for span in spans)

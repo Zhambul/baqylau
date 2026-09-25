@@ -15,7 +15,8 @@ OWNER = "test.owner"
 COLLECTION = "test.owner.notes"
 SCOPE_JSON = '{"kind":"session","session_id":"session-one","actor_id":"lead","harness":"codex"}'
 SCOPE = scopes.SessionScope.model_validate_json(SCOPE_JSON)
-DIGEST = "a" * 64
+DIGEST_LENGTH = 64
+DIGEST = "a" * DIGEST_LENGTH
 SCHEMA_REF = documents.SchemaRef(owner=OWNER, name="text", version=1, digest=DIGEST)
 DOCUMENT = documents.EncodedDocument(schema_ref=SCHEMA_REF, json_text='"first"')
 SUMMARY = "First note"
@@ -27,7 +28,8 @@ OTHER_GENERATION = "other"
 REPOSITORY_SCOPE = scopes.RepositoryScope(
     repository_id="repo-one", worktree="/data/repo", git_directory="/data/repo/.git",
 )
-PROJECTED_GENERATION = "gen-one"
+LIVE_GENERATION = "default"
+FIRST_NOTE = "note-0"
 
 
 def put_one(store: test_dependencies.SqliteSessionDataRepository, index: int, cursor: int) -> None:
@@ -43,7 +45,20 @@ def seed_records(store: test_dependencies.SqliteSessionDataRepository) -> None:
         put_one(store, index, FIRST_CURSOR + index)
 
 
-def test_change_read_returns_one_committed_boundary(
+def read_boundary(
+    reader: repository_dependencies.SqliteExtensionRecordRepository, after_cursor: int,
+) -> tuple[list[str], int]:
+    """Read one change boundary of the test scope.
+
+    Returns:
+        The changed record keys and the next cursor.
+
+    """
+    page = reader.record_changes(OWNER, SCOPE, DEFAULT_GENERATION, after_cursor)
+    return [state.key.key for state in page.changes], page.next_cursor
+
+
+def test_change_read_returns_one_boundary(
     main: repository_dependencies.SqliteDatabase,
 ) -> None:
     """A change read returns one whole boundary and advances once."""
@@ -51,21 +66,17 @@ def test_change_read_returns_one_committed_boundary(
     seed_records(store)
     reader = repository_dependencies.SqliteExtensionRecordRepository(main)
 
-    first = reader.record_changes(OWNER, SCOPE, DEFAULT_GENERATION, 0)
-    assert [state.key.key for state in first.changes] == ["note-0"]
-    assert first.next_cursor == FIRST_CURSOR
+    boundaries = [read_boundary(reader, 0)]
+    for _ in range(RECORD_COUNT):
+        boundaries.append(read_boundary(reader, boundaries[-1][1]))
 
-    second = reader.record_changes(OWNER, SCOPE, DEFAULT_GENERATION, first.next_cursor)
-    assert [state.key.key for state in second.changes] == ["note-1"]
-    assert second.next_cursor == FIRST_CURSOR + 1
-
-    third = reader.record_changes(OWNER, SCOPE, DEFAULT_GENERATION, second.next_cursor)
-    assert [state.key.key for state in third.changes] == ["note-2"]
-    assert third.next_cursor == FIRST_CURSOR + 2
-
-    empty = reader.record_changes(OWNER, SCOPE, DEFAULT_GENERATION, third.next_cursor)
-    assert empty.changes == ()
-    assert empty.next_cursor == FIRST_CURSOR + 2
+    last_cursor = FIRST_CURSOR + RECORD_COUNT - 1
+    assert boundaries == [
+        ([FIRST_NOTE], FIRST_CURSOR),
+        (["note-1"], FIRST_CURSOR + 1),
+        (["note-2"], last_cursor),
+        ([], last_cursor),
+    ]
 
 
 def test_change_read_scopes_to_the_generation(
@@ -90,7 +101,7 @@ def test_change_read_resumes_across_a_later_write(
     reader = repository_dependencies.SqliteExtensionRecordRepository(main)
 
     first = reader.record_changes(OWNER, SCOPE, DEFAULT_GENERATION, 0)
-    assert [state.key.key for state in first.changes] == ["note-0"]
+    assert [state.key.key for state in first.changes] == [FIRST_NOTE]
 
     put_one(store, 1, FIRST_CURSOR + 1)
     second = reader.record_changes(OWNER, SCOPE, DEFAULT_GENERATION, first.next_cursor)
@@ -103,7 +114,7 @@ def test_change_read_works_in_a_repository_scope(
 ) -> None:
     """A repository-scope record changes without any session."""
     store = repository_dependencies.SqliteExtensionProjectionRepository(main)
-    key = records.RecordKey(owner=OWNER, collection=COLLECTION, scope=REPOSITORY_SCOPE, key="note-0")
+    key = records.RecordKey(owner=OWNER, collection=COLLECTION, scope=REPOSITORY_SCOPE, key=FIRST_NOTE)
     change = record_changes.PutRecord(
         key=key, expected_revision=0, document=DOCUMENT, summary=SUMMARY,
     )
@@ -111,12 +122,12 @@ def test_change_read_works_in_a_repository_scope(
         owner=OWNER,
         scope=REPOSITORY_SCOPE,
         history_revision="default",
-        generation=PROJECTED_GENERATION,
+        generation=LIVE_GENERATION,
         commit_cursor=FIRST_CURSOR,
         changes=repository_dependencies.SessionDataChanges(records=(change,)),
     ))
 
     reader = repository_dependencies.SqliteExtensionRecordRepository(main)
-    page = reader.record_changes(OWNER, REPOSITORY_SCOPE, PROJECTED_GENERATION, 0)
-    assert [state.key.key for state in page.changes] == ["note-0"]
+    page = reader.record_changes(OWNER, REPOSITORY_SCOPE, LIVE_GENERATION, 0)
+    assert [state.key.key for state in page.changes] == [FIRST_NOTE]
     assert page.next_cursor == FIRST_CURSOR

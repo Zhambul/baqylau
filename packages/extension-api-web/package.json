@@ -1,6 +1,8 @@
 {
   "name": "@baqylau/extension-api",
   "version": "0.1.0-alpha.1",
+  "author": "Zhambyl Yermagambet",
+  "license": "UNLICENSED",
   "type": "module",
   "engines": {
     "node": ">=22.12 <23"
@@ -31,7 +33,7 @@
     "check": "tsc -p tsconfig.json && tsc -p tsconfig.node.json",
     "generate": "node scripts/generate-wire.mjs",
     "generate:check": "node scripts/generate-wire.mjs --check",
-    "lint": "eslint . --max-warnings 0 && knip",
+    "lint": "eslint . --max-warnings 0 && knip && baqylau-dev-tools-pins",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",

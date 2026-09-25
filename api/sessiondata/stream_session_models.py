@@ -15,6 +15,25 @@ if TYPE_CHECKING:
     from repository.contract.session_data import SessionDelta
 
 
+@dataclass(frozen=True)
+class SessionStreamPosition:
+    """Name where a client resumes: its cursor and, when it knows it, its view revision."""
+
+    cursor: int
+    view_revision: int | None = None
+    entry_cursor: int | None = None
+
+
+@dataclass(frozen=True)
+class SessionStreamQuery:
+    """Keep the session stream query parameters together."""
+
+    after_cursor: int
+    include_application: bool
+    view_revision: int | None
+    after_entry: int | None = None
+
+
 @dataclass
 class SessionFrameState:
     """Store one session stream position and application snapshot."""
@@ -23,6 +42,9 @@ class SessionFrameState:
     application: SessionApplicationSnapshot | None
     heartbeat_at: float
     application_read_at: float
+    view_revision: int | None = None
+    reset: bool = False
+    entry_cursor: int | None = None
 
 
 @dataclass(frozen=True)
@@ -38,7 +60,7 @@ class SessionStreamServices:
 class SessionDeltaReader(Protocol):
     """Read changes for one session."""
 
-    def delta(self, session_id: SessionId, cursor: int) -> SessionDelta:
+    def delta(self, session_id: SessionId, cursor: int, entry_cursor: int | None = None) -> SessionDelta:
         """Return changes after a cursor."""
         ...
 

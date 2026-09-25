@@ -1,0 +1,202 @@
+{
+  "every_block": {
+    "title": "Logs",
+    "blocks": [
+      {
+        "kind": "section",
+        "block_id": "s",
+        "title": "Service",
+        "children": [
+          {
+            "kind": "text",
+            "block_id": "t",
+            "content": {
+              "spans": [
+                {
+                  "text": "Started 日本語 café",
+                  "tone": "text"
+                }
+              ]
+            }
+          },
+          {
+            "kind": "status",
+            "block_id": "st",
+            "label": "Healthy",
+            "tone": "success",
+            "detail": {
+              "text": "3 checks"
+            }
+          }
+        ]
+      },
+      {
+        "kind": "table",
+        "block_id": "tb",
+        "columns": [
+          "Name",
+          "Level"
+        ],
+        "rows": [
+          {
+            "item_id": "a",
+            "cells": [
+              {
+                "spans": [
+                  {
+                    "text": "api",
+                    "tone": "text"
+                  }
+                ]
+              },
+              {
+                "spans": [
+                  {
+                    "text": "warning",
+                    "tone": "warning"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "kind": "file_tree",
+        "block_id": "f",
+        "nodes": [
+          {
+            "item_id": "d",
+            "label": "src",
+            "node_kind": "directory"
+          },
+          {
+            "item_id": "m",
+            "label": "src/deeply/deeply/deeply/deeply/deeply/deeply/deeply/deeply/deeply/deeply/deeply/deeply/deeply/deeply/deeply/deeply/deeply/deeply/deeply/deeply/deeply/deeply/deeply/deeply/deeply/deeply/deeply/deeply/deeply/deeply/module.py",
+            "depth": 1
+          }
+        ]
+      },
+      {
+        "kind": "diff",
+        "block_id": "df",
+        "old_path": "a.py",
+        "new_path": "a.py",
+        "unified_diff": "@@ -1 +1 @@\n-old\n+new\n"
+      },
+      {
+        "kind": "list",
+        "block_id": "l",
+        "selected_id": "two",
+        "entries": [
+          {
+            "item_id": "one",
+            "label": {
+              "spans": [
+                {
+                  "text": "First thread",
+                  "tone": "text"
+                }
+              ]
+            }
+          },
+          {
+            "item_id": "two",
+            "label": {
+              "spans": [
+                {
+                  "text": "Second thread",
+                  "tone": "text"
+                }
+              ]
+            },
+            "detail": {
+              "spans": [
+                {
+                  "text": "2 replies",
+                  "tone": "muted"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "narrow_table": {
+    "title": "Logs",
+    "blocks": [
+      {
+        "kind": "table",
+        "block_id": "tb",
+        "columns": [
+          "Repository",
+          "Branch"
+        ],
+        "rows": [
+          {
+            "item_id": "a",
+            "cells": [
+              {
+                "spans": [
+                  {
+                    "text": "baqylau-extension-system",
+                    "tone": "text"
+                  }
+                ]
+              },
+              {
+                "spans": [
+                  {
+                    "text": "feature",
+                    "tone": "text"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "hostile_text": {
+    "title": "Logs",
+    "blocks": [
+      {
+        "kind": "text",
+        "block_id": "t",
+        "content": {
+          "spans": [
+            {
+              "text": "safe\u001b[2Jclear\u0007",
+              "tone": "text"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "empty_blocks": {
+    "title": "Logs",
+    "blocks": [
+      {
+        "kind": "list",
+        "block_id": "l",
+        "entries": []
+      },
+      {
+        "kind": "file_tree",
+        "block_id": "f",
+        "nodes": []
+      },
+      {
+        "kind": "table",
+        "block_id": "tb",
+        "columns": [
+          "Name"
+        ],
+        "rows": []
+      }
+    ]
+  }
+}

@@ -7,6 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from extensions.models import lifecycle_operations
+from tests import storage_reads
 from tests.extension_host import lifecycle_fixture as fixtures
 
 DIGEST_HEX_LENGTH = 64
@@ -30,7 +31,7 @@ def test_invalid_selection_is_not_reserved(tmp_path: Path, change: str) -> None:
     with pytest.raises(ValueError, match=r"manifest|order|identity|state"):
         store.accept_extension_operation(proposed, fixtures.NOW)
     assert store.read_extension_operation(proposed.operation_id) is None
-    assert store.read_extension_runtime(proposed.candidate.runtime_revision) is None
+    assert storage_reads.read_extension_runtime(store, proposed.candidate.runtime_revision) is None
 
 
 @pytest.mark.parametrize("timestamp", [-1.0, float("nan"), float("inf")])

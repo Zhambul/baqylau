@@ -31,7 +31,18 @@ TELEMETRY_PATH = "/api/harnesses/%s/telemetry"
 # cursor. No width on any of them — the pane wraps its own text now.
 SESSION_DATA_PATH = "/sessionData/%s"
 SESSION_ENTRIES_PATH = "/sessionData/%s/entries?at=%d"
-SESSION_STREAM_PATH = "/sessionData/%s/stream?after_cursor=%d"
+SESSION_STREAM_PATH = "/sessionData/%s/stream?after_cursor=%d&after_entry=%d"
+# An extension pane reads its view at the pane size; the host presents it.
+EXTENSION_VIEW_PATH = "/api/extension-terminal/views/%s/%s?scope=%s&columns=%d&rows=%d"
+# The pane repaints after each committed record change of its extension and scope.
+EXTENSION_CHANGES_PATH = "/api/extensions/%s/changes?scope=%s&projection_generation=%s&cursor=%d"
+# The pane selector lists the views of a window, then opens one beside it.
+EXTENSION_VIEWS_PATH = "/api/extension-terminal/views?window_id=%s"
+EXTENSION_PANES_PATH = "/api/extension-terminal/panes"
+# The pane asks the daemon to run the action of its focused item.
+EXTENSION_ACTIONS_PATH = "/api/extension-terminal/actions"
+# A session mirror or scoreboard reads the extension sections that name it.
+EXTENSION_SECTIONS_PATH = "/api/extension-terminal/sessions/%s/%s?columns=%d&rows=%d"
 PANE_COMMAND_PATHS = MappingProxyType({
     "toggle": "/api/terminal/panes/toggle",
     "grow": "/api/terminal/panes/grow",

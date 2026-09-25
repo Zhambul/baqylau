@@ -1,0 +1,39 @@
+# ${header}
+"""Run the package in a private host: its query$e2e_summary."""
+
+import shutil
+from pathlib import Path
+
+${e2e_imports}
+OWNER = "$extension_id"
+INSTALLATION = '{"kind":"installation"}'
+PACKAGE = Path(__file__).resolve().parents[2]
+BUILT = shutil.ignore_patterns(
+    ".git", ".baqylau-dev", "wheels", "requirements.lock", "__pycache__", "*.egg-info", "build",
+)
+
+
+def installed(host: PrivateHost) -> HostClient:
+    """Copy the package into the host, build its environment, start the host, and enable the package.
+
+    Returns:
+        The client.
+
+    """
+    package = host.roots.packages / OWNER
+    shutil.copytree(PACKAGE, package, ignore=BUILT)
+    build_environment(package)
+    client = host.start()
+    assert change(client, OWNER, "enable", "enable-package").status == "succeeded"
+    return client
+${e2e_functions}
+
+def test_package(baqylau_host: PrivateHost) -> None:
+    """Enable the package in a private host, then check each declared surface."""
+    client = installed(baqylau_host)
+
+    greeting = query(client, OWNER, f"{OWNER}.greeting", QueryRequest(scope=INSTALLATION, arguments='"hi"'))
+
+    assert isinstance(greeting, QueryReady)
+    assert greeting.document.json_text == '"Hello from $extension_id."'
+${e2e_calls}

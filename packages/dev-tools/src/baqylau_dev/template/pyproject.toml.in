@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "$distribution"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["baqylau-extension-api==$sdk_version"]
+
+[project.optional-dependencies]
+test = ["baqylau-extension-testkit[browser]==$sdk_version", "baqylau-dev==$policy_version"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

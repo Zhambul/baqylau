@@ -8,7 +8,6 @@ from baqylau_extension_api.models.base import Identifier
 from extensions.models.cleanup import ShutdownRecord
 from extensions.models.lifecycle_operations import LifecycleCompletion, LifecycleOperation, LifecycleProposal
 from extensions.models.lifecycle_state import LifecycleAdmission, LifecycleState, LifecycleWrite, ManagerClaim
-from extensions.models.runtime_candidates import RuntimeCandidate
 
 
 class ExtensionLifecycleRepository(Protocol):
@@ -32,10 +31,6 @@ class ExtensionLifecycleRepository(Protocol):
 
     def read_extension_operation(self, operation_id: Identifier) -> LifecycleOperation | None:
         """Read one persisted request and its current outcome."""
-        ...
-
-    def read_extension_runtime(self, runtime_revision: str) -> RuntimeCandidate | None:
-        """Read one reserved runtime selection, including prior or failed candidates."""
         ...
 
     def record_extension_shutdown(self, record: ShutdownRecord) -> bool:

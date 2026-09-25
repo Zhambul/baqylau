@@ -11,6 +11,7 @@ import pytest
 from core.work_queue import WorkKind
 from engine import mixed_processing
 from extensions.registry_snapshot import prepare_snapshot
+from tests import storage_reads
 from tests.extension_host import mixed_processing_fixture as fixture, registry_memory_fixture
 
 
@@ -40,11 +41,11 @@ def test_continuation_resumes_then_clears_timer(tmp_path: Path, monkeypatch: pyt
     stores = case.source.runtime.stores
     first = case.pending()[0].observation.raw_event_id
     case.run()
-    journal = stores.facts.find_interpretation("default", first)
+    journal = storage_reads.find_interpretation(stores.facts, "default", first)
     case.run()
     case.run()
     assert not case.pending()
-    assert stores.facts.find_interpretation("default", first) == journal
+    assert storage_reads.find_interpretation(stores.facts, "default", first) == journal
     assert engine.interpreter.translation.accept_interpretation.call_count == fixture.ORIGINAL_COUNT
     case.engine.queue.set_deadline.assert_called_with(WorkKind.RAW, None, mixed_processing.CONTINUATION_KEY)
     case.engine.interpreter.read_sources.assert_not_called()

@@ -14,7 +14,7 @@ from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTransla
 from harness.models.session import (
     Session,
 )
-from tests.canonical_runtime import CanonicalRuntime
+from tests import canonical_runtime, storage_reads
 from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.collaboration_file_support import (
@@ -159,7 +159,7 @@ def test_claude_hook_and_transcript_tool_finish(tmp_path: Path) -> None:
     """Verify claude hook and transcript tool finish deduplicate transactionally."""
     evidence = tool_finish_evidence()
 
-    store = CanonicalRuntime(str(tmp_path / fixture.MAIN_DB_PATH))
+    store = canonical_runtime.CanonicalRuntime(str(tmp_path / fixture.MAIN_DB_PATH))
     store.register(
         CLAUDE_CODE_HARNESS,
         Session(
@@ -172,7 +172,7 @@ def test_claude_hook_and_transcript_tool_finish(tmp_path: Path) -> None:
     store.record(evidence.hook_raw, fixture.ONE_TEXT, evidence.hook)
     accepted = store.record(evidence.transcript_raw, fixture.ONE_TEXT, evidence.transcript)
     assert evidence.hook_finished.event_id not in {event.event_id for event in accepted}
-    committed = store.store.page_from(0, 10)
+    committed = storage_reads.page_from(store.store, 0, 10)
     assert evidence.hook_finished.event_id in {event.event_id for event in committed}
     finished = store.store.find(evidence.hook_finished.event_id)
     assert finished is not None

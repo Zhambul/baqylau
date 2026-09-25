@@ -3,6 +3,7 @@
 
 from baqylau_extension_api.errors import ExtensionContractError
 from baqylau_extension_api.manifest import rules
+from baqylau_extension_api.manifest.e2e import validate_case
 from baqylau_extension_api.manifest.package import ExtensionManifest
 
 
@@ -18,9 +19,9 @@ def validate_identities(manifest: ExtensionManifest) -> None:
     rules.require_unique((case.case_id for case in manifest.e2e), "E2E case IDs")
     rules.require_unique((peer.extension_id for peer in manifest.dependencies), "dependency IDs")
     _validate_order(manifest)
+    dependencies = frozenset(peer.extension_id for peer in manifest.dependencies)
     for case in manifest.e2e:
-        rules.require_unique(case.surfaces, "E2E surfaces")
-        rules.require_unique(case.harnesses, "E2E harnesses")
+        validate_case(case, dependencies)
     if any(peer.extension_id == manifest.extension_id for peer in manifest.dependencies):
         message = "an extension cannot depend on itself"
         raise ExtensionContractError(message)

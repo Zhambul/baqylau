@@ -7,6 +7,7 @@ export type InstallationScope = components['schemas']['InstallationScope'];
 export type ExtensionScope =
   SessionScope | WorkspaceScope | RepositoryScope | InstallationScope;
 export type EncodedDocument = components['schemas']['EncodedDocument'];
+export type Diagnostic = components['schemas']['Diagnostic'];
 export type SchemaRef = components['schemas']['SchemaRef'];
 export type SchemaDefinition = components['schemas']['SchemaDefinition'];
 export type ContentReference = components['schemas']['ContentReference'];

@@ -130,28 +130,6 @@ class SqliteCanonicalEventRepository(CanonicalEventRepository):
             ).fetchall()
         return tuple(ids.SessionId(row["session_id"]) for row in found)
 
-    def page_from(self, cursor: int, limit: int) -> tuple[CanonicalEvent[EventPayload], ...]:
-        """Return the page from.
-
-        Returns:
-            Page from.
-
-        Raises:
-            ValueError: If an input value is not valid.
-
-        """
-        if limit <= 0:
-            message = "event page limit must be positive"
-            raise ValueError(message)
-        with self.sqlite_database.read() as connection:
-            tables = current_facts.current_tables(connection)
-            found = connection.execute(
-                f"SELECT * FROM {tables.canonical} "  # noqa: S608 -- Fixed repository view.
-                "WHERE cursor>? AND session_id IS NOT NULL ORDER BY cursor LIMIT ?",
-                (cursor, limit),
-            ).fetchall()
-        return tuple(mapper.row_canonical_event(rows.canonical_event(row)) for row in found)
-
 
 def _record_events(
     connection: sqlite3.Connection,

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Zhambyl Yermagambet
-"""Check peer-service replies before returning them to an extension."""
+"""Check peer-service resolution and query replies before returning them to an extension."""
 
 from pydantic import TypeAdapter
 
@@ -46,6 +46,11 @@ def _require_resolved_queries(response: ServiceResolved) -> None:
     rules.require_owned((query.name for query in response.queries), response.binding.owner)
     if any(response.binding.scope.kind not in query.scopes for query in response.queries):
         message = "service query metadata changed its selected scope"
+        raise ExtensionContractError(message)
+    rules.require_unique((command.name for command in response.commands), "service command IDs")
+    rules.require_owned((command.name for command in response.commands), response.binding.owner)
+    if any(response.binding.scope.kind not in command.scopes for command in response.commands):
+        message = "service command metadata changed its selected scope"
         raise ExtensionContractError(message)
 
 

@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import _extension_sections
 import _handoff
 import _model
 import _pane_connection
@@ -26,10 +27,11 @@ PANE_ARGUMENT_COUNT = 4
 class Pane(_pane_rendering.PaneRendering, _pane_signals.PaneSignals, _pane_state.PaneState):
     """Hold state for one terminal-pane connection."""
 
-    def __init__(self, kind: str, session_id: str) -> None:
+    def __init__(self, kind: str, session_id: str, sections: _extension_sections.SectionCache) -> None:
         """Initialize the object."""
         self.kind = kind
         self.session_id = session_id
+        self.sections = sections
         self.model = _model.SessionModel()
         self.width = _pane_rendering.terminal_width()
         self._busy = False
@@ -55,7 +57,7 @@ def _arguments(arguments: list[str]) -> tuple[str, int, str, str]:
 
 def _run_pane(host: str, port: int, session_id: str, kind: str) -> None:
     while True:
-        pane = Pane(kind, session_id)
+        pane = Pane(kind, session_id, _extension_sections.SectionCache(host, port, session_id, kind))
         signal.signal(signal.SIGWINCH, pane.resized)
         signal.signal(_handoff.REPAINT_SIGNAL, pane.expanded)
         _handoff.hold(session_id, kind)

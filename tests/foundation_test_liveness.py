@@ -11,6 +11,7 @@ from tests import (
     foundation_test_interpreter,
     foundation_test_reactions,
     foundation_test_sources,
+    storage_reads,
 )
 
 IGNORED_TRANSLATION = foundation_components.raw_events.TranslationResult(
@@ -43,7 +44,8 @@ def assert_output_following_started(runtime: foundation_test_events.InterpreterR
     }
     assert TOOL_OUTPUT_SOURCE_TYPE in chunk_types
     assert len(runtime.shell_output.find_for_session(PRIMARY_SESSION)) == 1
-    committed_types = {type(stored.payload) for stored in runtime.store.page_from(0, 100)}
+    committed = storage_reads.page_from(runtime.store, 0, 100)
+    committed_types = {type(stored.payload) for stored in committed}
     assert foundation_dependencies.domain.event_shell.ShellOutputLocated in committed_types
 
 

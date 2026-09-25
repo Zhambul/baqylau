@@ -22,6 +22,7 @@ class _SessionModelState:
     """Declare state shared by session-model roles."""
 
     cursor: int
+    entry_cursor: int
     session: SessionRecord
     actors: dict[str, ActorRecord]
     live: bool
@@ -63,7 +64,8 @@ class _SessionModelIngress(_SessionModelState):
         entry_id = entry.entry_id
         if entry_id in self._entries or entry_id in self._dropped:
             return
-        self.cursor = max(self.cursor, entry.cursor)
+        # An entry's cursor is its row, not a canonical cursor; the stream takes it as `after_entry`.
+        self.entry_cursor = max(self.entry_cursor, entry.cursor)
         self._entries[entry_id] = entry
         if entry.type in SHELL_ENTRIES:
             self._fold_shell(entry)

@@ -16,7 +16,8 @@ from tests.sdk_test_transports import EventStreamTransport
 OWNER = "test.owner"
 COLLECTION = "test.owner.notes"
 SCOPE = scopes.InstallationScope()
-DIGEST = "a" * 64
+DIGEST_LENGTH = 64
+DIGEST = "a" * DIGEST_LENGTH
 SCHEMA_REF = documents.SchemaRef(owner=OWNER, name="text", version=1, digest=DIGEST)
 KEY = records.RecordKey(owner=OWNER, collection=COLLECTION, scope=SCOPE, key="note-1")
 STATE = records.StoredRecord(

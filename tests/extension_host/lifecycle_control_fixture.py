@@ -8,6 +8,7 @@ from typing import Literal
 from extensions import capture_scanner, discovery
 from extensions.lifecycle_control import LifecycleControl
 from extensions.models.lifecycle_requests import LifecycleRequest
+from repository.impl.sqlite.record_migrations import SqliteRecordMigrationStore
 from tests.extension_host import catalog_fixture, manager_fixture, package_fixture, runtime_host_fixture
 
 
@@ -60,7 +61,10 @@ def open_control(directory: Path) -> ControlHost:
     """
     runtime = runtime_host_fixture.host(directory, claimed=False)
     host = manager_fixture.start_manager(runtime, runtime.preparation)
-    control = ControlHost(host, LifecycleControl(host.controller, catalog_fixture.repository(directory)))
+    catalog = catalog_fixture.repository(directory)
+    control = ControlHost(host, LifecycleControl(
+        host.controller, catalog, records=SqliteRecordMigrationStore(catalog.database),
+    ))
     host.finish()
     control.rescan()
     return control

@@ -1,0 +1,9 @@
+{
+  "extends": "@baqylau/dev-tools/tsconfig/browser",
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "types": []
+  },
+  "include": ["web/**/*.js"]
+}

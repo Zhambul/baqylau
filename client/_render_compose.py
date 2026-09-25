@@ -77,6 +77,7 @@ def entry_rows(
         "compaction_finished",
         "model_change",
         "effort_change",
+        "extension",
     }:
         rendered = _note_rows(entry, width)
     else:
@@ -127,6 +128,23 @@ def mirror(
         Mirror.
 
     """
+    return mirror_screen(mirror_rows(model, width, copy=copy, view=view, opened=opened), width)
+
+
+def mirror_rows(
+    model: SessionModel,
+    width: int,
+    *,
+    copy: Links = _no_link,
+    view: Links = _no_link,
+    opened: frozenset[str] = EMPTY_ENTRY_IDS,
+) -> list[str]:
+    """Paint the feed and the task panel, without the header.
+
+    Returns:
+        The mirror rows.
+
+    """
     lead_actor_id = model.lead_actor_id()
     painted: list[str] = []
     for feed_record in model.feed():
@@ -151,6 +169,18 @@ def mirror(
     tasks = task_rows(model, width)
     if tasks:
         painted.extend(["", _rule(width), *tasks])
+    return painted
+
+
+def mirror_screen(painted: list[str], width: int, sections: tuple[str, ...] = ()) -> str:
+    """Put the header over the mirror rows; extension sections follow the task panel.
+
+    Returns:
+        The whole pane.
+
+    """
+    if sections:
+        painted = [*painted, "", _rule(width), *sections]
     return screen(
         painted,
         rows(

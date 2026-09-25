@@ -6,6 +6,8 @@ from contextlib import AbstractContextManager
 from typing import Protocol
 
 from extensions.interpretation_contract import CoreInterpretation
+from extensions.models.interpretations import InterpretationOutcome
+from extensions.models.observations import StoredObservation
 from extensions.registry_package import RegistryPackage
 from extensions.source_processing_contract import ExtensionSourceBatch
 
@@ -16,6 +18,12 @@ class ExtensionProcessingBatch(ExtensionSourceBatch, Protocol):
     @property
     def packages(self) -> tuple[RegistryPackage, ...]:
         """The active runtime's ordered packages."""
+        ...
+
+    def interpret_history(
+        self, original: StoredObservation, core: CoreInterpretation, history_revision: str,
+    ) -> InterpretationOutcome:
+        """Replay one original into a candidate history with the retained runtime and no live notices."""
         ...
 
     def interpret_pending(

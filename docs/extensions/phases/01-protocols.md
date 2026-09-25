@@ -22,7 +22,7 @@ Read [architecture](../architecture.md), [protocols](../protocols.md), and the c
 
 ### P01-T01 — Fix ownership and the import boundary
 
-Status: in_progress
+Status: done
 
 Owner: Codex
 
@@ -42,9 +42,11 @@ Evidence: `packages/extension-api/src/baqylau_extension_api/` is independently i
 
 Remaining: Complete the canonical-transform application trace and final import-boundary review. Runtime providers and engine constructors now consume narrow host protocols. The P04 source path traces a real engine call through the public source protocol to a separate worker and atomic storage. This does not yet prove the canonical-transform path. See the [engine source record](04-events.md#work-record--engine-source-integration).
 
+Status result (2026-09-25): Canonical-transform trace, from the engine to a separate worker: `engine/worker.py` calls `mixed_processing.read_mixed` with an `ExtensionProcessingBatch`, the protocol in `extensions/processing_contract.py`; `extensions/processing_batch.py` builds `InterpretationPipeline`, and `extensions/interpretation_canonical.py` calls `plugin.capabilities.canonical_transformer.transform(request)` through the public `ExtensionCanonicalTransformer` protocol. For an installed package, `extensions/impl/process/capabilities.py` gives that capability as the SDK's `RemoteCanonicalTransformer` (`runtime/proxies.py`), which sends `CANONICAL_TRANSFORM` over the worker channel; the worker's `runtime/dispatch.py` checks the pure context and calls the package's own class. Import review: `engine/` imports only extension contracts and host services (`processing_contract`, `manager_contract`, `job_scheduling_contract`, `pass_health`, `observer_pass`, interpretation models), never feature code or `extensions/impl/process`, which only the application wiring selects. The architecture tests (`tests/test_architecture_*.py`) and the SDK boundary tests (`tests/extension_api/test_boundaries.py`) enforce these rules, and external packages build and run with no host source on their path (the kit's `test_outside_checkout.py`, and the separate `baqylau-git` package).
+
 ### P01-T02 — Define core, extension, and scope models
 
-Status: in_progress
+Status: done
 
 Owner: Codex
 
@@ -64,9 +66,11 @@ Evidence: The SDK has frozen, strict Pydantic models for four scopes, schema and
 
 Remaining: Define stored cause resolution and host history and runtime authority checks. Typed core derived changes and projection-transform checks now exist. Draft extension feed entries have explicit response order and stable scoped identities. Host commit positions, paging, and atomic storage remain pending. Raw content delivery and operation checks exist, with separate raw and canonical derived IDs. The full core union and mapper, opaque IDs, lexical repository path rules, canonical operation ownership, insertion keys, and batch scope checks also exist. Current checks cover parts of C06, C09, and C21; they do not complete these conformance cases end to end.
 
+Status result (2026-09-25): The remaining items are closed by later work: stored cause existence and cycle checks and host commit positions with atomic storage (P04-T04), history revisions (P05-T04), and runtime authority through host call grants (P03-T03). C06 and C09 are complete with public evidence (P08-T03), and C21 is proven by the `baqylau-git` package (P10-T01, P10-T02).
+
 ### P01-T03 — Define protocol capabilities and typed adapters
 
-Status: in_progress
+Status: done
 
 Owner: Codex
 
@@ -84,7 +88,7 @@ Verification: Strict mypy accepts valid implementations and rejects incorrect si
 
 Evidence: `ExtensionPlugin`, `ExtensionCapabilities`, `ExtensionFactory`, `ExtensionLifecycle`, `ExtensionRawTransformer`, `ExtensionDirectory`, and `ExtensionHostServices` exist. The main protocol uses `extension_info` to meet the current Wemake name rule. `tests/extension_api/example.py` is a backend fixture with SDK imports only. It selects an optional raw transformer from active peer metadata. Tests cover lifecycle results, absent capabilities, frozen capabilities, typed drop operations, and active versus disabled peers. Strict mypy rejects an incorrect external transform return type. The architecture check rejects a matching method without its explicit protocol base.
 
-Remaining: Add the record reader, observation sink, process, inference, credential, and audit host-service contracts with complete models and typed callbacks. Add directory lifecycle notifications and durable peer command acceptance. All 12 backend capability protocols and process adapters now exist in draft form. The canonical transformer contract uses the full fact union. Add application consumers and the full service access checks. Backend-free manifests and an independent web prototype pass, but the main dashboard does not mount extensions yet.
+Remaining: The only capability without a host consumer is `terminal`; it is connected in P07. The dashboard mounts extension views since P06-T02, and every other capability has an application consumer (sources and translator in P04, transforms in P04, projector, projection transformer, observer, queries, commands, and migrations in P05). All host services exist: directory, peer access, credentials, processes, inference, record reader, observation sink, and audit, with removal notices at activation and durable peer command acceptance (see the host services work record, P05-T05, P03-T03, P05-T03). All 12 backend capability protocols and process adapters now exist in draft form. The canonical transformer contract uses the full fact union. Add application consumers and the full service access checks.
 
 Evidence added: Typed lifecycle, raw, and canonical proxies now call a separate worker through the same protocols as local implementations. The SDK-only fixture implements and tests all three across the process boundary. Factory peer lookup also crosses that boundary. `ExtensionHostServices.environment` supplies the host-selected identity. No engine constructor uses these proxies yet.
 
@@ -104,9 +108,11 @@ Evidence added: `ExtensionObserver` now binds one committed trigger to an accept
 
 Evidence added: `ExtensionServiceAccess` now resolves declared peer services and calls their public queries through typed callbacks. Caller identity comes from the worker connection. Host-held grants keep scope, runtime, original deadline, and active parent links outside feature payloads. Separate workers cooperate in both load orders and reject missing authority, pure calls, and service cycles. Tests also cover version changes, hidden queries, schemas, reply bindings, expiry, revocation, and bounds. Peer commands, the daemon catalog, removal notices, and atomic lifecycle coordination remain pending.
 
+Status result (2026-09-25): Every capability has an application consumer: the terminal presenter is connected in P07 (`extensions/terminal_presentation.py`), and since P10-T02 a terminal view can also read its package's query. Service access checks are complete: declared peer services resolve through `HostCallLedger` grants, and HTTP queries open a root grant (P08-T03).
+
 ### P01-T04 — Define manifests and API compatibility
 
-Status: in_progress
+Status: done
 
 Owner: Codex
 
@@ -129,6 +135,8 @@ Evidence added: Data-only manifests, API range checks, capability and service de
 Remaining: Compare installed files with their declarations. Verify processing selectors against the installed host and extension vocabulary. Connect compatibility checks to discovery and persisted schema records. Define the release compatibility matrix after the remaining host-service contracts. Do not mark this task done from data-only validation alone.
 
 Evidence added: The separate worker loader checks identity and all 12 implemented capability groups against the manifest. It rejects invalid API, owner, and version declarations before feature import. Installed file and application compatibility checks are still pending.
+
+Status result (2026-09-25): Installed files are compared with their declarations at discovery (asset hashes, E2E files, and the backend module; P03-T01), and incompatible API versions are reported there. Processing selectors are now checked against the vocabulary (`manifest/selections.py`): a fact selection must name a core event kind, an owned declared event type, or another package's namespace, and a present package must declare the type; `tests/extension_api/test_selection_vocabulary.py`. The check found two test manifests that selected feed entry kinds (`shell_started`, `session_title_changed`) as fact types, which matched no fact. Stored schemas serve data after package removal (P05 retained owners). The release compatibility matrix for the first version is in `docs/extensions/release.md`.
 
 ### P01-T05 — Test process transport and independent views
 
@@ -639,3 +647,25 @@ Limits: The daemon still has no package discovery service, active provider catal
 Overall status: P01 and P02 remain in progress. P02-T02 is the only complete subtask, and no phase is complete. The settings page, web and Kitty application hosts, storage integration, complete extension test kit, adapters package, and Git package remain open. No live harness, real Kitty, external adapters service, or Git product E2E ran.
 
 Next action: Finish the remaining host-service contracts and external quality/template work, then connect the tested protocols to application-owned discovery and supervision. Keep the full event, storage, settings, frontend, adapters, and Git work in scope. A tested SDK protocol is not a substitute for a working host path.
+
+## Work record — process, inference, and record host services
+
+Date: 2026-09-24
+
+Owner: Claude Code
+
+Status: done
+
+Context: The Git and adapters packages (P09, P10) need to run programs, call the user's models, and read their own records.
+
+Decisions:
+1. A manifest declares `contributions.processes`: a name, one bare executable name, and a maximum run time of at most 600 seconds. `ExtensionProcessService.run_process` takes a declared name, an argument array, a working directory, and an optional shorter deadline. The host finds the executable on `PATH`, never runs a shell, runs it in its own process group through the existing bounded runner, and returns the exit code and output, or `timed_out`, `output_limit`, or `not_found`. An undeclared name or a missing directory is refused.
+2. A manifest sets `contributions.uses_inference`. `ExtensionInferenceService.infer` names a size class (small, mid, big) and a bounded prompt; the host sends it to the user's configured model of that class and returns the text or `unavailable`, without provider details.
+3. `ExtensionRecordReader.read_records` reads one ordered page of a declared collection of the calling package; the owner is always the worker's own package.
+4. Each service is in `ExtensionHostServices` only when the manifest declares it. All three are live-lane RPC calls; pure calls cannot reach them. `extensions/worker_host_services.py` assembles the services for one worker.
+
+Verification: `tests/test_process_access.py` runs a program with shell syntax in its arguments, a timeout, a missing executable, an undeclared name, and a missing directory. `tests/test_inference_access.py` selects the size class and reports an unavailable model. `tests/test_record_access.py` reads a page and refuses an undeclared collection. `tests/extension_host/test_process_worker.py` runs `echo` for a real worker at activation. The main selection passes 3,459 cases.
+
+Status result: The process, inference, and record reader services are done.
+
+Addendum (same date): `ExtensionObservationSink.submit_observations` appends a worker's new originals in one scope, with their causes, through the same validation as source and observer appends; only a worker of the committed runtime can submit, as its committed manager. It exists when the manifest declares source types. `ExtensionAuditService.record_diagnostic` stores a typed diagnostic with its optional scope, job, and event in the audit errors table, named `extension:<owner>` with the diagnostic code; it exists for every worker. `tests/test_observation_sink.py` and `tests/test_audit_access.py` cover them. The main selection passes 3,462 cases.

@@ -1,0 +1,6 @@
+# The SDK writes the manifest; the Python tools own the other files.
+extension.json
+.venv/
+.baqylau-dev/
+wheels/
+build/

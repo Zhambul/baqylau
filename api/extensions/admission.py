@@ -5,7 +5,7 @@ from http import HTTPStatus
 
 from fastapi import HTTPException, Request
 
-from app.provider_extension_controls import ControlPolicy
+from app.provider_extension_policy import ControlPolicy
 from extensions.control_policy import require_extension_write
 
 

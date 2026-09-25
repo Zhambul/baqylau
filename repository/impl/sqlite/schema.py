@@ -35,7 +35,7 @@ from __future__ import annotations
 
 from types import MappingProxyType
 
-MAIN_SCHEMA_VERSION = 37
+MAIN_SCHEMA_VERSION = 41
 AUDIT_SCHEMA_VERSION = 1
 TOOL_COUNTS_REPAIR_VERSION = 15
 FIRST_REPEATED_REPAIR_VERSION = 21
@@ -694,6 +694,162 @@ _EXTENSION_JOB_TABLES = (
     ),
 )
 
+_EXTENSION_OBSERVER_CURSOR_TABLES = (
+    """
+    CREATE TABLE IF NOT EXISTS extension_observer_cursors(
+        owner TEXT NOT NULL,
+        scope TEXT NOT NULL CHECK(json_valid(scope)),
+        history_revision TEXT NOT NULL,
+        generation TEXT NOT NULL,
+        commit_cursor INTEGER NOT NULL CHECK(commit_cursor >= 0),
+        updated_at REAL NOT NULL,
+        PRIMARY KEY(owner, scope, history_revision, generation)
+    )
+    """,
+)
+
+_CANONICAL_SCOPE_HEAD_TABLES = (
+    """
+    CREATE TABLE IF NOT EXISTS canonical_scope_heads(
+        history_revision TEXT NOT NULL,
+        scope TEXT NOT NULL CHECK(json_valid(scope)),
+        head_cursor INTEGER NOT NULL CHECK(head_cursor >= 1),
+        scope_kind TEXT GENERATED ALWAYS AS (json_extract(scope, '$.kind')) STORED,
+        PRIMARY KEY(history_revision, scope)
+    )
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS canonical_scope_head_after_event
+    AFTER INSERT ON canonical_events
+    BEGIN
+        INSERT INTO canonical_scope_heads(history_revision, scope, head_cursor)
+        VALUES(NEW.history_revision, NEW.scope, NEW.cursor)
+        ON CONFLICT(history_revision, scope) DO UPDATE SET head_cursor=MAX(head_cursor, excluded.head_cursor);
+    END
+    """,
+)
+
+_EXTENSION_JOB_STATE_INDEX = (
+    "CREATE INDEX IF NOT EXISTS index_extension_jobs_state ON extension_jobs(state, updated_at, job_id)"
+)
+
+_CANONICAL_SCOPE_HEAD_MIGRATION = (
+    *_CANONICAL_SCOPE_HEAD_TABLES,
+    _EXTENSION_JOB_STATE_INDEX,
+    """
+    INSERT OR REPLACE INTO canonical_scope_heads(history_revision, scope, head_cursor)
+    SELECT history_revision, scope, MAX(cursor) FROM canonical_events GROUP BY history_revision, scope
+    """,
+)
+
+_EXTENSION_HEALTH_TABLES = (
+    """
+    CREATE TABLE IF NOT EXISTS extension_health(
+        extension_id TEXT PRIMARY KEY,
+        state TEXT NOT NULL CHECK(state IN ('healthy', 'failing', 'failed')),
+        consecutive_failures INTEGER NOT NULL CHECK(consecutive_failures >= 0),
+        last_failure_where TEXT,
+        last_failure_at REAL,
+        last_success_at REAL
+    )
+    """,
+)
+
+_EXTENSION_PROJECTION_GENERATION_TABLES = (
+    """
+    CREATE TABLE IF NOT EXISTS history_reprocessings(
+        history_revision TEXT PRIMARY KEY REFERENCES canonical_histories(history_revision),
+        session_id TEXT NOT NULL,
+        state TEXT NOT NULL CHECK(state IN ('building', 'ready', 'switching', 'active', 'retired', 'failed')),
+        replay_cursor INTEGER NOT NULL CHECK(replay_cursor >= 0),
+        live_head INTEGER NOT NULL CHECK(live_head >= 0),
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL,
+        comparison TEXT CHECK(json_valid(comparison)),
+        diagnostic TEXT CHECK(json_valid(diagnostic))
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS index_history_reprocessings_state ON history_reprocessings(state, created_at)",
+    """
+    CREATE TABLE IF NOT EXISTS extension_consumer_floors(
+        consumer TEXT NOT NULL CHECK(consumer IN ('projection', 'observer')),
+        owner TEXT NOT NULL,
+        history_revision TEXT NOT NULL,
+        generation TEXT NOT NULL,
+        floor_cursor INTEGER NOT NULL CHECK(floor_cursor >= 0),
+        created_at REAL NOT NULL,
+        PRIMARY KEY(consumer, owner, history_revision, generation)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS read_model_views(
+        id INTEGER PRIMARY KEY CHECK(id = 1),
+        revision INTEGER NOT NULL CHECK(revision >= 0)
+    )
+    """,
+    "INSERT OR IGNORE INTO read_model_views(id, revision) VALUES(1, 0)",
+    """
+    CREATE TABLE IF NOT EXISTS extension_projection_generations(
+        generation TEXT PRIMARY KEY,
+        owner TEXT NOT NULL,
+        history_revision TEXT NOT NULL,
+        state TEXT NOT NULL CHECK(state IN ('building', 'migrating', 'ready', 'active', 'retired', 'failed')),
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL,
+        comparison TEXT CHECK(json_valid(comparison)),
+        diagnostic TEXT CHECK(json_valid(diagnostic))
+    )
+    """,
+    (
+        "CREATE INDEX IF NOT EXISTS index_extension_projection_generations_owner "
+        "ON extension_projection_generations(owner, state)"
+    ),
+    """
+    CREATE TABLE IF NOT EXISTS extension_projection_heads(
+        owner TEXT PRIMARY KEY,
+        generation TEXT NOT NULL REFERENCES extension_projection_generations(generation),
+        switched_at REAL NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS extension_candidate_records(
+        generation TEXT NOT NULL REFERENCES extension_projection_generations(generation),
+        owner TEXT NOT NULL,
+        collection TEXT NOT NULL,
+        record_key TEXT NOT NULL,
+        scope TEXT NOT NULL CHECK(json_valid(scope)),
+        state TEXT NOT NULL CHECK(state IN ('stored', 'deleted')),
+        revision INTEGER NOT NULL CHECK(revision >= 1),
+        schema_ref TEXT NOT NULL CHECK(json_valid(schema_ref)),
+        document TEXT,
+        summary TEXT,
+        PRIMARY KEY(generation, owner, collection, scope, record_key)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS extension_candidate_entries(
+        generation TEXT NOT NULL REFERENCES extension_projection_generations(generation),
+        owner TEXT NOT NULL,
+        commit_cursor INTEGER NOT NULL,
+        position INTEGER NOT NULL,
+        entry_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        entry_type TEXT NOT NULL,
+        actor_id TEXT NOT NULL,
+        parent_actor_id TEXT,
+        turn_id TEXT,
+        occurred_at REAL,
+        summary TEXT,
+        payload TEXT NOT NULL,
+        PRIMARY KEY(generation, entry_id)
+    )
+    """,
+    (
+        "CREATE INDEX IF NOT EXISTS index_extension_candidate_entries_owner "
+        "ON extension_candidate_entries(generation, owner)"
+    ),
+)
+
 _EXTENSION_RESOLUTION_TABLES = (
     """
     CREATE TABLE IF NOT EXISTS extension_runtime_resolutions(
@@ -771,9 +927,30 @@ def _repeat_repairs(
 # Version 37 stores accepted command and observer jobs. A command deduplicates
 # on its request key; an observer deduplicates on its cause event. Both keep a
 # monotonic revision, a typed binding, and an optional final result.
+# Version 38 stores the observer consumer cursor per owner, scope, history, and
+# generation, written with the accepted observer job in one transaction.
+# Version 39 keeps the last canonical cursor of each history scope. A trigger
+# updates it on every fact insert, so a projection or observer pass can find the
+# scopes after its own cursors without a scan of every fact. It also indexes
+# extension jobs by state, so recovery and scheduling read one state in order.
+# Version 40 adds projection generations. The live record and feed tables keep
+# only the active generation of each owner. A rebuild writes a candidate
+# generation into mirror tables; a switch moves rows between the two in one
+# transaction, and keeps the previous generation in the mirror for recovery.
+# `read_model_views` counts switches, so a session stream can reset its client.
+# `extension_consumer_floors` starts a newly active live projector or observer
+# at the canonical head, so enable applies to future facts; only an explicit
+# rebuild reads the past. `history_reprocessings` records one closed session's
+# replay into a candidate history, its comparison, and its switch.
+# Version 41 keeps each extension's consecutive worker failures and health
+# state, so that a failing extension stays visible across a restart.
 MAIN_MIGRATIONS = _repeat_repairs({
     34: _EXTENSION_SHUTDOWN_TABLES,
     37: _EXTENSION_JOB_TABLES,
+    38: _EXTENSION_OBSERVER_CURSOR_TABLES,
+    39: _CANONICAL_SCOPE_HEAD_MIGRATION,
+    40: _EXTENSION_PROJECTION_GENERATION_TABLES,
+    41: _EXTENSION_HEALTH_TABLES,
     5: (
         """
         UPDATE session_data_actors
@@ -1644,7 +1821,9 @@ MAIN_SCHEMA = "".join((
         *_INTERPRETATION_JOURNAL_TABLES,
         *_EXTENSION_CATALOG_TABLES, *_EXTENSION_LIFECYCLE_TABLES, *_EXTENSION_RESOLUTION_TABLES,
         *_EXTENSION_SOURCE_TABLES, *_EXTENSION_RECORD_TABLES,
-        *_EXTENSION_SHUTDOWN_TABLES, *_EXTENSION_JOB_TABLES,
+        *_EXTENSION_SHUTDOWN_TABLES, *_EXTENSION_JOB_TABLES, *_EXTENSION_OBSERVER_CURSOR_TABLES,
+        *_CANONICAL_SCOPE_HEAD_TABLES, _EXTENSION_JOB_STATE_INDEX, *_EXTENSION_PROJECTION_GENERATION_TABLES,
+        *_EXTENSION_HEALTH_TABLES,
     )), ";\n",
 ))
 

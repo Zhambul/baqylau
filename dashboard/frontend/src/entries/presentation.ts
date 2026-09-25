@@ -520,6 +520,14 @@ export function presentEntry(
         null,
         'state',
       );
+    case 'extension':
+      return note(
+        entry,
+        entry.summary ?? `${entry.body.owner}: ${entry.body.entryType}`,
+        EMPTY,
+        null,
+        'state',
+      );
   }
 }
 

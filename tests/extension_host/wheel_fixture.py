@@ -16,8 +16,8 @@ from extensions.preparation_runner import BoundedPreparationRunner
 SDK_ROOT = Path(__file__).resolve().parents[2] / "packages" / "extension-api"
 
 
-def build_wheels(directory: Path) -> Path:
-    """Build the real SDK and pack the installed mandatory dependencies for tests.
+def build_wheels(directory: Path, package_root: Path = SDK_ROOT) -> Path:
+    """Build one real package, the SDK by default, and pack its installed mandatory dependencies for tests.
 
     Returns:
         Offline wheel files with regenerated RECORD data, not a release wheelhouse.
@@ -25,8 +25,8 @@ def build_wheels(directory: Path) -> Path:
     """
     wheelhouse = directory / "wheels"
     wheelhouse.mkdir()
-    source = directory / "sdk"
-    shutil.copytree(SDK_ROOT, source, ignore=shutil.ignore_patterns("build", "*.egg-info", "__pycache__"))
+    source = directory / "source"
+    shutil.copytree(package_root, source, ignore=shutil.ignore_patterns("build", "*.egg-info", "__pycache__"))
     _run(directory, (
         "pip", "wheel", str(source), "--no-build-isolation", "--no-deps", "--no-index",
         "--no-cache-dir", "--wheel-dir", str(wheelhouse),

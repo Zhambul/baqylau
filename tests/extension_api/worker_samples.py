@@ -30,7 +30,7 @@ def load_request() -> WorkerLoadRequest:
         "contributions": Contributions(processing=(
             ProcessingSelection(capability="raw_transformer", scopes=("session",), input_types=("test.record",)),
             ProcessingSelection(
-                capability="canonical_transformer", scopes=("session",), input_types=("session_title_changed",),
+                capability="canonical_transformer", scopes=("session",), input_types=("session.title_changed",),
             ),
         )),
     })

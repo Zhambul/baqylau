@@ -1,0 +1,30 @@
+# ${header}
+"""The greeting query answers in its declared schema."""
+
+from baqylau_extension_api.models import queries
+from baqylau_extension_api.models.documents import EncodedDocument, SchemaRef
+from baqylau_extension_api.models.operations import OperationBinding
+from baqylau_extension_api.models.scopes import InstallationScope
+
+from $module.backend import GREETING, Greeting
+
+SCHEMA = SchemaRef(
+    owner="$extension_id", name="text", version=1,
+    digest="$text_digest",
+)
+
+
+def test_greeting() -> None:
+    """The query gives the greeting."""
+    binding = OperationBinding(
+        extension_id="$extension_id", operation_id="$extension_id.greeting", scope=InstallationScope(),
+        runtime_revision="runtime-1", call_id="call-1",
+    )
+    request = queries.QueryRequest(
+        binding=binding, arguments=EncodedDocument(schema_ref=SCHEMA, json_text='"hi"'), settings_revision=0,
+    )
+
+    result = Greeting().query(request)
+
+    assert isinstance(result, queries.QueryReady)
+    assert result.document.json_text == GREETING

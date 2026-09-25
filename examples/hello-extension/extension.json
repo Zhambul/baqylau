@@ -1,0 +1,122 @@
+{
+  "extension_id": "example.hello",
+  "name": "Hello example",
+  "description": "A small external package for extension authors.",
+  "package_version": "1.0.0",
+  "api_requires": "==0.1.0a1",
+  "quality_policy": "0.1.0a1",
+  "backend": {
+    "module": "hello_backend",
+    "environment": {
+      "requirements": "requirements.lock",
+      "wheelhouse": "wheels"
+    }
+  },
+  "capabilities": [
+    "lifecycle",
+    "projector",
+    "queries",
+    "terminal"
+  ],
+  "schemas": [
+    {
+      "reference": {
+        "owner": "example.hello",
+        "name": "text",
+        "version": 1,
+        "digest": "00404e686415370f1711c4d7acfa2905444d3cf23cef2e10c47d445ebe690f96"
+      },
+      "json_text": "{\"type\":\"string\"}"
+    }
+  ],
+  "contributions": {
+    "entry_types": [
+      {
+        "name": "example.hello.card",
+        "schema_ref": {
+          "owner": "example.hello",
+          "name": "text",
+          "version": 1,
+          "digest": "00404e686415370f1711c4d7acfa2905444d3cf23cef2e10c47d445ebe690f96"
+        },
+        "scopes": [
+          "session"
+        ]
+      }
+    ],
+    "processing": [
+      {
+        "capability": "projector",
+        "scopes": [
+          "session"
+        ],
+        "input_types": [
+          "turn.finished"
+        ]
+      }
+    ],
+    "queries": [
+      {
+        "name": "example.hello.greeting",
+        "scopes": [
+          "installation"
+        ],
+        "arguments": {
+          "owner": "example.hello",
+          "name": "text",
+          "version": 1,
+          "digest": "00404e686415370f1711c4d7acfa2905444d3cf23cef2e10c47d445ebe690f96"
+        },
+        "result": {
+          "owner": "example.hello",
+          "name": "text",
+          "version": 1,
+          "digest": "00404e686415370f1711c4d7acfa2905444d3cf23cef2e10c47d445ebe690f96"
+        }
+      }
+    ],
+    "web": [
+      {
+        "view_id": "example.hello.page",
+        "title": "Hello",
+        "slot": "workspace_page",
+        "scopes": [
+          "workspace"
+        ],
+        "module": "web/hello.js"
+      }
+    ],
+    "terminal": [
+      {
+        "view_id": "example.hello.status",
+        "title": "Hello",
+        "scopes": [
+          "installation"
+        ],
+        "pane": "hello"
+      }
+    ]
+  },
+  "assets": [
+    {
+      "path": "web/hello.js",
+      "digest": "308c14213407f0c5a3c2867e11cc8a36bde48488a569b9a75ea8e9ca44c6198a",
+      "media_type": "text/javascript"
+    }
+  ],
+  "e2e": [
+    {
+      "case_id": "example",
+      "path": "tests/e2e/test_hello.py",
+      "surfaces": [
+        "worker",
+        "api",
+        "web",
+        "kitty"
+      ],
+      "harness_limit": {
+        "reason": "The example reads core facts through the host and starts no harness."
+      }
+    }
+  ]
+}

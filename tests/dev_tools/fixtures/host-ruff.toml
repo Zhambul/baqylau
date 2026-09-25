@@ -85,6 +85,8 @@ combine-as-imports = true
 # StructuredContent holds arbitrary tool JSON as text. It does not declare or
 # encode a document that belongs to this application.
 "domain/content.py" = ["TID251"]
+"examples/*/**/*.py" = ["INP001"]
+"examples/*/tests/**/*.py" = ["INP001", "S101"]
 # Vulture reads these files as name lists. Python does not execute them.
 "vulture_*.py" = ["B018", "F821"]
 

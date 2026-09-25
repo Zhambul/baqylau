@@ -53,6 +53,7 @@ export class ExtensionViewHost {
         next.extensionId !== initial.extensionId ||
         next.viewId !== initial.viewId ||
         next.runtimeRevision !== initial.runtimeRevision ||
+        next.subject?.entryId !== initial.subject?.entryId ||
         scopeKey(next.scope) !== scopeKey(initial.scope)
       ) {
         throw new Error('Changed view identity needs a new mount.');

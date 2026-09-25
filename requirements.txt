@@ -9,4 +9,5 @@ bashlex>=0.18      # parse shell redirects without executing the command
 watchdog>=6,<7     # native file change events for engine inputs
 uv>=0.7.4,<1       # isolated, offline extension dependency environments
 filelock>=3.32.6,<4 # native process ownership for one extension runtime store
+keyring>=25.7,<26  # extension secret values in the macOS Keychain, never in SQLite
 -e ./packages/extension-api  # public contracts shared with external extension workers

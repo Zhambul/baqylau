@@ -8,5 +8,13 @@
     "noEmit": false,
     "outDir": "dist"
   },
-  "include": ["eslint.mjs", "prettier.mjs", "coverage.mjs"]
+  "include": [
+    "eslint.mjs",
+    "prettier.mjs",
+    "coverage.mjs",
+    "knip.mjs",
+    "vitest.mjs",
+    "pins.mjs",
+    "check-pins.mjs"
+  ]
 }

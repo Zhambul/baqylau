@@ -8,11 +8,18 @@ from contextlib import AsyncExitStack, asynccontextmanager
 
 from baqylau_extension_api.contracts.services import ExtensionHostServices
 from baqylau_extension_api.models.directory import DirectoryRequest, DirectorySnapshot
-from baqylau_extension_api.runtime import methods
+from baqylau_extension_api.runtime import (
+    credential_access,
+    methods,
+    process_access,
+    record_access,
+    reporting_access,
+    service_access,
+    session_access,
+)
 from baqylau_extension_api.runtime.channel import RpcChannel, stream_channel
 from baqylau_extension_api.runtime.codec import ModelHandler
 from baqylau_extension_api.runtime.models import MAX_HEADER_BYTES
-from baqylau_extension_api.runtime.service_access import register_service_access
 from pydantic import TypeAdapter
 
 
@@ -40,4 +47,15 @@ def _register_callbacks(channel: RpcChannel, services: ExtensionHostServices) ->
         DirectoryRequest, TypeAdapter(DirectorySnapshot), services.directory.list_extensions,
     ), "live")
     if services.service_access is not None:
-        register_service_access(channel, services.service_access)
+        service_access.register_service_access(channel, services.service_access)
+    if services.credentials is not None:
+        credential_access.register_credential_access(channel, services.credentials)
+    if services.processes is not None:
+        process_access.register_process_access(channel, services.processes)
+    if services.inference is not None:
+        process_access.register_inference_access(channel, services.inference)
+    if services.records is not None:
+        record_access.register_record_access(channel, services.records)
+    if services.sessions is not None:
+        session_access.register_session_access(channel, services.sessions)
+    reporting_access.register_reporting_access(channel, services.observations, services.audit)

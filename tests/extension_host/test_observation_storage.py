@@ -8,7 +8,7 @@ from baqylau_extension_api.models.scopes import RepositoryScope, SessionScope
 
 from domain.ids import RawEventId
 from repository.impl.sqlite import raw_event_audits, raw_events
-from tests import sqlite_test_fixtures as core
+from tests import sqlite_test_fixtures as core, storage_reads
 from tests.extension_api import source_samples
 from tests.extension_host import observation_fixture as fixtures
 
@@ -16,7 +16,7 @@ from tests.extension_host import observation_fixture as fixtures
 def test_extension_input_has_no_fake_session(tmp_path: Path) -> None:
     """The extension branch keeps its schema, scope, position, and original document."""
     case = fixtures.installed(tmp_path)
-    result = case.store.append_observations(case.request)
+    result = storage_reads.append_observations(case.store, case.request)
     original = fixtures.original(result.accepted[0])
     assert original.candidate == case.request.observations[0].observation
     assert original.source_position == case.request.observations[0].position
@@ -29,7 +29,7 @@ def test_pending_input_has_one_global_order(tmp_path: Path) -> None:
     case = fixtures.installed(tmp_path)
     raw = raw_events.SqliteRawEventRepository(case.store.database)
     raw.record((core.a_raw_event("before"),))
-    extension = case.store.append_observations(case.request).accepted[0]
+    extension = storage_reads.append_observations(case.store, case.request).accepted[0]
     raw.record((core.a_raw_event("after"),))
     pending = case.store.pending_observations(10)
     assert [entry.cursor for entry in pending] == [1, 2, 3]
@@ -45,7 +45,7 @@ def test_core_reads_never_decode_extension_input(tmp_path: Path) -> None:
     raw = raw_events.SqliteRawEventRepository(case.store.database)
     source = source_samples.SOURCE_ID
     raw.record((replace(core.a_raw_event(), source_identity=source),))
-    stored = case.store.append_observations(case.request).accepted[0]
+    stored = storage_reads.append_observations(case.store, case.request).accepted[0]
     identity = RawEventId(fixtures.original(stored).raw_event_id)
     assert raw.latest_positions((source,)) == {source: "1"}
     assert len(raw.unverdicted(10)) == 1
@@ -56,8 +56,9 @@ def test_core_reads_never_decode_extension_input(tmp_path: Path) -> None:
 def test_repeated_input_retains_original_row(tmp_path: Path) -> None:
     """Repeated capture does not change time, bytes, identity, or queue position."""
     case = fixtures.installed(tmp_path)
-    first = case.store.append_observations(case.request)
-    repeated = case.store.append_observations(case.request.model_copy(update={"observed_at": 2000.0}))
+    first = storage_reads.append_observations(case.store, case.request)
+    later = case.request.model_copy(update={"observed_at": 2000.0})
+    repeated = storage_reads.append_observations(case.store, later)
     assert not repeated.accepted
     assert repeated.repeated == first.accepted
     assert case.store.pending_observations(10) == first.accepted
@@ -71,9 +72,9 @@ def test_repository_identity_includes_worktree(tmp_path: Path) -> None:
     other = scope.model_copy(update={"worktree": "/work/two", "git_directory": "/git/worktrees/two"})
     second = fixtures.append_in_scope(case, other)
     assert first.observation.raw_event_id != second.observation.raw_event_id
-    assert case.store.observations_for_scope(scope, 0, 1) == (first,)
-    assert case.store.observations_for_scope(other, 0, 1) == (second,)
-    assert not case.store.observations_for_scope(scope, first.cursor, 10)
+    assert storage_reads.observations_for_scope(case.store, scope, 0, 1) == (first,)
+    assert storage_reads.observations_for_scope(case.store, other, 0, 1) == (second,)
+    assert not storage_reads.observations_for_scope(case.store, scope, first.cursor, 10)
 
 
 def test_scope_page_can_include_both_branches(tmp_path: Path) -> None:
@@ -82,5 +83,6 @@ def test_scope_page_can_include_both_branches(tmp_path: Path) -> None:
     original = core.a_raw_event()
     scope = SessionScope(session_id=original.session_id, actor_id=original.actor_id, harness=original.harness)
     raw_events.SqliteRawEventRepository(case.store.database).record((original,))
-    case.store.append_observations(fixtures.select_scope(case.request, scope))
-    assert case.store.observations_for_scope(scope, 0, 10) == case.store.pending_observations(10)
+    storage_reads.append_observations(case.store, fixtures.select_scope(case.request, scope))
+    stored = storage_reads.observations_for_scope(case.store, scope, 0, 10)
+    assert stored == case.store.pending_observations(10)

@@ -10,6 +10,7 @@ from tests import (
     foundation_test_output,
     foundation_test_primitives,
     foundation_test_sources,
+    storage_reads,
 )
 from tests.harness_names import CODEX_HARNESS
 
@@ -63,7 +64,7 @@ def test_accepted_session_start_invalidates(tmp_path: foundation_dependencies.st
     runtime.interpreter.terminal_snapshots = snapshots
     runtime.recorder.record((foundation_test_events.raw_observation("raw-start"),))
     runtime.interpreter.tick()
-    assert len(runtime.store.page_from(cursor=0, limit=10)) == 1
+    assert len(storage_reads.page_from(runtime.store, cursor=0, limit=10)) == 1
     assert snapshots.invalidations == 1
 
 

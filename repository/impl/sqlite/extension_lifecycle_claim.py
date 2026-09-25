@@ -5,11 +5,15 @@ import sqlite3
 
 from extensions.models.lifecycle_operations import LifecycleFailure, LifecycleOperation
 from extensions.models.lifecycle_state import LifecycleWrite, ManagerClaim
-from repository.impl.sqlite import extension_lifecycle_reads as reads, extension_lifecycle_writes as writes
+from repository.impl.sqlite import (
+    extension_lifecycle_reads as reads,
+    extension_lifecycle_writes as writes,
+    record_migration_copy,
+)
 
 
 def claim_manager(connection: sqlite3.Connection, claim: ManagerClaim) -> LifecycleWrite:
-    """Interrupt pending preparation without changing the last committed runtime.
+    """Interrupt pending preparation and discard its migrating records without changing the last committed runtime.
 
     Returns:
         The new manager head or current state after a stale claim.
@@ -23,6 +27,7 @@ def claim_manager(connection: sqlite3.Connection, claim: ManagerClaim) -> Lifecy
     pending = reads.read_operation(connection, current.pending_operation)
     if pending is not None:
         _interrupt(connection, pending, claim.claimed_at)
+    record_migration_copy.discard_interrupted(connection)
     writes.write_head(connection, writes.next_head(current, manager_id=claim.manager_id))
     return LifecycleWrite(accepted=True, state=reads.read_state(connection))
 

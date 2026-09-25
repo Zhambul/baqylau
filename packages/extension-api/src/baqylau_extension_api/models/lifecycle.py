@@ -19,12 +19,25 @@ class ExtensionInfo(WireModel):
     package_digest: Digest
 
 
+class RemovedService(WireModel):
+    """Name one consumed peer service that the previous runtime provided and this runtime does not."""
+
+    owner: ExtensionId
+    name: Identifier
+
+
 class ActivationRequest(WireModel):
-    """Prepare one runtime revision before the host makes it active."""
+    """Prepare one runtime revision before the host makes it active.
+
+    `removed_services` is the removal notice: an optional consumer uses its
+    base behavior for these services and can release state that it kept for
+    them.
+    """
 
     runtime_revision: Identifier
     settings_revision: Revision
     settings: EncodedDocument | None = None
+    removed_services: Annotated[tuple[RemovedService, ...], Field(max_length=100)] = ()
 
 
 class ActivationReady(WireModel):

@@ -14,9 +14,12 @@ from extensions.settings_selection import settings_target
 
 
 def read_settings_view(
-    state: LifecyclePlanningState, extension_id: ExtensionId, request: SettingsReadRequest,
+    state: LifecyclePlanningState,
+    extension_id: ExtensionId,
+    request: SettingsReadRequest,
+    related: tuple[ExtensionScope, ...] = (),
 ) -> SettingsSnapshot:
-    """Select defaults, installation fallback, or one exact scope override.
+    """Select defaults, installation fallback, one exact scope override, or a related scope's override.
 
     Returns:
         Accepted values and revisions, never an uncommitted candidate.
@@ -25,7 +28,7 @@ def read_settings_view(
     target = settings_target(state, extension_id, request.package_digest)
     definition = settings_definition(target, request.scope)
     validate_overrides(target, target.overrides)
-    effective = capture_settings(target.package.manifest, target.overrides).for_scope(request.scope)
+    effective = capture_settings(target.package.manifest, target.overrides).for_scope(request.scope, related)
     return SettingsSnapshot(
         extension_info=target.package.selection.extension_info, scope=request.scope,
         lifecycle_revision=state.manager.lifecycle.revision, catalog_revision=state.catalog.revision,

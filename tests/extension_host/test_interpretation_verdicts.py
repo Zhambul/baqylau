@@ -8,7 +8,7 @@ from baqylau_extension_api.models import documents, translation_results
 
 from domain.records import RecordedTranslationDecision as Decision
 from extensions.models.interpretation_steps import FailedStep
-from tests import sqlite_migration_fixture as snapshots
+from tests import sqlite_migration_fixture as snapshots, storage_reads
 from tests.extension_host import interpretation_fixture as fixtures, interpretation_results as evidence
 
 FAILURE = documents.Diagnostic(code="test-failure", message="The decoder failed")
@@ -37,7 +37,7 @@ def test_empty_verdict_keeps_complete_evidence(
     assert not case.store.record_interpretation(request).accepted
     assert case.store.translator_state(fixtures.state_key(case)).revision == 1
     assert not case.original.store.pending_observations(10)
-    assert case.store.find_interpretation("default", request.proposal.binding.raw_event_id) == request
+    assert storage_reads.find_interpretation(case.store, "default", request.proposal.binding.raw_event_id) == request
 
 
 @pytest.mark.parametrize(("decision", "verdict"), DECISIONS)
@@ -71,4 +71,4 @@ def test_failed_call_does_not_advance_state(tmp_path: Path) -> None:
     })})
     assert not case.store.record_interpretation(request).accepted
     assert case.store.translator_state(fixtures.state_key(case)).revision == 0
-    assert case.store.find_interpretation("default", request.proposal.binding.raw_event_id) == request
+    assert storage_reads.find_interpretation(case.store, "default", request.proposal.binding.raw_event_id) == request

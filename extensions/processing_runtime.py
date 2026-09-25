@@ -6,9 +6,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 from extensions.interpretation_resources import InterpretationStores
+from extensions.models.manager import ManagerSnapshot
 from extensions.models.source_processing import SourcePolicy
 from extensions.processing_batch import SelectedProcessingBatch
 from extensions.processing_contract import ExtensionProcessing, ExtensionProcessingBatch
+from extensions.runtime_identity import snapshot_manager_id
 from extensions.source_batch import SelectedSourceBatch
 from extensions.source_resources import SourceCallbacks, SourcePlans, SourceServices
 from extensions.source_selection import SourceBatchContext
@@ -31,9 +33,6 @@ class ProcessingRuntime(ExtensionProcessing):
         Yields:
             A borrowed batch, or no extension processing after a failed initial restore.
 
-        Raises:
-            RuntimeError: If the manager and registry do not select the same active runtime.
-
         """
         with self.services.registry.read_snapshot() as selected:
             state = self.services.manager.read_state()
@@ -41,12 +40,9 @@ class ProcessingRuntime(ExtensionProcessing):
                 yield None
                 return
             revision = selected.snapshot.directory.runtime_revision
-            if state.active_runtime != revision or state.lifecycle.manager_id is None:
-                message = "processing batch does not match the active manager runtime"
-                raise RuntimeError(message)
             self.plans.select_runtime(revision)
             context = SourceBatchContext(
-                state.lifecycle.manager_id, selected.snapshot, self.services.scopes.source_scopes(),
+                _manager_id(state, revision), selected.snapshot, self.services.scopes.source_scopes(),
             )
             try:
                 yield SelectedProcessingBatch(
@@ -55,3 +51,20 @@ class ProcessingRuntime(ExtensionProcessing):
             finally:
                 if context.scopes != self.services.scopes.source_scopes():
                     self.callbacks.changed()
+
+
+def _manager_id(state: ManagerSnapshot, revision: str) -> str:
+    """Require that the manager and the registry select the same active runtime.
+
+    Returns:
+        The manager identity of the runtime.
+
+    Raises:
+        RuntimeError: If the manager's active runtime is not the borrowed one.
+
+    """
+    manager_id = snapshot_manager_id(state, revision)
+    if manager_id is None:
+        message = "processing batch does not match the active manager runtime"
+        raise RuntimeError(message)
+    return manager_id

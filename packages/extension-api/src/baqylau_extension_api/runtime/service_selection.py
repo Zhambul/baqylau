@@ -4,7 +4,7 @@
 from packaging.specifiers import SpecifierSet
 
 from baqylau_extension_api.errors import ExtensionContractError
-from baqylau_extension_api.manifest.operations import ServiceRequirement
+from baqylau_extension_api.manifest.operations import PublicService, ServiceRequirement
 from baqylau_extension_api.manifest.package import ExtensionManifest
 from baqylau_extension_api.models.services import ServiceBinding, ServiceResolved, ServiceRevision, ServiceUnavailable
 from baqylau_extension_api.runtime.service_provider import ServiceProvider
@@ -75,13 +75,26 @@ def _resolve_service(
             environment = provider.environment
             if environment is None:
                 return ServiceUnavailable(binding=binding, reason="not_enabled")
-            return ServiceResolved(
-                binding=binding, service_revision=ServiceRevision(
-                    package_version=provider.manifest.package_version, service_version=service.version,
-                    runtime_revision=environment.runtime_revision,
-                ), queries=tuple(
-                    definition for definition in provider.manifest.contributions.queries
-                    if definition.name in service.queries and binding.scope.kind in definition.scopes
-                ),
-            )
+            return _resolved(binding, provider, service, environment.runtime_revision)
     return ServiceUnavailable(binding=binding, reason="not_provided")
+
+
+def _resolved(
+    binding: ServiceBinding, provider: ServiceProvider, service: PublicService, runtime_revision: str,
+) -> ServiceResolved:
+    contributions = provider.manifest.contributions
+    return ServiceResolved(
+        binding=binding,
+        service_revision=ServiceRevision(
+            package_version=provider.manifest.package_version, service_version=service.version,
+            runtime_revision=runtime_revision,
+        ),
+        queries=tuple(
+            definition for definition in contributions.queries
+            if definition.name in service.queries and binding.scope.kind in definition.scopes
+        ),
+        commands=tuple(
+            definition for definition in contributions.commands
+            if definition.name in service.commands and binding.scope.kind in definition.scopes
+        ),
+    )

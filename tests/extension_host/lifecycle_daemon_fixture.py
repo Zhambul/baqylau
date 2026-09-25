@@ -12,7 +12,7 @@ from harness.impl.claude_code.canonical import records as claude_records
 from harness.impl.claude_code.id_session_types import ClaudeCodeSessionId
 from repository.impl.sqlite import databases, interpretations as fact_storage
 from sdk.client import BaqylauClient
-from tests import terminal_pty_waits
+from tests import storage_reads, terminal_pty_waits
 from tests.extension_host import (
     environment_fixture,
     lifecycle_daemon_manifest as declaration,
@@ -74,7 +74,9 @@ class LifecycleDaemon:
         """
         database = databases.read_only(databases.main_database(str(self.directory / DATABASE_NAME)))
         store = fact_storage.SqliteInterpretationRepository(database)
-        completed = (store.find_interpretation(DEFAULT_HISTORY, raw_event_id) for raw_event_id in self.raw_event_ids())
+        completed = (storage_reads.find_interpretation(
+            store, DEFAULT_HISTORY, raw_event_id,
+        ) for raw_event_id in self.raw_event_ids())
         return tuple(commit for commit in completed if commit is not None)
 
     def facts(self) -> tuple[interpretations.StoredCanonicalFact, ...]:

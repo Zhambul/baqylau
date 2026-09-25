@@ -3,6 +3,7 @@ import { flushSync } from 'svelte';
 import { expect, it } from 'vitest';
 
 import { mount } from './index.svelte.js';
+import { offlineClient } from './offline-client';
 
 it('owns its component updates and releases its window listener', async () => {
   const target = document.createElement('div');
@@ -24,14 +25,7 @@ it('owns its component updates and releases its window listener', async () => {
       fontSize: '14px',
     },
     signal: controller.signal,
-    api: {
-      listExtensions: () =>
-        Promise.resolve({
-          catalog_revision: 1,
-          runtime_revision: 'runtime-1',
-          entries: [],
-        }),
-    },
+    api: offlineClient('runtime-1'),
   };
   const view = await mount(target, context);
   flushSync();

@@ -1,0 +1,7 @@
+.baqylau-dev/
+wheels/
+requirements.lock
+build/
+*.egg-info/
+__pycache__/
+node_modules/

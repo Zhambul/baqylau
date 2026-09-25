@@ -7,7 +7,7 @@ import pytest
 from baqylau_extension_api.models import canonical, scopes
 
 from extensions.models.interpretations import InterpretationCommit
-from tests import sqlite_migration_fixture as database_snapshots
+from tests import sqlite_migration_fixture as database_snapshots, storage_reads
 from tests.extension_host import (
     interpretation_fixture as fixture,
     interpretation_prior as prior,
@@ -25,7 +25,7 @@ def test_complete_captured_state_is_accepted(tmp_path: Path) -> None:
     request = prior.with_snapshot(request, captured)
     assert captured.complete and len(captured.facts) == 1
     assert len(case.store.record_interpretation(request).deduplicated) == 1
-    assert case.store.find_interpretation("default", request.proposal.binding.raw_event_id) == request
+    assert storage_reads.find_interpretation(case.store, "default", request.proposal.binding.raw_event_id) == request
     assert case.store.record_interpretation(request).repeated
 
 

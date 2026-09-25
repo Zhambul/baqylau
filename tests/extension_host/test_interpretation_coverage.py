@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from baqylau_extension_api.models import raw_transforms, transforms
 
-from tests import sqlite_migration_fixture as snapshots
+from tests import sqlite_migration_fixture as snapshots, storage_reads
 from tests.extension_host import (
     interpretation_fixture as fixtures,
     interpretation_raw as raw,
@@ -32,7 +32,7 @@ def test_complete_raw_and_canonical_steps_commit(tmp_path: Path) -> None:
     request = raw.apply(fixtures.proposal(case), raw_transforms.RawTransformResult())
     request = operations.apply(request, transforms.CanonicalTransformResult())
     assert case.store.record_interpretation(request).accepted
-    journal = case.store.find_interpretation("default", request.proposal.binding.raw_event_id)
+    journal = storage_reads.find_interpretation(case.store, "default", request.proposal.binding.raw_event_id)
     assert journal is not None
     stages = tuple(step.stage for step in journal.proposal.steps)
     assert stages == ("raw", "extension_translation", "canonical")

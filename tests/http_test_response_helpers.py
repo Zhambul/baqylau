@@ -27,6 +27,10 @@ _FIXTURE_PATH_PARAMETERS = library_dependencies.MappingProxyType({
     SESSION_ID_FIELD: str(SESSION_ID),
     "harness": CODEX_HARNESS_TEXT,
 })
+# Routes whose required query has a known test value; the root directory is in no repository.
+_FIXTURE_QUERIES = library_dependencies.MappingProxyType({
+    "/api/extension-web/repository-scope": "?directory=%2F",
+})
 
 
 class JsonBody:
@@ -143,6 +147,7 @@ def fixture_route_path(route: library_dependencies.fastapi.routing.APIRoute) -> 
 
     """
     try:
-        return route.path.format(**_FIXTURE_PATH_PARAMETERS)
+        path = route.path.format(**_FIXTURE_PATH_PARAMETERS)
     except KeyError:
         return None
+    return f"{path}{_FIXTURE_QUERIES.get(route.path, '')}"

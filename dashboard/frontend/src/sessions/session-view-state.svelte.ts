@@ -110,6 +110,8 @@ function cancelled(signal: AbortSignal): boolean {
 export class SessionViewState {
   private stream: SessionStream | null = null;
   private streamSignal: AbortSignal | null = null;
+  // The history view that the loaded rows belong to; null until a reset names one.
+  private viewRevision: number | null = null;
   private readonly streamRecovery = new StreamRecovery(() => {
     const signal = this.streamSignal;
     if (signal === null || signal.aborted) return;
@@ -570,61 +572,78 @@ export class SessionViewState {
     this.streamSignal = signal;
     this.stream?.close();
     this.streamState = 'loading';
-    this.stream = new SessionStream(this.sessionId, cursor, {
-      opened: () => {
-        this.streamRecovery.opened();
-        this.streamState = 'ready';
-        this.streamFailure = null;
-        this.appState.audit.markStream(
-          `session:${this.sessionId}:${this.actorId ?? ''}`,
-          true,
-          this.sessionId,
-          { actor_id: this.actorId ?? null },
-        );
+    this.stream = new SessionStream(
+      this.sessionId,
+      {
+        cursor,
+        viewRevision: this.viewRevision,
+        entryCursor: this.entryCursor(),
       },
-      disconnected: () => {
-        this.streamState = 'failed';
-        this.appState.audit.markStream(
-          `session:${this.sessionId}:${this.actorId ?? ''}`,
-          false,
-          this.sessionId,
-          { actor_id: this.actorId ?? null },
-        );
-        this.streamRecovery.disconnected();
+      {
+        opened: () => {
+          this.streamRecovery.opened();
+          this.streamState = 'ready';
+          this.streamFailure = null;
+          this.appState.audit.markStream(
+            `session:${this.sessionId}:${this.actorId ?? ''}`,
+            true,
+            this.sessionId,
+            { actor_id: this.actorId ?? null },
+          );
+        },
+        disconnected: () => {
+          this.streamState = 'failed';
+          this.appState.audit.markStream(
+            `session:${this.sessionId}:${this.actorId ?? ''}`,
+            false,
+            this.sessionId,
+            { actor_id: this.actorId ?? null },
+          );
+          this.streamRecovery.disconnected();
+        },
+        delta: (frame, nextCursor) => {
+          this.applyDelta(frame, nextCursor);
+        },
+        application: (application) => {
+          const current = this.application;
+          this.application =
+            current === null
+              ? application
+              : {
+                  ...current,
+                  preferences: {
+                    ...current.preferences,
+                    goalHidden: application.preferences.goalHidden,
+                  },
+                  composer: {
+                    ...current.composer,
+                    draft: application.composer.draft,
+                  },
+                  terminal: application.terminal,
+                  errors: application.errors,
+                };
+          this.applicationState = 'ready';
+        },
+        reset: (viewRevision) => {
+          // A history switch rewrote rows that this view has. Drop them, then
+          // read a new snapshot and page, and reconnect at the new revision.
+          this.stream = null;
+          this.viewRevision = viewRevision;
+          this.entries = [];
+          this.oldestCursor = null;
+          void this.initialize(signal);
+        },
+        invalid: (error) => {
+          this.streamState = 'failed';
+          this.streamFailure = error.message;
+          this.recordBrowserEvent('sse.invalid', {
+            stream: 'session',
+            actor_id: this.actorId ?? null,
+            error: error.message,
+          });
+        },
       },
-      delta: (frame, nextCursor) => {
-        this.applyDelta(frame, nextCursor);
-      },
-      application: (application) => {
-        const current = this.application;
-        this.application =
-          current === null
-            ? application
-            : {
-                ...current,
-                preferences: {
-                  ...current.preferences,
-                  goalHidden: application.preferences.goalHidden,
-                },
-                composer: {
-                  ...current.composer,
-                  draft: application.composer.draft,
-                },
-                terminal: application.terminal,
-                errors: application.errors,
-              };
-        this.applicationState = 'ready';
-      },
-      invalid: (error) => {
-        this.streamState = 'failed';
-        this.streamFailure = error.message;
-        this.recordBrowserEvent('sse.invalid', {
-          stream: 'session',
-          actor_id: this.actorId ?? null,
-          error: error.message,
-        });
-      },
-    });
+    );
     signal.addEventListener(
       'abort',
       () => {
@@ -632,6 +651,12 @@ export class SessionViewState {
       },
       { once: true },
     );
+  }
+
+  private entryCursor(): number | null {
+    return this.entries.length === 0
+      ? null
+      : Math.max(...this.entries.map((entry) => entry.cursor));
   }
 
   private applyDelta(frame: SessionStreamDelta, cursor: number): void {

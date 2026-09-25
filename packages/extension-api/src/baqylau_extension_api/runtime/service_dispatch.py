@@ -1,10 +1,20 @@
 # Copyright (c) 2026 Zhambyl Yermagambet
-"""Authorize peer reads against host metadata, active grants, and declared schemas."""
+"""Authorize peer reads against host metadata, active grants, and declared schemas.
+
+Peer jobs need durable host storage, so the daemon registry access accepts them.
+"""
 
 from dataclasses import dataclass
 
 from baqylau_extension_api.contracts.service_access import ExtensionServiceAccess
 from baqylau_extension_api.errors import ExtensionContractError
+from baqylau_extension_api.models.service_jobs import (
+    ServiceCommandRequest,
+    ServiceJobCancelRequest,
+    ServiceJobCancelResult,
+    ServiceJobRequest,
+    ServiceJobResult,
+)
 from baqylau_extension_api.models.services import (
     ServiceQueryRequest,
     ServiceQueryResponse,
@@ -63,6 +73,33 @@ class HostServiceAccess(ExtensionServiceAccess):
         _require_public_query(request, resolution)
         response = self._query(request, provider, grant)
         return service_results.validate_service_query_response(request, response)
+
+    def submit_service_command(self, service_command: ServiceCommandRequest) -> ServiceJobResult:
+        """Report that this access has no durable job host.
+
+        Returns:
+            An unavailable result; the daemon's registry access accepts peer jobs.
+
+        """
+        return ServiceUnavailable(binding=service_command.binding, reason="not_provided")
+
+    def read_service_job(self, service_job: ServiceJobRequest) -> ServiceJobResult:
+        """Report that this access has no durable job host.
+
+        Returns:
+            An unavailable result; the daemon's registry access reads peer jobs.
+
+        """
+        return ServiceUnavailable(binding=service_job.binding, reason="not_provided")
+
+    def cancel_service_job(self, service_job_cancel: ServiceJobCancelRequest) -> ServiceJobCancelResult:
+        """Report that this access has no durable job host.
+
+        Returns:
+            An unavailable result; the daemon's registry access stops peer jobs.
+
+        """
+        return ServiceUnavailable(binding=service_job_cancel.binding, reason="not_provided")
 
     def _query(
         self, request: ServiceQueryRequest, provider: ServiceProvider | None, grant: HostCallGrant,

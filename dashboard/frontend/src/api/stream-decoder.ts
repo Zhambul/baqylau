@@ -520,6 +520,11 @@ export type SessionStreamDelta = {
   readonly entries: readonly Entry[];
 };
 
+/** A history switch rewrote rows; the client reads a new snapshot at this revision. */
+export function decodeViewReset(text: string): number {
+  return numberValue(parsedJson(text), 'view_revision');
+}
+
 export function decodeReadyFrame(text: string): string {
   return stringValue(parsedJson(text), 'boot_id');
 }

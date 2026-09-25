@@ -4,6 +4,11 @@
   import { applyRewind } from '../../api/controls';
   import type { ActorId } from '../../app/domain-ids';
   import type { ViewMode } from '../../application/session-model';
+  import type { SessionScope } from '@baqylau/extension-api';
+
+  import ExtensionViewMount from '../../extensions/views/ExtensionViewMount.svelte';
+  import { feedReplacement } from '../../extensions/views/feed-replacement';
+  import { webViewCatalog } from '../../extensions/views/web-view-catalog.svelte';
   import FeedItem from '../../entries/FeedItem.svelte';
   import {
     buildFeedItems,
@@ -22,7 +27,12 @@
     'awaiting_background',
   ]);
 
-  let { view }: { view: SessionViewState } = $props();
+  let {
+    view,
+    scope = null,
+  }: { view: SessionViewState; scope?: SessionScope | null } = $props();
+
+  const catalog = webViewCatalog();
 
   const actorNames = $derived.by(() => {
     const names = new SvelteMap<ActorId, string>();
@@ -160,26 +170,39 @@
         />
       {:else if unit.kind === 'item'}
         {@const entry = entryByKey.get(unit.item.key)}
-        <FeedItem
-          presentation={unit.item}
-          extraClass={unit.extraClass}
-          defaultOpen={unit.defaultOpen}
-          rewindModes={view.catalog?.rewindModes ?? []}
-          rewindOpen={rewindEntry?.entryId === entry?.entryId}
-          onOpenRewind={rewindCandidate(entry)
-            ? () => {
-                rewindEntry = entry;
-              }
-            : undefined}
-          onCancelRewind={() => {
-            rewindEntry = null;
-          }}
-          onRewind={entry === undefined
-            ? undefined
-            : (rewindMode: string) => {
-                void rewind(entry, rewindMode);
-              }}
-        />
+        {@const replacement =
+          entry === undefined || scope === null || catalog === undefined
+            ? null
+            : feedReplacement(catalog, entry)}
+        {#if scope !== null && replacement !== null && catalog?.runtimeRevision}
+          <ExtensionViewMount
+            view={replacement.view}
+            {scope}
+            runtimeRevision={catalog.runtimeRevision}
+            subject={replacement.subject}
+          />
+        {:else}
+          <FeedItem
+            presentation={unit.item}
+            extraClass={unit.extraClass}
+            defaultOpen={unit.defaultOpen}
+            rewindModes={view.catalog?.rewindModes ?? []}
+            rewindOpen={rewindEntry?.entryId === entry?.entryId}
+            onOpenRewind={rewindCandidate(entry)
+              ? () => {
+                  rewindEntry = entry;
+                }
+              : undefined}
+            onCancelRewind={() => {
+              rewindEntry = null;
+            }}
+            onRewind={entry === undefined
+              ? undefined
+              : (rewindMode: string) => {
+                  void rewind(entry, rewindMode);
+                }}
+          />
+        {/if}
       {/if}
     {/each}
   {/if}

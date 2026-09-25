@@ -15,6 +15,7 @@ from tests import (
 )
 from tests.harness_names import CODEX_HARNESS
 from tests.interrupt_clock import mark_expired
+from tests.storage_reads import page_from
 
 IGNORED_TRANSLATION = foundation_components.raw_events.TranslationResult(
     (), foundation_dependencies.domain.domain_records.RecordedTranslationDecision.IGNORED_NONSEMANTIC,
@@ -63,7 +64,7 @@ def test_uncorroborated_interrupt_eventually(
     reactions.tick()
     assert registry.pending(PRIMARY_SESSION) is None
     runtime.interpreter.tick()
-    assert len(runtime.store.page_from(0, 10)) == 1
+    assert len(page_from(runtime.store, 0, 10)) == 1
 
 
 def test_panes_open_at_window_announcing_delivery(

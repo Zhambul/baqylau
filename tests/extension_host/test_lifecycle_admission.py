@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from tests import storage_reads
 from tests.extension_host import lifecycle_fixture as fixtures
 
 
@@ -34,7 +35,7 @@ def test_pending_operation_reports_busy(tmp_path: Path) -> None:
     store.accept_extension_operation(fixtures.proposal(store), fixtures.NOW)
     following = fixtures.proposal(store, operation_id="following")
     assert store.accept_extension_operation(following, fixtures.NOW).status == "busy"
-    assert store.read_extension_runtime(following.candidate.runtime_revision) is None
+    assert storage_reads.read_extension_runtime(store, following.candidate.runtime_revision) is None
 
 
 @pytest.mark.parametrize("change", ["manager", "revision", "catalog"])

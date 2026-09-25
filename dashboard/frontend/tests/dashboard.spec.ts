@@ -1,7 +1,7 @@
 import AxeBuilder from '@axe-core/playwright';
 import type { Page } from '@playwright/test';
 
-import { expect, test } from './fixtures';
+import { expect, fixtureWorkingDirectory, test } from './fixtures';
 
 const FIXTURE_TIME = 1_700_000_000_000;
 // macOS patch releases can rasterize the same text with small edge differences.
@@ -721,7 +721,7 @@ test('keeps the new-session and resume-preview modal boundaries', async ({
 }) => {
   const failures = watchBrowserFailures(page);
   await page.goto('/');
-  const workingDirectory = await page.locator('.dirpath').innerText();
+  const workingDirectory = fixtureWorkingDirectory;
   await page.getByRole('button', { name: '+ session' }).click();
 
   const dialog = page.getByRole('dialog', { name: 'new session' });
@@ -791,7 +791,7 @@ test('does not replace an unknown saved effort during resume', async ({
   });
 
   await page.goto('/');
-  const workingDirectory = await page.locator('.dirpath').innerText();
+  const workingDirectory = fixtureWorkingDirectory;
   await page.getByRole('button', { name: '+ session' }).click();
   const dialog = page.getByRole('dialog', { name: 'new session' });
   await dialog.getByLabel('directory').fill(workingDirectory);

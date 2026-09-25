@@ -15,12 +15,16 @@ from extensions.lifecycle_plan_resources import LifecyclePlanningState, Selected
 from extensions.models.control_requests import ControlRevisions
 from extensions.models.lifecycle_selection import RuntimePackageSelection
 from extensions.models.manager import ManagerSnapshot
+from extensions.models.record_migration import StoredRecordSchema
 from extensions.models.settings import SettingsOverrides, capture_settings
 from repository.contract.extension_catalog import ExtensionCatalogRepository
 
 
 def planning_state(
-    manager: ManagerSnapshot, catalog: ExtensionCatalogRepository, request: ControlRevisions,
+    manager: ManagerSnapshot,
+    catalog: ExtensionCatalogRepository,
+    request: ControlRevisions,
+    record_schemas: tuple[StoredRecordSchema, ...] = (),
 ) -> LifecyclePlanningState:
     """Read metadata only, with no feature call or resource preparation.
 
@@ -38,7 +42,7 @@ def planning_state(
     if manager.phase != "running":
         message = "the extension manager is not ready for another lifecycle change"
         raise LifecycleUnavailableError(message)
-    state = read_planning_state(manager, catalog)
+    state = read_planning_state(manager, catalog, record_schemas)
     if (
         manager.lifecycle.revision != request.expected_revision
         or state.catalog.revision != request.expected_catalog_revision
@@ -48,7 +52,9 @@ def planning_state(
     return state
 
 
-def read_planning_state(manager: ManagerSnapshot, catalog: ExtensionCatalogRepository) -> LifecyclePlanningState:
+def read_planning_state(
+    manager: ManagerSnapshot, catalog: ExtensionCatalogRepository, record_schemas: tuple[StoredRecordSchema, ...] = (),
+) -> LifecyclePlanningState:
     """Read committed metadata without requiring idle mutation admission.
 
     Returns:
@@ -58,7 +64,8 @@ def read_planning_state(manager: ManagerSnapshot, catalog: ExtensionCatalogRepos
     snapshot = catalog.read_extension_catalog()
     selected = manager.lifecycle.committed_runtime
     packages = () if selected is None else selected.packages
-    return LifecyclePlanningState(manager, snapshot, tuple(_retained(package, catalog) for package in packages))
+    retained = tuple(_retained(package, catalog) for package in packages)
+    return LifecyclePlanningState(manager, snapshot, retained, record_schemas)
 
 
 def discovered_package(

@@ -69,7 +69,8 @@ def connect(pane: PaneReader, host: str, port: int, session_id: str) -> bool:
 def follow(pane: PaneReader, host: str, port: int, session_id: str) -> None:
     """Apply stream events until the connection ends."""
     event_name = ""
-    stream_path = _http.SESSION_STREAM_PATH % (session_id, pane.model.cursor)
+    model = pane.model
+    stream_path = _http.SESSION_STREAM_PATH % (session_id, model.cursor, model.entry_cursor)
     for line in _daemon.lines(
         f"{stream_path}&include_application=false",
         host,

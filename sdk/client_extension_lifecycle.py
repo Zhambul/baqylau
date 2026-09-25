@@ -9,11 +9,13 @@ from pydantic import TypeAdapter
 
 from api.extensions.lifecycle_models import (
     ExtensionOperationResponse,
+    ExtensionOperationsResponse,
     ExtensionRuntimeResponse,
     LifecycleAdmissionResponse,
     LifecyclePlanResponse,
 )
 from api.extensions.lifecycle_requests import LifecycleChangeRequest, LifecyclePreviewRequest
+from api.extensions.models import ExtensionHealthResponse
 from sdk.transport import HttpTransport
 
 
@@ -41,6 +43,26 @@ class ExtensionLifecycleResource:
         """
         selected = quote(operation_id, safe="")
         return self.transport.get(f"/api/extensions/operations/{selected}", TypeAdapter(ExtensionOperationResponse))
+
+    def recent_operations(self, limit: int) -> ExtensionOperationsResponse:
+        """Read the newest retained operations, including failures.
+
+        Returns:
+            At most `limit` operations, newest first.
+
+        """
+        return self.transport.get(
+            f"/api/extensions/operations?limit={limit}", TypeAdapter(ExtensionOperationsResponse),
+        )
+
+    def health(self) -> ExtensionHealthResponse:
+        """Read each extension's consecutive worker failures.
+
+        Returns:
+            The failure limit and every stored health row.
+
+        """
+        return self.transport.get("/api/extensions/health", TypeAdapter(ExtensionHealthResponse))
 
     def preview(
         self, extension_id: str, lifecycle_preview_request: LifecyclePreviewRequest,

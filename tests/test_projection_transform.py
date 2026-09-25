@@ -8,14 +8,15 @@ from typing import TYPE_CHECKING
 from baqylau_extension_api.schemas import SchemaSet
 
 from domain.ids import SessionId
-from extensions.projection_models import ProjectionTransformerPackage
+from extensions.models.registry import RuntimeSettings
+from extensions.transformer_packages import ProjectionTransformerPackage
 from tests import (
     projection_pass_fixture as fixture,
     projection_transform_fixture as transform_fixture,
     sqlite_repository_dependencies as repository_dependencies,
     sqlite_test_dependencies as test_dependencies,
 )
-from tests.test_projection_pass import RUNTIME_REVISION, build_pass, package
+from tests.projection_pass_case import RUNTIME_REVISION, build_pass, package
 
 if TYPE_CHECKING:
     from baqylau_extension_api.contracts import projection
@@ -34,7 +35,7 @@ def transformer(transform: projection.ExtensionProjectionTransformer) -> Project
     return ProjectionTransformerPackage(
         extension_id=fixture.OWNER,
         runtime_revision=RUNTIME_REVISION,
-        settings_revision=0,
+        settings=RuntimeSettings(),
         manifest=fixture.TRANSFORM_MANIFEST,
         schemas=SchemaSet(fixture.TRANSFORM_MANIFEST.schemas),
         transformer=transform,

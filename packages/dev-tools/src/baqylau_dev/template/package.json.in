@@ -1,0 +1,23 @@
+{
+  "name": "${distribution}",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12 <23"
+  },
+  "packageManager": "npm@10.9.8",
+  "prettier": "@baqylau/dev-tools/prettier",
+  "scripts": {
+    "check": "tsc -p tsconfig.json",
+    "lint": "eslint . --max-warnings 0 && baqylau-dev-tools-pins",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@baqylau/dev-tools": "0.1.0-alpha.1",
+    "@baqylau/extension-api": "0.1.0-alpha.1",
+    "eslint": "10.9.0",
+    "prettier": "3.9.6",
+    "typescript": "5.9.3"
+  }
+}

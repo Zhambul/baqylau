@@ -7,7 +7,7 @@ import pytest
 from baqylau_extension_api.models import canonical, events, transforms
 
 from repository.impl.sqlite.canonical_events import SqliteCanonicalEventRepository
-from tests import sqlite_migration_fixture as snapshots, sqlite_test_fixtures as native
+from tests import sqlite_migration_fixture as snapshots, sqlite_test_fixtures as native, storage_reads
 from tests.extension_host import (
     interpretation_core as core,
     interpretation_fixture as fixtures,
@@ -20,13 +20,13 @@ def test_core_translation_uses_existing_codec(tmp_path: Path) -> None:
     case = fixtures.installed(tmp_path)
     request = core.core_proposal(case)
     accepted = case.store.record_interpretation(request).accepted
-    legacy = SqliteCanonicalEventRepository(case.store.database).page_from(0, 10)
+    legacy = storage_reads.page_from(SqliteCanonicalEventRepository(case.store.database), 0, 10)
     assert isinstance(accepted[0].fact, canonical.CoreFact)
     assert legacy[0].event_id == accepted[0].fact.event_id
     assert legacy[0].payload == native.a_started_event().payload
     found = SqliteCanonicalEventRepository(case.store.database).find(legacy[0].event_id)
     assert found is not None and found.raw_event_ids == (request.proposal.binding.raw_event_id,)
-    assert case.store.find_interpretation("default", request.proposal.binding.raw_event_id) == request
+    assert storage_reads.find_interpretation(case.store, "default", request.proposal.binding.raw_event_id) == request
 
 
 def test_core_and_extension_commit_in_order(tmp_path: Path) -> None:
@@ -38,7 +38,7 @@ def test_core_and_extension_commit_in_order(tmp_path: Path) -> None:
     assert isinstance(accepted[1].fact, events.ExtensionFact)
     assert accepted[0].cursor < accepted[1].cursor
     assert case.store.current_fact_page(0, 10).facts == accepted
-    legacy = SqliteCanonicalEventRepository(case.store.database).page_from(0, 10)
+    legacy = storage_reads.page_from(SqliteCanonicalEventRepository(case.store.database), 0, 10)
     assert tuple(fact.event_id for fact in legacy) == (
         accepted[0].fact.event_id,
     )

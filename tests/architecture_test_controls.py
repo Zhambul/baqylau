@@ -25,6 +25,7 @@ IDS_FILE_NAME = "ids.py"
 RAW_RESPONSE_ROUTES = (
     "index",
     "build_asset",
+    "extension_web_asset",
     "static",
     "service_worker",
     "favicon",
@@ -102,6 +103,8 @@ def key_value_table_violations(schema: str) -> tuple[list[str], int]:
         "session_data.payload",
         "session_data_actors.payload",
         "session_entries.payload",
+        # The same typed feed body as session_entries, kept for a candidate or retired generation.
+        "extension_candidate_entries.payload",
     }
     tables = standard_dependencies.re.findall(
         r'CREATE TABLE IF NOT EXISTS (\w+)\((.*?)\n\s*\)(?:;|\s*""")',

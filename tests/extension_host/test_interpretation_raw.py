@@ -6,6 +6,7 @@ from pathlib import Path
 from baqylau_extension_api.identities import DerivedIdentity, derived_input_id
 from baqylau_extension_api.models import content, events, raw_transforms, transforms
 
+from tests import storage_reads
 from tests.extension_host import (
     interpretation_fixture as fixtures,
     interpretation_raw as raw,
@@ -44,7 +45,7 @@ def test_raw_drop_does_not_advance_decoder(tmp_path: Path) -> None:
     assert not case.store.record_interpretation(request).accepted
     assert not case.original.store.pending_observations(10)
     assert case.store.translator_state(fixtures.state_key(case)).revision == 0
-    assert case.store.find_interpretation("default", request.proposal.binding.raw_event_id) == request
+    assert storage_reads.find_interpretation(case.store, "default", request.proposal.binding.raw_event_id) == request
 
 
 def test_added_raw_input_keeps_each_proposal(tmp_path: Path) -> None:
@@ -62,4 +63,4 @@ def test_added_raw_input_keeps_each_proposal(tmp_path: Path) -> None:
     assert len(case.store.record_interpretation(request).accepted) == 1
     decided = tuple(decision.input_id for decision in evidence.reply(request).decisions)
     assert decided == (source.input_id, identity)
-    assert case.store.find_interpretation("default", request.proposal.binding.raw_event_id) == request
+    assert storage_reads.find_interpretation(case.store, "default", request.proposal.binding.raw_event_id) == request

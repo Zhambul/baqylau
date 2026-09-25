@@ -2,14 +2,17 @@ import {
   changeExtension,
   previewExtension,
   readExtensionCatalog,
+  readExtensionHealth,
   readExtensionOperation,
   readExtensionRuntime,
+  readRecentOperations,
   rescanExtensions,
 } from '../api/extensions';
 import type {
   ExtensionAction,
   ExtensionCatalog,
   ExtensionChangeRequest,
+  ExtensionHealthReport,
   ExtensionOperation,
   ExtensionPlan,
   ExtensionRuntime,
@@ -28,6 +31,8 @@ export class ExtensionManagement {
   catalog = $state<ExtensionCatalog | null>(null);
   runtime = $state<ExtensionRuntime | null>(null);
   operation = $state<ExtensionOperation | null>(null);
+  operations = $state<readonly ExtensionOperation[]>([]);
+  health = $state<ExtensionHealthReport | null>(null);
   confirmation = $state<Confirmation | null>(null);
   busy = $state(false);
   error = $state<string | null>(null);
@@ -43,6 +48,21 @@ export class ExtensionManagement {
 
   private readonly controller = new AbortController();
   private timer: ReturnType<typeof setTimeout> | null = null;
+
+  /** The recent operations of one extension, newest first. */
+  operationsFor(owner: string | null): readonly ExtensionOperation[] {
+    return this.operations.filter(
+      (operation) => owner !== null && operation.extension_id === owner,
+    );
+  }
+
+  /** The stored health of one extension, or null when it has no failures. */
+  healthOf(owner: string | null) {
+    return (
+      this.health?.extensions.find((entry) => entry.extension_id === owner) ??
+      null
+    );
+  }
 
   refresh(): Promise<void> {
     return this.run(async () => {
@@ -125,9 +145,11 @@ export class ExtensionManagement {
     if (this.isClosed()) return;
     this.fresh = false;
     const signal = this.controller.signal;
-    const [catalog, runtime] = await Promise.all([
+    const [catalog, runtime, operations, health] = await Promise.all([
       readExtensionCatalog(signal),
       readExtensionRuntime(signal),
+      readRecentOperations(signal),
+      readExtensionHealth(signal),
     ]);
     const operationId =
       runtime.pending_operation ??
@@ -141,6 +163,8 @@ export class ExtensionManagement {
     if (signal.aborted) return;
     this.catalog = catalog;
     this.runtime = runtime;
+    this.operations = operations;
+    this.health = health;
     this.operation = operation;
     this.fresh = true;
   }

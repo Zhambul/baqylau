@@ -1,20 +1,20 @@
 # Copyright (c) 2026 Zhambyl Yermagambet
 """Typed extension job reads."""
 
-from typing import Literal
-
 from baqylau_extension_api.models.command_results import CommandResult
 from baqylau_extension_api.models.documents import Diagnostic, EncodedDocument
 from baqylau_extension_api.models.observer_results import ObservationJobResult
 from pydantic import BaseModel
+
+from domain.extension_jobs import JobCancelStatus, JobKind, JobState
 
 
 class ExtensionJobResponse(BaseModel):
     """Describe one stored job and its last result."""
 
     job_id: str
-    kind: Literal["command", "observer"]
-    state: Literal["accepted", "running", "succeeded", "failed", "canceled", "outcome_unknown"]
+    kind: JobKind
+    state: JobState
     revision: int
     consumer_cursor: int | None = None
     result: CommandResult | ObservationJobResult | None = None
@@ -32,7 +32,7 @@ class ExtensionJobCancelRequest(BaseModel):
 class ExtensionJobCancelResponse(BaseModel):
     """Report a cancellation request without claiming a proven stop."""
 
-    status: Literal["requested", "canceled", "not_running", "outcome_unknown"]
+    status: JobCancelStatus
     revision: int
     diagnostic: Diagnostic | None = None
 

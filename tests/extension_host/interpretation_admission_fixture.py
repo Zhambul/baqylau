@@ -14,6 +14,7 @@ from tests.extension_host import (
 # The reply builders live beside their own budgets; keep the fixture API stable.
 # isort: split
 
+from tests import storage_reads
 from tests.extension_host.interpretation_admission_replies import (
     large_canonical_reply as large_canonical_reply,
     large_raw_reply as large_raw_reply,
@@ -64,7 +65,7 @@ def stored_commit(case: pipeline.PipelineCase) -> interpretations.Interpretation
         ValueError: If the case has no stored journal.
 
     """
-    commit = case.original.store.find_interpretation(
+    commit = storage_reads.find_interpretation(case.original.store,
         evidence.DEFAULT_HISTORY, case.stored.observation.raw_event_id,
     )
     if commit is None:

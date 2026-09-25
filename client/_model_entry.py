@@ -53,6 +53,8 @@ class EntryBodyRecord(WireModel):
     assigned_actor_name: str | None = None
     assignment_id: str = ""
     prompt: ContentRecord | None = None
+    owner: str | None = None
+    entry_type: str | None = None
 
 
 class EntryRecord(WireModel):

@@ -8,11 +8,11 @@ from baqylau_extension_api.manifest.package import ExtensionManifest
 from baqylau_extension_api.models import lifecycle as public_lifecycle, scopes
 from baqylau_extension_api.versions import API_VERSION
 
-from extensions.models.lifecycle_selection import RuntimePackageSelection
+from extensions.models import lifecycle_selection, settings as extension_settings
 from extensions.models.observations import ExtensionObservation, ObservationAppend, StoredObservation
-from extensions.models.settings import SettingsOverrides, capture_settings
 from repository.impl.sqlite import connection as sqlite_connection, extension_lifecycle as lifecycle_store
 from repository.impl.sqlite.observations import SqliteObservationRepository
+from tests import storage_reads
 from tests.extension_api import source_samples
 from tests.extension_host import catalog_fixture, lifecycle_fixture as lifecycle, package_fixture
 
@@ -45,18 +45,18 @@ def installed(directory: Path, manifest: ExtensionManifest | None = None) -> Obs
     ))
 
 
-def _package(directory: Path, manifest: ExtensionManifest) -> RuntimePackageSelection:
+def _package(directory: Path, manifest: ExtensionManifest) -> lifecycle_selection.RuntimePackageSelection:
     source = package_fixture.write_package(directory / "packages", manifest.extension_id)
     manifest = manifest.model_copy(update={"backend": package_fixture.read_manifest(source).backend})
     package_fixture.save_manifest(source, manifest)
     catalog = catalog_fixture.service(directory).rescan_packages(0).snapshot
     entry = catalog.entries[0]
     assert entry.issue is None and entry.package_digest is not None
-    return RuntimePackageSelection(
+    return lifecycle_selection.RuntimePackageSelection(
         extension_info=public_lifecycle.ExtensionInfo(
             extension_id=manifest.extension_id, package_version=manifest.package_version,
             api_version=API_VERSION, package_digest=entry.package_digest,
-        ), settings=capture_settings(manifest, SettingsOverrides()),
+        ), settings=extension_settings.capture_settings(manifest, extension_settings.SettingsOverrides()),
     )
 
 
@@ -77,7 +77,7 @@ def append_in_scope(case: ObservationCase, scope: scopes.ExtensionScope) -> Stor
 
     """
     request = select_scope(case.request, scope)
-    return case.store.append_observations(request).accepted[0]
+    return storage_reads.append_observations(case.store, request).accepted[0]
 
 
 def select_scope(request: ObservationAppend, scope: scopes.ExtensionScope) -> ObservationAppend:

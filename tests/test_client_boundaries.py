@@ -21,6 +21,14 @@ CLIENT = ROOT / "client"
 SHARED = (
     "_daemon.py",
     "_daemon_exchange.py",
+    "_extension_actions.py",
+    "_extension_changes.py",
+    "_extension_focus.py",
+    "_extension_input.py",
+    "_extension_paint.py",
+    "_extension_pane.py",
+    "_extension_sections.py",
+    "_extension_selector.py",
     "_handoff.py",
     "_handoff_documents.py",
     "_handoff_lock.py",
@@ -36,6 +44,9 @@ SHARED = (
     "_model_session_feed.py",
     "_model_session_state.py",
     "_model_shell.py",
+    "_model_terminal.py",
+    "_model_terminal_items.py",
+    "_model_terminal_text.py",
     "_pane_connection.py",
     "_pane_rendering.py",
     "_pane_signals.py",
@@ -48,6 +59,10 @@ SHARED = (
     "_render_diff_paint.py",
     "_render_diff_parse.py",
     "_render_entries.py",
+    "_render_extension_blocks.py",
+    "_render_extension_items.py",
+    "_render_extension_table.py",
+    "_render_extension_text.py",
     "_render_files.py",
     "_render_line_numbers.py",
     "_render_numbers.py",
@@ -60,11 +75,15 @@ SHARED = (
     "_render_styles.py",
     "_render_tasks.py",
     "_render_tools.py",
+    "_render_width.py",
     "_render_wrap.py",
+    "_selector_keys.py",
 )
 
 
 CLAUDE_HOOK = "claude_hook.py"
+TERMINAL_EXTENSION_PANE = "terminal_extension_pane.py"
+TERMINAL_EXTENSION_SELECTOR = "terminal_extension_selector.py"
 
 
 CLAUDE_STATUSLINE = "claude_statusline.py"
@@ -88,10 +107,13 @@ TERMINAL_VIEW = "terminal_view.py"
 TERMINAL_CONTENT = "terminal_content.py"
 
 
-PUBLISHED = (CLAUDE_HOOK, CLAUDE_STATUSLINE, CODEX_HOOK, TERMINAL_KEYS, TERMINAL_VIEW, TERMINAL_CONTENT)
+PUBLISHED = (
+    CLAUDE_HOOK, CLAUDE_STATUSLINE, CODEX_HOOK, TERMINAL_KEYS, TERMINAL_VIEW, TERMINAL_CONTENT,
+    TERMINAL_EXTENSION_SELECTOR,
+)
 
 
-LAUNCHED = (CLAUDE_OTEL, TERMINAL_PANE)
+LAUNCHED = (CLAUDE_OTEL, TERMINAL_PANE, TERMINAL_EXTENSION_PANE)
 
 
 PYDANTIC_PACKAGE = "pydantic"
@@ -115,6 +137,10 @@ CLIENT_DEPENDENCIES = MappingProxyType({
     "_handoff_storage.py": PYDANTIC_DEPENDENCIES,
     "_model_base.py": PYDANTIC_DEPENDENCIES,
     "_model_entry.py": PYDANTIC_DEPENDENCIES,
+    "_extension_actions.py": PYDANTIC_DEPENDENCIES,
+    "_extension_changes.py": PYDANTIC_DEPENDENCIES,
+    "_extension_selector.py": PYDANTIC_DEPENDENCIES,
+    "_model_terminal.py": PYDANTIC_DEPENDENCIES,
     "_pane_connection.py": PYDANTIC_DEPENDENCIES,
     "terminal_keys.py": PYDANTIC_DEPENDENCIES,
     "terminal_pane.py": PYDANTIC_DEPENDENCIES,

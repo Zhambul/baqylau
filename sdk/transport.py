@@ -112,6 +112,18 @@ class HttpTransport:
         )
         return response.status_code, _decode_response("PUT", path, response, adapter, accepted_statuses)
 
+    def delete[TransportResultT](
+        self, path: str, adapter: TypeAdapter[TransportResultT], accepted_statuses: set[int],
+    ) -> tuple[int, TransportResultT]:
+        """Remove one resource and read the checked response document.
+
+        Returns:
+            The HTTP status and checked response document.
+
+        """
+        response = self.client.delete(path)
+        return response.status_code, _decode_response("DELETE", path, response, adapter, accepted_statuses)
+
     @contextmanager
     def event_stream(
         self,

@@ -9,14 +9,16 @@ from baqylau_extension_api.models.canonical import CoreStateSnapshot
 from extensions import (
     interpretation_checks,
     interpretation_contract,
+    interpretation_health,
     interpretation_pipeline,
     interpretation_resources,
     interpretation_selection,
+    prior_state_selection,
 )
+from extensions.models import observations, processing_input
 from extensions.models.interpretation_context import InterpretationContext
 from extensions.models.interpretation_snapshot import PriorStateRequest
-from extensions.models.interpretations import InterpretationCommit, InterpretationProposal
-from extensions.models.observations import StoredObservation
+from extensions.models.interpretations import InterpretationCommit, InterpretationOutcome, InterpretationProposal
 from extensions.processing_contract import ExtensionProcessingBatch
 from extensions.registry_package import RegistryPackage
 from extensions.source_batch import SelectedSourceBatch
@@ -67,16 +69,47 @@ class SelectedProcessingBatch(ExtensionProcessingBatch):
                 proposal=proposal, completed_at=self.sources.callbacks.clock(),
             ))
             core.accept_interpretation(original, outcome)
+            interpretation_health.report_steps(proposal, self.sources.callbacks.health)
             completed += 1
         return completed
 
+    def interpret_history(
+        self,
+        original: observations.StoredObservation,
+        core: interpretation_contract.CoreInterpretation,
+        history_revision: str,
+    ) -> InterpretationOutcome:
+        """Replay one original into a candidate history with the retained runtime.
+
+        The write does not clear live pending input or send live work notices,
+        and the caller's core interpretation runs no input reactions.
+
+        Returns:
+            The stored outcome in the candidate history.
+
+        """
+        head = self.stores.facts.facts_for_scope(history_revision, processing_input.observation_scope(original), 0, 1)
+        selected = self.sources.context
+        context = interpretation_selection.capture_context(
+            selected.manager_id, selected.snapshot, original, head, mode="replay",
+        )
+        return self.stores.facts.record_interpretation(InterpretationCommit(
+            proposal=self._interpret(context, core), completed_at=self.sources.callbacks.clock(),
+        ))
+
     def _proposal(
-        self, original: StoredObservation, core: interpretation_contract.CoreInterpretation,
+        self, original: observations.StoredObservation, core: interpretation_contract.CoreInterpretation,
     ) -> InterpretationProposal:
         selected = self.sources.context
         context = interpretation_selection.capture_context(
             selected.manager_id, selected.snapshot, original, self.stores.facts.current_fact_page(0, 1),
         )
+        return self._interpret(context, core)
+
+    def _interpret(
+        self, context: InterpretationContext, core: interpretation_contract.CoreInterpretation,
+    ) -> InterpretationProposal:
+        selected = self.sources.context
         packages = tuple(
             package for owner in selected.snapshot.active_order for package in selected.snapshot.packages
             if package.manifest.extension_id == owner
@@ -86,8 +119,8 @@ class SelectedProcessingBatch(ExtensionProcessingBatch):
         ).interpret()
 
     def _prior(self, context: InterpretationContext) -> CoreStateSnapshot:
-        capabilities = (package.manifest.capabilities for package in context.packages.values())
-        if not any("canonical_transformer" in selected for selected in capabilities):
+        manifests = (package.manifest for package in context.packages.values())
+        if not prior_state_selection.any_reads_prior_state(manifests):
             return CoreStateSnapshot(after_cursor=context.binding.expected_canonical_cursor)
         return self.stores.facts.capture_prior_state(PriorStateRequest(
             history_revision=context.binding.history_revision, scope=context.binding.scope,

@@ -9,11 +9,19 @@ from baqylau_extension_api.models.lifecycle import ExtensionInfo
 from baqylau_extension_api.runtime.call_grants import HostCallLedger
 from baqylau_extension_api.versions import API_VERSION
 
-from extensions import capture_scanner, discovery, environments, preparation_runner, registry, runtime_preparation
+from extensions import (
+    capture_scanner,
+    discovery,
+    environments,
+    preparation_runner,
+    preparation_services,
+    registry,
+    runtime_preparation,
+)
 from extensions.impl.process.factory import ProcessExtensionWorkers
 from extensions.models import catalog as catalogs, lifecycle_operations as operations, lifecycle_selection as selection
 from extensions.models.settings import SettingsOverrides, capture_settings
-from repository.impl.sqlite.extension_lifecycle import SqliteExtensionLifecycleRepository
+from repository.impl.sqlite import extension_lifecycle, record_migrations
 from tests.extension_host import artifact_fixture, catalog_fixture, lifecycle_fixture, registry_process_fixture
 
 
@@ -23,7 +31,7 @@ class RuntimeHost:
 
     root: Path
     preparation: runtime_preparation.RuntimePreparation
-    store: SqliteExtensionLifecycleRepository
+    store: extension_lifecycle.SqliteExtensionLifecycleRepository
 
     def accept(self, operation_id: str = "enable") -> operations.LifecycleOperation:
         """Capture discovered packages and accept their complete checked selection.
@@ -59,6 +67,12 @@ def host(directory: Path, *, claimed: bool = True) -> RuntimeHost:
     prepared = runtime_preparation.RuntimePreparation(
         artifacts, ProcessExtensionWorkers(private_environments, ledger),
         registry.ActiveExtensionRegistry("initial"), ledger,
+        preparation_services.PreparationServices(
+            record_migrations=record_migrations.SqliteRecordMigrationStore(
+                catalog_fixture.repository(directory).database,
+            ),
+            process_runner=preparation_runner.BoundedPreparationRunner(),
+        ),
     )
     store = lifecycle_fixture.claimed_repository(directory) if claimed else lifecycle_fixture.repository(directory)
     return RuntimeHost(directory, prepared, store)

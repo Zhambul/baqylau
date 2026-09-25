@@ -12,6 +12,7 @@ from baqylau_extension_api.runtime.service_provider import ServiceProvider
 from baqylau_extension_api.schemas import SchemaSet
 
 from extensions.models.registry import RuntimeSettings
+from extensions.models.scope_relations import ResolvedSettings, ScopeRelations
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,12 @@ class RegistryPackage:
     environment: ExtensionEnvironment | None = None
     plugin: ExtensionPlugin | None = None
     settings: RuntimeSettings = field(default_factory=RuntimeSettings)
+    relations: ScopeRelations | None = None
+
+    @property
+    def resolved_settings(self) -> ResolvedSettings:
+        """The settings, resolving a session's related scopes through the snapshot's relation reader."""
+        return ResolvedSettings(self.settings, self.relations)
 
     def service_provider(self, schemas: SchemaSet, scope: ExtensionScope) -> ServiceProvider:
         """Select immutable peer data for use while a registry read is held.
@@ -34,5 +41,5 @@ class RegistryPackage:
         return ServiceProvider(
             manifest=self.manifest, schemas=schemas, environment=self.environment,
             queries=None if self.plugin is None else self.plugin.capabilities.queries,
-            settings_revision=self.settings.revision, settings=self.settings.for_scope(scope),
+            settings_revision=self.settings.revision, settings=self.resolved_settings.for_scope(scope),
         )

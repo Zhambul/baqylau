@@ -10,6 +10,7 @@ from baqylau_extension_api.models.content import MAX_CONTENT_BYTES
 
 from extensions.models import interpretation_steps as steps
 from harness.models.translation_stages import TranslationStage
+from tests import storage_reads
 from tests.extension_host import lifecycle_journal_changes as changes, lifecycle_pipeline_fixture as fixture
 from tests.plugin_tests import translation_stage_fixture as native
 
@@ -21,7 +22,7 @@ def test_large_first_prompt_keeps_required_facts(tmp_path: Path) -> None:
     pipeline = case.pipeline
     core = case.core
     assert pipeline.run_batch() == 1
-    stored = pipeline.original.store.find_interpretation("default", original.raw_event_id)
+    stored = storage_reads.find_interpretation(pipeline.original.store, "default", original.raw_event_id)
     assert stored is not None
     assert tuple(step.stage for step in stored.proposal.steps) == ("core_lifecycle", "unavailable_input")
     assert tuple(
@@ -47,7 +48,7 @@ def test_large_finish_does_not_skip_cleanup(tmp_path: Path, *, valid: bool) -> N
     case = fixture.installed(tmp_path, original)
     plugin = case.core.plugin
     assert case.pipeline.run_batch() == 1
-    stored = case.pipeline.original.store.find_interpretation("default", original.raw_event_id)
+    stored = storage_reads.find_interpretation(case.pipeline.original.store, "default", original.raw_event_id)
     assert stored is not None
     required = stored.proposal.steps[0]
     assert isinstance(required, steps.CoreLifecycleStep)

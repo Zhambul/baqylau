@@ -10,6 +10,7 @@ from uuid import uuid4
 from extensions import manager, manager_resources as resources, registry_contract
 from extensions.manager_contract import ExtensionManager, ManagerStateError
 from extensions.models import lifecycle_operations, lifecycle_selection, lifecycle_state
+from extensions.retention import StartupRetention
 from extensions.runtime_ownership_contract import ExtensionRuntimeOwnership
 from extensions.runtime_preparation_contract import ExtensionRuntimePreparation
 from repository.contract import extension_catalog, extension_lifecycle
@@ -26,6 +27,7 @@ class ExtensionManagerFactory:
     ownership: ExtensionRuntimeOwnership
     callbacks: resources.ManagerCallbacks
     policy: resources.ManagerPolicy = field(default_factory=resources.ManagerPolicy)
+    retention: StartupRetention | None = None
 
     def open_manager(self) -> ExtensionManager:
         """Start restoration without running feature preparation on the caller thread.
@@ -41,6 +43,9 @@ class ExtensionManagerFactory:
                 f"manager-{uuid4().hex}",
             )
             session = _open_session(services, self.policy, cleanup)
+            if self.retention is not None:
+                # The lease and the claim exclude another manager; no preparation has started.
+                self.retention.collect()
             controller = manager.ManagedExtensions(session)
             _restore(controller, services)
             cleanup.pop_all()

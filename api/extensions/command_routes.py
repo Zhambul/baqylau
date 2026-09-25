@@ -6,28 +6,21 @@ from http import HTTPStatus
 from typing import Annotated
 
 from baqylau_extension_api.errors import ExtensionContractError
-from baqylau_extension_api.models.scopes import ExtensionScope
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import TypeAdapter, ValidationError
 
-from api.extensions import command_service, job_service
-from api.extensions.admission import require_extension_json
-from api.extensions.command_models import ExtensionCommandRequest
-from api.extensions.job_models import (
-    ExtensionJobCancelRequest,
-    ExtensionJobCancelResponse,
-    ExtensionJobReconcileRequest,
-    ExtensionJobResponse,
+from api.extensions import admission, command_models, command_service, job_models, job_service, scope_documents
+from app import (
+    provider_extension_executor as executor_providers,
+    provider_extension_jobs as job_providers,
+    provider_extension_policy as policy_providers,
+    provider_extension_registry as registry_providers,
 )
-from app.provider_extension_controls import ControlPolicy
-from app.provider_extension_jobs import Jobs
-from app.provider_extension_registry import Registry
 from extensions.control_policy import ExtensionControlPolicy
+from extensions.job_requests import JobKey
 from extensions.registry_contract import ExtensionRegistry
 from repository.contract.extension_jobs import ExtensionJobRepository
 
 router = APIRouter()
-SCOPE_ADAPTER: TypeAdapter[ExtensionScope] = TypeAdapter(ExtensionScope)
 
 
 @dataclass(frozen=True)
@@ -39,7 +32,9 @@ class CommandServices:
     policy: ExtensionControlPolicy
 
 
-def command_services(jobs: Jobs, registry: Registry, policy: ControlPolicy) -> CommandServices:
+def command_services(
+    jobs: job_providers.Jobs, registry: registry_providers.Registry, policy: policy_providers.ControlPolicy,
+) -> CommandServices:
     """Build the command dependencies for one request.
 
     Returns:
@@ -54,30 +49,29 @@ CommandDependencies = Annotated[CommandServices, Depends(command_services)]
 
 @router.post(
     "/api/extensions/{extension_id}/commands/{command_id}",
-    dependencies=[Depends(require_extension_json)],
+    dependencies=[Depends(admission.require_extension_json)],
+    status_code=HTTPStatus.ACCEPTED,
 )
 def extension_command(
     extension_id: str,
     command_id: str,
-    extension_command_request: ExtensionCommandRequest,
+    extension_command_request: command_models.ExtensionCommandRequest,
     services: CommandDependencies,
-) -> ExtensionJobResponse:
-    """Accept and run one declared command against the active package.
+    executor: executor_providers.JobExecution,
+) -> job_models.ExtensionJobResponse:
+    """Accept one declared command and schedule it on the background executor.
 
     Returns:
-        The stored job after its final state.
+        The accepted job before its final state.
 
     Raises:
         HTTPException: If the scope, package, or declaration is invalid.
 
     """
-    try:
-        scope = SCOPE_ADAPTER.validate_json(extension_command_request.scope)
-    except ValidationError as error:
-        raise HTTPException(HTTPStatus.BAD_REQUEST, "scope must be a valid extension scope document") from error
+    scope = scope_documents.request_scope(extension_command_request.scope)
     with services.registry.read_snapshot() as read:
         try:
-            job = command_service.run_command(
+            accepted = command_service.accept_command(
                 command_service.CommandDispatch(read.snapshot.packages, services.jobs, services.policy),
                 extension_id,
                 command_id,
@@ -88,85 +82,6 @@ def extension_command(
             raise HTTPException(HTTPStatus.NOT_FOUND, str(error)) from error
         except ExtensionContractError as error:
             raise HTTPException(HTTPStatus.BAD_REQUEST, str(error)) from error
-    return job_service.job_response(job)
-
-
-@router.post(
-    "/api/extensions/{extension_id}/jobs/{job_id}/cancel",
-    dependencies=[Depends(require_extension_json)],
-)
-def cancel_extension_job(
-    extension_id: str,
-    job_id: str,
-    extension_job_cancel_request: ExtensionJobCancelRequest,
-    services: CommandDependencies,
-) -> ExtensionJobCancelResponse:
-    """Request cancellation of one stored job attempt.
-
-    Returns:
-        The checked cancellation request state.
-
-    Raises:
-        HTTPException: If the scope, job, or revision is invalid.
-
-    """
-    try:
-        scope = SCOPE_ADAPTER.validate_json(extension_job_cancel_request.scope)
-    except ValidationError as error:
-        raise HTTPException(HTTPStatus.BAD_REQUEST, "scope must be a valid extension scope document") from error
-    with services.registry.read_snapshot() as read:
-        try:
-            return command_service.cancel_command(
-                command_service.CommandDispatch(read.snapshot.packages, services.jobs, services.policy),
-                extension_id,
-                job_id,
-                scope,
-                extension_job_cancel_request,
-            )
-        except (command_service.JobNotFoundError, command_service.CommandNotFoundError) as error:
-            raise HTTPException(HTTPStatus.NOT_FOUND, str(error)) from error
-        except command_service.JobRevisionError as error:
-            raise HTTPException(HTTPStatus.CONFLICT, str(error)) from error
-        except ExtensionContractError as error:
-            raise HTTPException(HTTPStatus.BAD_REQUEST, str(error)) from error
-
-
-@router.post(
-    "/api/extensions/{extension_id}/jobs/{job_id}/reconcile",
-    dependencies=[Depends(require_extension_json)],
-)
-def reconcile_extension_job(
-    extension_id: str,
-    job_id: str,
-    extension_job_reconcile_request: ExtensionJobReconcileRequest,
-    services: CommandDependencies,
-) -> ExtensionJobResponse:
-    """Inspect an uncertain job result without repeating the command.
-
-    Returns:
-        The stored job after the reconciled outcome.
-
-    Raises:
-        HTTPException: If the scope, job, or revision is invalid.
-
-    """
-    try:
-        scope = SCOPE_ADAPTER.validate_json(extension_job_reconcile_request.scope)
-    except ValidationError as error:
-        raise HTTPException(HTTPStatus.BAD_REQUEST, "scope must be a valid extension scope document") from error
-    with services.registry.read_snapshot() as read:
-        try:
-            job = command_service.reconcile_command(
-                command_service.CommandDispatch(read.snapshot.packages, services.jobs, services.policy),
-                extension_id,
-                job_id,
-                scope,
-                extension_job_reconcile_request,
-            )
-        except (command_service.JobNotFoundError, command_service.CommandNotFoundError) as error:
-            raise HTTPException(HTTPStatus.NOT_FOUND, str(error)) from error
-        except command_service.JobRevisionError as error:
-            raise HTTPException(HTTPStatus.CONFLICT, str(error)) from error
-        except ExtensionContractError as error:
-            raise HTTPException(HTTPStatus.BAD_REQUEST, str(error)) from error
-    return job_service.job_response(job)
+    if accepted.state == "accepted":
+        executor.submit(JobKey(extension_id, scope, accepted.job_id))
+    return job_service.job_response(accepted)

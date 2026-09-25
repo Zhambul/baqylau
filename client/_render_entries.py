@@ -92,6 +92,9 @@ def _note_text(entry: EntryRecord) -> str:
         if before and after:
             text = f"{text} · {count(before)} → {count(after)} tokens"
         return text
+    if kind == "extension":
+        # The pane has no extension code: a stored entry shows its summary, or its owner and type.
+        return entry.summary or f"{body.owner}: {body.entry_type}"
     if kind == "model_change":
         text = f"model {_transition(body)}"
         if body.automatic:

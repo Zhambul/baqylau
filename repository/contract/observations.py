@@ -3,8 +3,6 @@
 
 from typing import Protocol
 
-from baqylau_extension_api.models.scopes import ExtensionScope
-
 from domain.ids import RawEventId
 from extensions.models.observations import ObservationAppend, ObservationAppendOutcome, StoredObservation
 
@@ -12,25 +10,14 @@ from extensions.models.observations import ObservationAppend, ObservationAppendO
 class ObservationRepository(Protocol):
     """Use one raw store and pending queue without weakening core record types."""
 
-    def append_observations(self, request: ObservationAppend) -> ObservationAppendOutcome:
-        """Validate and append all input, or roll back the whole request.
-
-        Repeated source keys retain the first original row. Changed bytes or
-        identity fields raise EventIdentityConflictError. No source checkpoint
-        advances through this method.
-        """
-        ...
-
     def find_observation(self, raw_event_id: RawEventId) -> StoredObservation | None:
         """Read a core or extension observation by its unchanged raw identity."""
         ...
 
-    def pending_observations(self, limit: int) -> tuple[StoredObservation, ...]:
-        """Read both branches from the same durable queue in arrival order."""
+    def append_observations(self, observation_append: ObservationAppend) -> ObservationAppendOutcome:
+        """Validate and append one owner's new originals in one transaction."""
         ...
 
-    def observations_for_scope(
-        self, scope: ExtensionScope, after_cursor: int, limit: int,
-    ) -> tuple[StoredObservation, ...]:
-        """Page original input for one exact scope by host arrival cursor."""
+    def pending_observations(self, limit: int) -> tuple[StoredObservation, ...]:
+        """Read both branches from the same durable queue in arrival order."""
         ...

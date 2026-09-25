@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Zhambyl Yermagambet
 """Read one validated capability plan with no mutable discovery lookups."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from baqylau_extension_api.contracts.services import ExtensionDirectory
 from baqylau_extension_api.manifest.activation import activation_order
@@ -12,6 +12,7 @@ from baqylau_extension_api.schemas import SchemaSet
 
 from extensions import registry_validation
 from extensions.models.lifecycle_selection import RuntimePackageSelection, RuntimeSelection
+from extensions.models.scope_relations import ScopeRelations
 from extensions.registry_package import RegistryPackage
 
 
@@ -23,6 +24,7 @@ class RuntimeSnapshot(ExtensionDirectory, ServiceProviderLookup):
     packages: tuple[RegistryPackage, ...]
     schemas: SchemaSet
     active_order: tuple[str, ...]
+    relations: ScopeRelations | None = None
 
     def runtime_selection(self) -> RuntimeSelection:
         """Capture the exact enabled identity and settings in validated active order.
@@ -67,7 +69,10 @@ class RuntimeSnapshot(ExtensionDirectory, ServiceProviderLookup):
 
 
 def prepare_snapshot(
-    catalog_revision: int, runtime_revision: str, packages: tuple[RegistryPackage, ...],
+    catalog_revision: int,
+    runtime_revision: str,
+    packages: tuple[RegistryPackage, ...],
+    relations: ScopeRelations | None = None,
 ) -> RuntimeSnapshot:
     """Validate and order a proposed set without changing workers or published state.
 
@@ -75,7 +80,10 @@ def prepare_snapshot(
         One checked selection ready for a compare-and-set publication.
 
     """
-    ordered = tuple(sorted(packages, key=lambda package: package.manifest.extension_id))
+    ordered = tuple(sorted(
+        (replace(package, relations=relations) for package in packages),
+        key=lambda package: package.manifest.extension_id,
+    ))
     directory = DirectorySnapshot(
         catalog_revision=catalog_revision, runtime_revision=runtime_revision,
         entries=tuple(package.entry for package in ordered),
@@ -87,7 +95,7 @@ def prepare_snapshot(
         registry_validation.validate_package(package, schemas, runtime_revision)
     return RuntimeSnapshot(directory, ordered, schemas, activation_order(tuple(
         active.manifest for active in ordered if active.entry.state == "enabled"
-    )))
+    )), relations)
 
 
 def _require_unique(packages: tuple[RegistryPackage, ...]) -> None:

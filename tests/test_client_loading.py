@@ -225,7 +225,7 @@ def test_the_http_module_matches_the_daemon() -> None:
         for template, arguments in (
             (http_module.SESSION_DATA_PATH, ("{session_id}",)),
             (http_module.SESSION_ENTRIES_PATH, ("{session_id}", 0)),
-            (http_module.SESSION_STREAM_PATH, ("{session_id}", 0)),
+            (http_module.SESSION_STREAM_PATH, ("{session_id}", 0, 0)),
         )
     )
 

@@ -44,16 +44,24 @@ class SourceReader:
             except Exception:  # noqa: BLE001 -- Preserve the checkpoint and continue unrelated input.
                 self.report_failure("read", key, progress.source.source_identity)
                 return replace(progress, retry_at=self.callbacks.clock() + self.policy.retry_seconds)
+            self._read_succeeded(key)
             if not progress.has_more:
                 return progress
         return progress
 
     def report_failure(self, operation: str, key: SourceScopeKey, source_identity: str | None = None) -> None:
-        """Use the existing coalesced audit with owner and runtime context."""
+        """Use the existing coalesced audit with owner and runtime context, and count the failure."""
         runtime = self.calls.provider.environment.runtime_revision
-        self.callbacks.failures.record(f"extension source {operation}", FailureContext(
+        where = f"extension source {operation}"
+        self.callbacks.failures.record(where, FailureContext(
             source=f"{key.extension_id}@{runtime}", source_identity=source_identity,
         ))
+        if self.callbacks.health is not None:
+            self.callbacks.health.failed(key.extension_id, where)
+
+    def _read_succeeded(self, key: SourceScopeKey) -> None:
+        if self.callbacks.health is not None:
+            self.callbacks.health.succeeded(key.extension_id)
 
     def _read_page(self, key: SourceScopeKey, progress: SourceProgress) -> SourceProgress:
         checkpoint = self.repository.source_checkpoint(SourceKey(

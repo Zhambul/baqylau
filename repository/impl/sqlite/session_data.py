@@ -19,9 +19,11 @@ from domain import entries
 from domain.lifecycle import LifecycleState
 from repository.contract import session_data as contracts
 from repository.impl.sqlite import (
+    read_model_views,
     session_data_aggregate as aggregate_mapper,
     session_data_progress,
     session_data_write as write_mapper,
+    session_entry_rows as entry_rows_read,
 )
 
 if TYPE_CHECKING:
@@ -274,19 +276,19 @@ class _SqliteSessionDataEntryRead(_SqliteSessionDataState):
         """
         return entries.pending_attention(self.entries_of_types(session_id, entries.ATTENTION_ENTRY_TYPES))
 
-    def delta(self, session_id: SessionId, cursor: int) -> contracts.SessionDelta:
-        """Return the delta.
+    def delta(
+        self, session_id: SessionId, cursor: int, entry_cursor: int | None = None,
+    ) -> contracts.SessionDelta:
+        """Read what changed after the reader's canonical cursor and after its last entry row.
+
+        Without an entry cursor, the reader has every entry row at or before its canonical cursor.
 
         Returns:
             Delta.
 
         """
         with self.sqlite_database.read() as connection:
-            entry_rows = connection.execute(
-                "SELECT * FROM session_entries WHERE session_id=? AND commit_cursor > ? "
-                "ORDER BY commit_cursor, position",
-                (str(session_id), cursor),
-            ).fetchall()
+            entry_read = entry_rows_read.read_after(connection, session_id, cursor, entry_cursor)
             session_row = connection.execute(
                 "SELECT * FROM session_data WHERE session_id=? AND revision > ?",
                 (str(session_id), cursor),
@@ -295,15 +297,14 @@ class _SqliteSessionDataEntryRead(_SqliteSessionDataState):
                 "SELECT * FROM session_data_actors WHERE session_id=? AND revision > ? ORDER BY revision",
                 (str(session_id), cursor),
             ).fetchall()
-        revisions = [int(row[REVISION_COLUMN]) for row in actor_rows]
-        if session_row is not None:
-            revisions.append(int(session_row[REVISION_COLUMN]))
-        revisions.extend(int(row["commit_cursor"]) for row in entry_rows)
+            view_revision = read_model_views.revision(connection)
         return contracts.SessionDelta(
             session=None if session_row is None else aggregate_mapper.session_facts(session_row),
             actors=tuple(aggregate_mapper.actor_facts(row) for row in actor_rows),
-            entries=tuple(aggregate_mapper.entry(row) for row in entry_rows),
-            cursor=max(revisions) if revisions else cursor,
+            entries=tuple(aggregate_mapper.entry(row) for row in entry_read.rows),
+            cursor=_delta_cursor(cursor, session_row, actor_rows, entry_read.rows),
+            view_revision=view_revision,
+            entry_cursor=entry_read.entry_cursor,
         )
 
     def changed_after(self, cursor: int) -> contracts.AggregateDelta:
@@ -322,11 +323,13 @@ class _SqliteSessionDataEntryRead(_SqliteSessionDataState):
                 "SELECT * FROM session_data_actors WHERE revision > ? ORDER BY revision",
                 (cursor,),
             ).fetchall()
+            view_revision = read_model_views.revision(connection)
         revisions = [int(row[REVISION_COLUMN]) for row in (*session_rows, *actor_rows)]
         return contracts.AggregateDelta(
             sessions=tuple(aggregate_mapper.session_facts(row) for row in session_rows),
             actors=tuple(aggregate_mapper.actor_facts(row) for row in actor_rows),
             cursor=max(revisions) if revisions else cursor,
+            view_revision=view_revision,
         )
 
     def _entry_page_rows(
@@ -378,3 +381,16 @@ def _running_related_rows(
         session_ids,
     ).fetchall()
     return actor_rows, entry_cursors
+
+
+def _delta_cursor(
+    cursor: int,
+    session_row: sqlite3.Row | None,
+    actor_rows: list[sqlite3.Row],
+    entry_rows: list[sqlite3.Row],
+) -> int:
+    revisions = [int(row[REVISION_COLUMN]) for row in actor_rows]
+    if session_row is not None:
+        revisions.append(int(session_row[REVISION_COLUMN]))
+    revisions.extend(int(row["commit_cursor"]) for row in entry_rows)
+    return max(revisions) if revisions else cursor

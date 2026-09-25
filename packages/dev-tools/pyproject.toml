@@ -8,6 +8,14 @@ version = "0.1.0a1"
 description = "Shared Python quality rules for Baqylau and external extensions."
 readme = "README.md"
 requires-python = ">=3.12"
+authors = [{ name = "Zhambyl Yermagambet" }]
+license = "LicenseRef-Proprietary"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Typing :: Typed",
+]
 dynamic = ["dependencies"]
 
 [project.scripts]
@@ -20,4 +28,4 @@ dependencies = {file = ["src/baqylau_dev/policy/requirements.txt", "requirements
 where = ["src"]
 
 [tool.setuptools.package-data]
-baqylau_dev = ["py.typed", "policy/*.toml", "policy/*.ini", "policy/*.txt"]
+baqylau_dev = ["py.typed", "policy/*.toml", "policy/*.ini", "policy/*.txt", "template/**/*.in", "template/*.in"]

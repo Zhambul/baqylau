@@ -8,7 +8,7 @@ from pathlib import Path
 from domain.event_conversation import TurnFinished
 from domain.ids import SessionId
 from engine.interpret.loop import Interpreter
-from tests import http_test_assets, http_test_controls, http_test_pane_models, http_test_preferences
+from tests import http_test_assets, http_test_controls, http_test_pane_models, http_test_preferences, storage_reads
 from tests.e2e_replay.audit_replay_support import replay
 from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.provider_graph import ProviderGraph
@@ -49,7 +49,7 @@ def test_rate_limit_hook_is_accepted(tmp_path: Path) -> None:
 
 def _assert_failed_turn(application: ProviderGraph) -> None:
     finished = [
-        event.payload for event in application.canonical_events.page_from(0, 100)
+        event.payload for event in storage_reads.page_from(application.canonical_events, 0, 100)
         if isinstance(event.payload, TurnFinished)
     ]
     assert len(finished) == 1

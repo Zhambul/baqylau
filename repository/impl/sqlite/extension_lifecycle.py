@@ -9,7 +9,6 @@ from pydantic import TypeAdapter
 from extensions.models.cleanup import ShutdownRecord
 from extensions.models.lifecycle_operations import LifecycleCompletion, LifecycleOperation, LifecycleProposal, Timestamp
 from extensions.models.lifecycle_state import LifecycleAdmission, LifecycleState, LifecycleWrite, ManagerClaim
-from extensions.models.runtime_candidates import RuntimeCandidate
 from repository.contract.extension_lifecycle import ExtensionLifecycleRepository
 from repository.impl.sqlite import (
     extension_lifecycle_accept as admission,
@@ -80,16 +79,6 @@ class SqliteExtensionLifecycleRepository(ExtensionLifecycleRepository):
         """
         with self.database.read() as connection:
             return reads.read_operation(connection, operation_id)
-
-    def read_extension_runtime(self, runtime_revision: str) -> RuntimeCandidate | None:
-        """Read reserved candidate history even after failure or package removal.
-
-        Returns:
-            The exact selection or no row for an unknown runtime ID.
-
-        """
-        with self.database.read() as connection:
-            return reads.read_runtime(connection, runtime_revision)
 
     def record_extension_shutdown(self, record: ShutdownRecord) -> bool:
         """Commit uncertainty before the manager releases native process ownership.

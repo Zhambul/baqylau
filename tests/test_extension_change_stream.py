@@ -8,15 +8,18 @@ import pytest
 from baqylau_extension_api.models import documents, records, scopes
 
 from api import sse
-from api.extensions.change_frames import ChangeStream, change_frame_loop
+from api.extensions.change_frames import change_frame_loop
 from api.extensions.change_models import ExtensionChangeQuery
+from api.extensions.change_stream import ChangeStream
 from core.change_signal import ChangeSignal
+from extensions.source_scopes import ActiveExtensionScopes
 from repository.contract.extension_records import ExtensionRecordChanges, ExtensionRecordRepository
 
 OWNER = "test.owner"
 COLLECTION = "test.owner.notes"
 SCOPE = scopes.InstallationScope()
-DIGEST = "a" * 64
+DIGEST_LENGTH = 64
+DIGEST = "a" * DIGEST_LENGTH
 SCHEMA_REF = documents.SchemaRef(owner=OWNER, name="text", version=1, digest=DIGEST)
 KEY = records.RecordKey(owner=OWNER, collection=COLLECTION, scope=SCOPE, key="note-1")
 STATE = records.StoredRecord(
@@ -27,38 +30,32 @@ STATE = records.StoredRecord(
 )
 IDLE_CHECK_SECONDS = 0.05
 TEST_HEARTBEAT_SECONDS = 0.02
-
-
-def a_query(**overrides: object) -> ExtensionChangeQuery:
-    """Build a change query for the installation scope.
-
-    Returns:
-        The query with the supplied overrides.
-
-    """
-    values: dict[str, object] = {"scope": SCOPE.model_dump_json()}
-    values.update(overrides)
-    return ExtensionChangeQuery.model_validate(values)
+DEFAULT = "default"
+QUERY = ExtensionChangeQuery(scope=SCOPE.model_dump_json())
 
 
 def a_stream(repository: Mock, signal: ChangeSignal) -> ChangeStream:
-    """Build the default active-head change stream.
+    """Build a change stream whose active head is the default generation.
 
     Returns:
         The stream over the supplied repository and signal.
 
     """
-    return ChangeStream(records=repository, changes=signal, history_revision="default", generation="default")
+    heads = Mock()
+    heads.active_generation.return_value = DEFAULT
+    return ChangeStream(
+        records=repository, changes=signal, history_revision=DEFAULT, heads=heads, scopes=ActiveExtensionScopes(Mock()),
+    )
 
 
 async def _check_change_notice() -> None:
     repository = Mock(spec=ExtensionRecordRepository)
     repository.record_changes.return_value = ExtensionRecordChanges((), 0)
     signal = ChangeSignal()
-    stream = change_frame_loop(a_stream(repository, signal), OWNER, SCOPE, a_query())
+    stream = change_frame_loop(a_stream(repository, signal), OWNER, SCOPE, QUERY)
     pending = asyncio.create_task(anext(stream))
     await asyncio.sleep(IDLE_CHECK_SECONDS)
-    repository.record_changes.assert_called_once_with(OWNER, SCOPE, "default", 0)
+    repository.record_changes.assert_called_once_with(OWNER, SCOPE, DEFAULT, 0)
 
     repository.record_changes.return_value = ExtensionRecordChanges((STATE,), 1)
     await asyncio.to_thread(signal.publish)
@@ -72,7 +69,7 @@ async def _check_reset() -> None:
     repository = Mock(spec=ExtensionRecordRepository)
     repository.record_changes.return_value = ExtensionRecordChanges((), 0)
     signal = ChangeSignal()
-    query = a_query(projection_generation="other")
+    query = QUERY.model_copy(update={"projection_generation": "other"})
     stream = change_frame_loop(a_stream(repository, signal), OWNER, SCOPE, query)
     frame = await asyncio.wait_for(anext(stream), 1)
     assert "event: reset" in frame
@@ -83,9 +80,9 @@ async def _check_reset() -> None:
 async def _check_heartbeat() -> None:
     repository = Mock(spec=ExtensionRecordRepository)
     repository.record_changes.return_value = ExtensionRecordChanges((), 0)
-    stream = change_frame_loop(a_stream(repository, ChangeSignal()), OWNER, SCOPE, a_query())
+    stream = change_frame_loop(a_stream(repository, ChangeSignal()), OWNER, SCOPE, QUERY)
     assert await asyncio.wait_for(anext(stream), 1) == sse.BEAT
-    repository.record_changes.assert_called_once_with(OWNER, SCOPE, "default", 0)
+    repository.record_changes.assert_called_once_with(OWNER, SCOPE, DEFAULT, 0)
     await stream.aclose()
 
 
@@ -94,7 +91,7 @@ def test_change_stream_waits_for_a_change_notice() -> None:
     asyncio.run(_check_change_notice())
 
 
-def test_change_stream_resets_an_unknown_generation() -> None:
+def test_stream_resets_an_unknown_generation() -> None:
     """An unknown history or generation restarts the client from the active head."""
     asyncio.run(_check_reset())
 

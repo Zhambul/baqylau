@@ -8,11 +8,11 @@ from baqylau_extension_api.manifest.package import ExtensionManifest
 from baqylau_extension_api.models import events, translation_inputs
 
 from domain.records import RecordedTranslationDecision
-from extensions.models import observations, processing_input
-from extensions.models.interpretation_reads import TranslationStateKey
+from extensions.models import interpretation_reads, observations, processing_input
 from extensions.models.interpretation_steps import AppliedStep, ExtensionTranslationStep
 from extensions.models.interpretations import InterpretationBinding, InterpretationCommit, InterpretationProposal
 from repository.impl.sqlite.interpretations import SqliteInterpretationRepository
+from tests import storage_reads
 from tests.extension_api import translation_samples
 from tests.extension_host import observation_fixture as originals
 
@@ -46,7 +46,7 @@ def proposal(
 
     """
     append = case.original.request if observation is None else observation
-    stored = case.original.store.append_observations(append).accepted[0]
+    stored = storage_reads.append_observations(case.original.store, append).accepted[0]
     selected = binding(case, stored)
     context = events.ProcessingContext(
         extension_id=case.original.request.extension_id, runtime_revision=selected.runtime_revision,
@@ -105,7 +105,7 @@ def translation_request(
     )
 
 
-def state_key(case: InterpretationCase) -> TranslationStateKey:
+def state_key(case: InterpretationCase) -> interpretation_reads.TranslationStateKey:
     """Name the fixture's one exact decoder scope and source.
 
     Returns:
@@ -113,7 +113,7 @@ def state_key(case: InterpretationCase) -> TranslationStateKey:
 
     """
     positioned = case.original.request.observations[0]
-    return TranslationStateKey(
+    return interpretation_reads.TranslationStateKey(
         extension_id=case.original.request.extension_id, history_revision="default", scope=case.original.request.scope,
         source_identity=positioned.observation.source_identity,
     )

@@ -1,21 +1,20 @@
 # Copyright (c) 2026 Zhambyl Yermagambet
 """Stream records changed at each committed extension boundary."""
 
-from http import HTTPStatus
 from typing import Annotated
 
-from baqylau_extension_api.models.scopes import ExtensionScope
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
-from pydantic import TypeAdapter, ValidationError
 
-from api.extensions.change_frames import ChangeStream, change_frames
+from api.extensions.change_frames import change_frames
 from api.extensions.change_models import ExtensionChangeQuery
+from api.extensions.change_stream import ChangeStream
+from api.extensions.scope_documents import request_scope
 from api.sse import EVENT_STREAM, NO_STORE
-from app.provider_projections import ExtensionChanges, ExtensionRecords, Projections
+from app.provider_extension_sources import ScopeRegistry
+from app.provider_projections import ExtensionChanges, ExtensionRecords, Generations, Projections
 
 router = APIRouter()
-SCOPE_ADAPTER: TypeAdapter[ExtensionScope] = TypeAdapter(ExtensionScope)
 
 
 def change_query(
@@ -41,35 +40,35 @@ def change_query(
 ChangeQuery = Annotated[ExtensionChangeQuery, Depends(change_query)]
 
 
+def change_stream(
+    records: ExtensionRecords, changes: ExtensionChanges, projections: Projections, generations: Generations,
+    scopes: ScopeRegistry,
+) -> ChangeStream:
+    """Build the change stream services for one request.
+
+    Returns:
+        The records, the change signal, the history, the live generation reader, and the scope holds.
+
+    """
+    return ChangeStream(
+        records=records, changes=changes, history_revision=projections.history_revision, heads=generations,
+        scopes=scopes,
+    )
+
+
+Stream = Annotated[ChangeStream, Depends(change_stream)]
+
+
 @router.get("/api/extensions/{extension_id}/changes")
-def extension_changes(
-    extension_id: str,
-    records: ExtensionRecords,
-    changes: ExtensionChanges,
-    projections: Projections,
-    query: ChangeQuery,
-) -> StreamingResponse:
+def extension_changes(extension_id: str, stream: Stream, query: ChangeQuery) -> StreamingResponse:
     """Stream typed records changed at each committed boundary.
 
     Returns:
         The server-sent change stream.
 
-    Raises:
-        HTTPException: If the scope document is invalid.
-
     """
-    try:
-        selected = SCOPE_ADAPTER.validate_json(query.scope)
-    except ValidationError as error:
-        raise HTTPException(HTTPStatus.BAD_REQUEST, "scope must be a valid extension scope document") from error
-    stream = ChangeStream(
-        records=records,
-        changes=changes,
-        history_revision=projections.history_revision,
-        generation=projections.generation,
-    )
     return StreamingResponse(
-        change_frames(stream, extension_id, selected, query),
+        change_frames(stream, extension_id, request_scope(query.scope), query),
         media_type=EVENT_STREAM,
         headers=NO_STORE,
     )

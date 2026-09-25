@@ -8,40 +8,41 @@ from typing import Annotated
 
 from fastapi import Depends
 
-from app import provider_databases, provider_extension_artifacts, provider_extension_registry, provider_work_queue
+from app import (
+    provider_databases,
+    provider_extension_artifacts,
+    provider_extension_registry,
+    provider_extension_storage,
+    provider_work_queue,
+    provider_worker_services,
+)
 from app.injection import singleton
 from core.work_queue import WorkKind
 from extensions import (
-    environments,
     manager_contract,
     manager_factory,
     manager_resources,
-    preparation_runner,
     runtime_ownership,
     runtime_preparation,
     runtime_preparation_contract,
 )
-from extensions.impl.process.factory import ProcessExtensionWorkers
 from repository.impl.sqlite import extension_catalog, extension_lifecycle
 
 
 @singleton
 def runtime_preparer(
-    database: provider_databases.MainDb, artifacts: provider_extension_artifacts.Artifacts,
+    artifacts: provider_extension_artifacts.Artifacts,
+    workers: provider_extension_storage.Workers,
     registry: provider_extension_registry.Registry, ledger: provider_extension_registry.CallLedger,
+    services: provider_worker_services.WorkerServices,
 ) -> runtime_preparation_contract.ExtensionRuntimePreparation:
-    """Keep private environments beside this application's actual database.
+    """Prepare complete runtimes with the application's workers.
 
     Returns:
         The complete-runtime preparer, with no active process yet.
 
     """
-    private_environments = environments.LocalExtensionEnvironments(
-        Path(database.path).parent / "extension-environments", artifacts, preparation_runner.BoundedPreparationRunner(),
-    )
-    return runtime_preparation.RuntimePreparation(
-        artifacts, ProcessExtensionWorkers(private_environments, ledger), registry, ledger,
-    )
+    return runtime_preparation.RuntimePreparation(artifacts, workers, registry, ledger, services)
 
 
 Preparation = Annotated[runtime_preparation_contract.ExtensionRuntimePreparation, Depends(runtime_preparer)]
@@ -51,6 +52,7 @@ Preparation = Annotated[runtime_preparation_contract.ExtensionRuntimePreparation
 def extension_manager_factory(
     database: provider_databases.MainDb, registry: provider_extension_registry.Registry,
     preparation: Preparation, work_queue: provider_work_queue.EngineWork,
+    startup_retention: provider_extension_storage.Retention,
 ) -> manager_factory.ExtensionManagerFactory:
     """Build the explicit startup factory; only daemon startup opens its manager.
 
@@ -63,6 +65,7 @@ def extension_manager_factory(
         extension_catalog.SqliteExtensionCatalogRepository(database), registry, preparation,
         runtime_ownership.FilesystemRuntimeOwnership(Path(database.path).parent),
         manager_resources.ManagerCallbacks(partial(work_queue.put, WorkKind.EXTENSIONS)),
+        retention=startup_retention,
     )
 
 

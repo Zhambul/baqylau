@@ -1,0 +1,13 @@
+diff --git a/node_modules/@sjsf/form/dist/form/components.d.ts b/node_modules/@sjsf/form/dist/form/components.d.ts
+index d1cc3ef..707d701 100644
+--- a/node_modules/@sjsf/form/dist/form/components.d.ts
++++ b/node_modules/@sjsf/form/dist/form/components.d.ts
+@@ -25,7 +25,7 @@ export interface FoundationalComponents {
+     submitButton: {};
+ }
+ export type FoundationalComponentType = keyof FoundationalComponents & ComponentType;
+-export type ComponentDefinition<T extends ComponentType> = SvelteComponent<ComponentProps[T], {}, ComponentBindings[T]>;
++export type ComponentDefinition<T extends ComponentType> = SvelteComponent<ComponentProps[T], {}, ComponentBindings[T] & ("" | keyof ComponentProps[T])>;
+ export type ComponentDefinitions = {
+     [T in ComponentType]: ComponentDefinition<T>;
+ };

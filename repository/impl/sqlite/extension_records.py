@@ -3,6 +3,7 @@
 
 import sqlite3
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from baqylau_extension_api.models import documents, record_changes, records, scopes
 
@@ -39,12 +40,11 @@ _DELETE_SQL = (
 )
 
 
+@dataclass(frozen=True)
 class SqliteExtensionRecordRepository:
     """Read captured extension records from one database."""
 
-    def __init__(self, database: connection.SqliteDatabase) -> None:
-        """Store the database handle."""
-        self.database = database
+    database: connection.SqliteDatabase
 
     def record_states(self, keys: Sequence[records.RecordKey]) -> tuple[records.RecordState, ...]:
         """Return the captured states in the supplied key order.
@@ -67,7 +67,7 @@ class SqliteExtensionRecordRepository:
         """
         rows = self._page_rows(owner, collection, scope, after_key, limit + 1)
         selected = rows[:limit]
-        states = tuple(_row_state(owner, collection, scope, row) for row in selected)
+        states = tuple(row_state(owner, collection, scope, row) for row in selected)
         next_key = None
         if len(rows) > limit and selected:
             next_key = str(selected[-1]["record_key"])
@@ -87,19 +87,30 @@ class SqliteExtensionRecordRepository:
             stays when no later boundary exists.
 
         """
-        scope_text = scope.model_dump_json()
-        with self.database.read() as connection_handle:
-            boundary_row = connection_handle.execute(
-                _NEXT_BOUNDARY_SQL, (owner, scope_text, projection_generation, after_cursor),
-            ).fetchone()
-            if boundary_row is None or boundary_row["boundary"] is None:
-                return ExtensionRecordChanges(changes=(), next_cursor=after_cursor)
-            boundary = int(boundary_row["boundary"])
-            rows = connection_handle.execute(
-                _BOUNDARY_SQL, (owner, scope_text, projection_generation, boundary),
-            ).fetchall()
-        changes = tuple(_row_state(owner, str(row["collection"]), scope, row) for row in rows)
+        boundary_rows = self._boundary_rows((owner, scope.model_dump_json(), projection_generation), after_cursor)
+        if boundary_rows is None:
+            return ExtensionRecordChanges(changes=(), next_cursor=after_cursor)
+        boundary, rows = boundary_rows
+        changes = tuple(
+            row_state(owner, row["collection"], scope, row) for row in rows
+        )
         return ExtensionRecordChanges(changes=changes, next_cursor=boundary)
+
+    def _boundary_rows(
+        self, boundary_values: tuple[str, str, str], after_cursor: int,
+    ) -> tuple[int, list[sqlite3.Row]] | None:
+        """Read the rows of the first committed boundary after the cursor.
+
+        Returns:
+            The boundary and its rows, or None when no later boundary exists.
+
+        """
+        with self.database.read() as connection_handle:
+            row = connection_handle.execute(_NEXT_BOUNDARY_SQL, (*boundary_values, after_cursor)).fetchone()
+            if row is None or row["boundary"] is None:
+                return None
+            boundary = int(row["boundary"])
+            return boundary, connection_handle.execute(_BOUNDARY_SQL, (*boundary_values, boundary)).fetchall()
 
     def _page_rows(
         self, owner: str, collection: str, scope: scopes.ExtensionScope, after_key: str, limit: int,
@@ -159,12 +170,18 @@ def _state(sqlite_connection: sqlite3.Connection, key: records.RecordKey) -> rec
     row = sqlite_connection.execute(_STATE_SQL, key_values).fetchone()
     if row is None:
         return records.MissingRecord(key=key)
-    return _row_state(key.owner, key.collection, key.scope, row)
+    return row_state(key.owner, key.collection, key.scope, row)
 
 
-def _row_state(
+def row_state(
     owner: str, collection: str, scope: scopes.ExtensionScope, row: sqlite3.Row,
 ) -> records.RecordState:
+    """Decode one stored or deleted record row.
+
+    Returns:
+        The typed record state.
+
+    """
     record_key = row["record_key"]
     key = records.RecordKey(owner=owner, collection=collection, scope=scope, key=record_key)
     schema_ref = documents.SchemaRef.model_validate_json(row["schema_ref"])

@@ -572,3 +572,32 @@ STANDARD  # records.py UsageServiceTier / UsageSpeed
 NOT_AVAILABLE  # records.py UsageInferenceGeo
 log_directory  # OpenCode2 PluginOptions: serialized as logDirectory for the native plugin.
 package  # OpenCode2 PluginPackage: serialized native package reference.
+REQUESTED  # domain/extension_jobs.py JobCancelStatus: built by value from the SDK stop status.
+NOT_RUNNING  # domain/extension_jobs.py JobCancelStatus: built by value from the SDK stop status.
+
+# Pydantic writes and reads these fields by name: the stored journal header's
+# codec discriminator, and the rebuild and reprocessing comparisons that the
+# generation and history routes return to clients.
+_.codec_version
+_.live_records
+_.candidate_records
+_.equal_records
+_.live_entries
+_.candidate_entries
+_.equal_entries
+_.live_facts
+_.candidate_facts
+WebViewResponse.module_url
+WebViewResponse.style_urls
+# The health store writes these from SQL rows, and the health route returns them.
+HealthState.HEALTHY
+HealthState.FAILING
+ExtensionHealth.last_failure_where
+ExtensionHealth.last_failure_at
+ExtensionHealth.last_success_at
+# The extension pane (P07-T02) paints a daemon-served terminal view with this;
+# until it exists, the client render tests are its only caller.
+view_rows
+# FastAPI validates the core pane path value against these members.
+CorePane.MIRROR
+CorePane.SCOREBOARD

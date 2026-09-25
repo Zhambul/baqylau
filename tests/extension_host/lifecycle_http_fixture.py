@@ -50,3 +50,15 @@ def wait_operation(client: BaqylauClient, operation_id: str) -> ExtensionOperati
         lambda: not client.extensions.lifecycle.state().cleanup_pending, OPERATION_TIMEOUT_SECONDS,
     )
     return client.extensions.lifecycle.operation(operation_id)
+
+
+def active_owners(client: BaqylauClient) -> set[str]:
+    """Read the enabled owners of the active runtime.
+
+    Returns:
+        The owner IDs.
+
+    """
+    directory = client.extensions.lifecycle.state().directory
+    entries = () if directory is None else directory.entries
+    return {entry.extension_info.extension_id for entry in entries if entry.state == "enabled"}

@@ -16,7 +16,7 @@
     "build": "vite build",
     "build:host": "vite build --config vite.host.config.ts",
     "check": "svelte-check --tsconfig tsconfig.json && tsc -p tsconfig.node.json",
-    "lint": "eslint . --max-warnings 0 && knip",
+    "lint": "eslint . --max-warnings 0 && knip && baqylau-dev-tools-pins",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",

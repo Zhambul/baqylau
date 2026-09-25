@@ -7,7 +7,6 @@ from typing import Literal
 
 from baqylau_extension_api.models import canonical, content, documents, events
 from baqylau_extension_api.models.base import Digest, Revision, WireModel
-from baqylau_extension_api.models.translation_inputs import TranslationState
 from pydantic import TypeAdapter
 
 BodyKind = Literal[
@@ -15,7 +14,6 @@ BodyKind = Literal[
     "raw_input",
     "content_bundle",
     "prior_state",
-    "translation_state",
     "encoded_document",
 ]
 
@@ -23,7 +21,6 @@ CANONICAL_FACT_KIND: BodyKind = "canonical_fact"
 RAW_INPUT_KIND: BodyKind = "raw_input"
 CONTENT_BUNDLE_KIND: BodyKind = "content_bundle"
 PRIOR_STATE_KIND: BodyKind = "prior_state"
-TRANSLATION_STATE_KIND: BodyKind = "translation_state"
 ENCODED_DOCUMENT_KIND: BodyKind = "encoded_document"
 
 
@@ -167,15 +164,6 @@ class BodyResolver:
 
         """
         return _decode(self._store, ref, "prior_state", TypeAdapter(canonical.CoreStateSnapshot))
-
-    def resolve_state(self, ref: BodyRef) -> TranslationState:
-        """Decode one referenced decoder state.
-
-        Returns:
-            The exact stored translation state.
-
-        """
-        return _decode(self._store, ref, "translation_state", TypeAdapter(TranslationState))
 
     def resolve_document(self, ref: BodyRef) -> documents.EncodedDocument:
         """Decode one referenced encoded document.

@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "baqylau-extension-testkit"
+version = "0.1.0a1"
+description = "Start a private Baqylau host and read it through typed HTTP calls in extension tests."
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "Zhambyl Yermagambet" }]
+license = "LicenseRef-Proprietary"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Typing :: Typed",
+]
+dependencies = [
+    "baqylau-extension-api==0.1.0a1",
+    "httpx>=0.28,<1",
+    "pydantic>=2.13,<3",
+    "pytest>=8",
+    # Packs installed dependencies into a package's offline wheelhouse (wheelhouse.py).
+    "wheel>=0.45,<1",
+]
+
+[project.optional-dependencies]
+# The browser helpers drive a real page; a package without web views does not need them.
+browser = ["playwright>=1.50,<2"]
+
+[project.entry-points.pytest11]
+baqylau_extension_testkit = "baqylau_extension_testkit.pytest_plugin"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+baqylau_extension_testkit = ["py.typed"]

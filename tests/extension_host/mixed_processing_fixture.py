@@ -11,7 +11,12 @@ from core.work_queue import WorkKind
 from engine import mixed_processing
 from extensions.models.interpretations import InterpretationOutcome
 from extensions.models.observations import StoredObservation
-from tests.extension_host import source_engine_fixture as engines, source_processing_fixture as sources
+from tests import storage_reads
+from tests.extension_host import (
+    registry_busy_fixture as busy,
+    source_engine_fixture as engines,
+    source_processing_fixture as sources,
+)
 
 ORIGINAL_COUNT = 2
 WALL_JUMP = 10_000
@@ -50,9 +55,9 @@ class SliceCase:
         self.source.clock.now += WALL_JUMP
 
     def _accepted(self, original: StoredObservation, outcome: InterpretationOutcome) -> None:
-        engines.require_busy(self.source)
+        busy.require_busy(self.source)
         stores = self.source.runtime.stores
-        stored = stores.facts.find_interpretation("default", original.observation.raw_event_id)
+        stored = storage_reads.find_interpretation(stores.facts, "default", original.observation.raw_event_id)
         assert stored is not None
         assert outcome.accepted or outcome.deduplicated
 

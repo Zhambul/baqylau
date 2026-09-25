@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from extensions.models import interpretation_steps as steps, interpretations
-from tests import sqlite_migration_fixture as snapshots
+from tests import sqlite_migration_fixture as snapshots, storage_reads
 from tests.extension_host import interpretation_fixture as fixtures, lifecycle_legacy_fixture as legacy
 
 
@@ -16,7 +16,7 @@ def test_old_inline_journal_still_reads(tmp_path: Path, *, core_input: bool) -> 
     case = fixtures.installed(tmp_path)
     request = legacy.stored_legacy(case, core_input=core_input)
     before = snapshots.snapshot(case.store.database)
-    stored = case.store.find_interpretation("default", request.proposal.binding.raw_event_id)
+    stored = storage_reads.find_interpretation(case.store, "default", request.proposal.binding.raw_event_id)
     assert stored == request
     assert stored.proposal.format_version == 1
     assert isinstance(

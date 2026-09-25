@@ -41,7 +41,7 @@ async def read_two_session_frames(
         streams.session_frames(
             streams.SessionStreamServices(read_model, stream_models.SilentAudit(), changes=changes),
             api_values.SESSION,
-            0,
+            streams.SessionStreamPosition(0),
         ),
     )
     first = await reader.next()

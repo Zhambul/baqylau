@@ -27,6 +27,15 @@ class SessionStreamFrame(BaseModel):
     entries: tuple[EntryResponse, ...] = ()
 
 
+class ViewReset(BaseModel):
+    """Tell a stream client that a switch rewrote rows that it already has.
+
+    The client reads a new snapshot and reconnects with this view revision.
+    """
+
+    view_revision: int
+
+
 class GlobalStreamFrame(BaseModel):
     """Represent global stream frame.
 

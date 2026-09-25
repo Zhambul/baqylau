@@ -13,11 +13,16 @@ from extensions.lifecycle_control_contract import (
     LifecycleUnavailableError,
 )
 from extensions.manager_contract import ManagerStateError
+from extensions.terminal_views import TerminalViewFailedError
 
 
 def configure(web: FastAPI) -> None:
     """Register typed host refusals without exposing unknown internal exceptions."""
-    for error_type in (LifecycleRequestError, LifecycleUnavailableError, ExtensionReadOnlyError, ManagerStateError):
+    refusals = (
+        LifecycleRequestError, LifecycleUnavailableError, ExtensionReadOnlyError, ManagerStateError,
+        TerminalViewFailedError,
+    )
+    for error_type in refusals:
         web.add_exception_handler(error_type, lifecycle_error)
 
 
@@ -32,7 +37,7 @@ def lifecycle_error(_request: Request, error: Exception) -> Response:
         status = HTTPStatus.FORBIDDEN
     elif isinstance(error, LifecycleConflictError):
         status = HTTPStatus.CONFLICT
-    elif isinstance(error, (LifecycleUnavailableError, ManagerStateError)):
+    elif isinstance(error, (LifecycleUnavailableError, ManagerStateError, TerminalViewFailedError)):
         status = HTTPStatus.SERVICE_UNAVAILABLE
     else:
         status = HTTPStatus.BAD_REQUEST

@@ -13,7 +13,7 @@ from baqylau_extension_api.schemas import SchemaSet
 from baqylau_extension_api.sources import batches, plans, registration
 
 from core.input_paths import InputPaths, existing_parent, resolved_inputs
-from extensions.models import registry, source_processing, source_reads
+from extensions.models import scope_relations, source_processing, source_reads
 from extensions.registry_package import RegistryPackage
 
 
@@ -23,7 +23,7 @@ class SourceProvider:
 
     manifest: ExtensionManifest
     environment: environment.ExtensionEnvironment
-    settings: registry.RuntimeSettings
+    settings: scope_relations.ScopedSettings
     capability: ExtensionSources
 
 
@@ -41,7 +41,7 @@ def source_provider(package: RegistryPackage) -> SourceProvider | None:
     capability = package.plugin.capabilities.sources
     if capability is None:
         return None
-    return SourceProvider(package.manifest, package.environment, package.settings, capability)
+    return SourceProvider(package.manifest, package.environment, package.resolved_settings, capability)
 
 
 @dataclass(frozen=True)

@@ -9,6 +9,7 @@ from tests import (
     foundation_test_events,
     foundation_test_liveness,
     foundation_test_reactions,
+    storage_reads,
 )
 from tests.harness_names import CODEX_HARNESS
 
@@ -126,7 +127,7 @@ def test_facts_before_started_fact_commit(database_path: str) -> None:
     runtime.recorder.record((foundation_test_events.raw_observation("raw-early"),))
     runtime.interpreter.tick()
     assert runtime.sessions.find(PRIMARY_SESSION) is None
-    assert len(runtime.store.page_from(cursor=0, limit=10)) == 1
+    assert len(storage_reads.page_from(runtime.store, cursor=0, limit=10)) == 1
 
 
 def test_later_delivery_updates_live_columns(

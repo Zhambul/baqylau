@@ -23,6 +23,13 @@ type SettingsRoute = {
   readonly kind: 'settings';
 };
 
+/** One extension's settings; a workspace ID selects that workspace's override. */
+export type ExtensionSettingsRoute = {
+  readonly kind: 'extension-settings';
+  readonly extensionId: string;
+  readonly workspaceId?: string;
+};
+
 type LaunchingRoute = {
   readonly kind: 'launching';
 };
@@ -39,12 +46,32 @@ type JobDetail = {
 
 export type SessionDetail = MonitorDetail | JobDetail;
 
+/** Name one extension view; the package manifest owns both identifiers. */
+export type ExtensionViewRef = {
+  readonly extensionId: string;
+  readonly viewId: string;
+};
+
 export type SessionRoute = {
   readonly kind: 'session';
   readonly sessionId: SessionId;
   readonly tab: SessionTab;
   readonly actorId?: ActorId;
   readonly detail?: SessionDetail;
+  readonly extensionView?: ExtensionViewRef;
+};
+
+export type ExtensionPageRoute = {
+  readonly kind: 'extension-page';
+  readonly workspaceId: string;
+  readonly view: ExtensionViewRef;
+};
+
+/** A page of one repository, named by a directory in its worktree. */
+export type RepositoryPageRoute = {
+  readonly kind: 'repository-page';
+  readonly directory: string;
+  readonly view: ExtensionViewRef;
 };
 
 export type NotFoundRoute = {
@@ -56,8 +83,11 @@ export type Route =
   | ListRoute
   | StatsRoute
   | SettingsRoute
+  | ExtensionSettingsRoute
   | LaunchingRoute
   | SessionRoute
+  | ExtensionPageRoute
+  | RepositoryPageRoute
   | NotFoundRoute;
 
 export type StartupNavigation = {
@@ -146,6 +176,20 @@ function sessionRoute(hash: string, segments: readonly string[]): Route {
     position += 2;
   }
 
+  if (segments[position] === 'x') {
+    const view = extensionView(segments.slice(position + 1));
+    if (view === null) {
+      return { kind: 'not-found', hash };
+    }
+    return {
+      kind: 'session',
+      sessionId: sessionId(decodedSessionId),
+      tab: 'mirror',
+      ...(scopedActorId === undefined ? {} : { actorId: scopedActorId }),
+      extensionView: view,
+    };
+  }
+
   const possibleDetail = detail(segments[position], segments[position + 1]);
   if (possibleDetail !== null) {
     if (segments.length !== position + 2) {
@@ -175,6 +219,45 @@ function sessionRoute(hash: string, segments: readonly string[]): Route {
   };
 }
 
+function extensionView(segments: readonly string[]): ExtensionViewRef | null {
+  if (segments.length !== 2) {
+    return null;
+  }
+  const extensionId = decodeSegment(segments[0] ?? '');
+  const viewId = decodeSegment(segments[1] ?? '');
+  return extensionId === null || viewId === null
+    ? null
+    : { extensionId, viewId };
+}
+
+function extensionSettings(hash: string, segments: readonly string[]): Route {
+  const extensionId = decodeSegment(segments[2] ?? '');
+  if (extensionId === null) return { kind: 'not-found', hash };
+  if (segments.length === 3) return { kind: 'extension-settings', extensionId };
+  const workspaceId = decodeSegment(segments[4] ?? '');
+  return segments.length === 5 && segments[3] === 'w' && workspaceId !== null
+    ? { kind: 'extension-settings', extensionId, workspaceId }
+    : { kind: 'not-found', hash };
+}
+
+function extensionPage(hash: string, segments: readonly string[]): Route {
+  const workspaceId = decodeSegment(segments[1] ?? '');
+  const view = segments[2] === 'x' ? extensionView(segments.slice(3)) : null;
+  if (workspaceId === null || view === null) {
+    return { kind: 'not-found', hash };
+  }
+  return { kind: 'extension-page', workspaceId, view };
+}
+
+function repositoryPage(hash: string, segments: readonly string[]): Route {
+  const directory = decodeSegment(segments[1] ?? '');
+  const view = segments[2] === 'x' ? extensionView(segments.slice(3)) : null;
+  if (directory === null || view === null) {
+    return { kind: 'not-found', hash };
+  }
+  return { kind: 'repository-page', directory, view };
+}
+
 export function parseHash(hash: string): Route {
   const normalized = hash.startsWith('#') ? hash.slice(1) : hash;
   const path = normalized.startsWith('/') ? normalized.slice(1) : normalized;
@@ -192,17 +275,30 @@ export function parseHash(hash: string): Route {
   ) {
     return SETTINGS_ROUTE;
   }
+  if (segments[0] === 'settings' && segments[1] === 'extensions') {
+    return extensionSettings(hash, segments);
+  }
   if (segments.length === 1 && segments[0] === 'launching') {
     return LAUNCHING_ROUTE;
   }
   if (segments[0] === 's') {
     return sessionRoute(hash, segments);
   }
+  if (segments[0] === 'w') {
+    return extensionPage(hash, segments);
+  }
+  if (segments[0] === 'repo') {
+    return repositoryPage(hash, segments);
+  }
   return { kind: 'not-found', hash };
 }
 
 function encoded(value: string): string {
   return encodeURIComponent(value);
+}
+
+function viewPath(view: ExtensionViewRef): string {
+  return `/x/${encoded(view.extensionId)}/${encoded(view.viewId)}`;
 }
 
 export function formatRoute(route: Exclude<Route, NotFoundRoute>): string {
@@ -213,11 +309,25 @@ export function formatRoute(route: Exclude<Route, NotFoundRoute>): string {
       return '#/stats';
     case 'settings':
       return '#/settings/extensions';
+    case 'extension-settings': {
+      const workspace =
+        route.workspaceId === undefined
+          ? ''
+          : `/w/${encoded(route.workspaceId)}`;
+      return `#/settings/extensions/${encoded(route.extensionId)}${workspace}`;
+    }
     case 'launching':
       return '#/launching';
+    case 'extension-page':
+      return `#/w/${encoded(route.workspaceId)}${viewPath(route.view)}`;
+    case 'repository-page':
+      return `#/repo/${encoded(route.directory)}${viewPath(route.view)}`;
     case 'session': {
       const scope =
         route.actorId === undefined ? '' : `/a/${encoded(route.actorId)}`;
+      if (route.extensionView !== undefined) {
+        return `#/s/${encoded(route.sessionId)}${scope}${viewPath(route.extensionView)}`;
+      }
       if (route.detail !== undefined) {
         const detailKind = route.detail.kind === 'monitor' ? 'm' : 'j';
         return `#/s/${encoded(route.sessionId)}${scope}/${detailKind}/${encoded(route.detail.taskId)}`;

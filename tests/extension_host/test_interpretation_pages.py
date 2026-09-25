@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from baqylau_extension_api.models.scopes import ExtensionScope, RepositoryScope, SessionScope
 
+from tests import storage_reads
 from tests.extension_host import (
     interpretation_core as core,
     interpretation_fixture as fixtures,
@@ -68,4 +69,4 @@ def test_reads_survive_runtime_removal(tmp_path: Path) -> None:
         case.original.lifecycle, operation_id="removed",
     ))
     assert case.store.current_fact_page(0, 10).facts == accepted
-    assert case.store.find_interpretation(HISTORY, request.proposal.binding.raw_event_id) == request
+    assert storage_reads.find_interpretation(case.store, HISTORY, request.proposal.binding.raw_event_id) == request

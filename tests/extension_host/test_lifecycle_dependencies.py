@@ -36,11 +36,24 @@ def test_required_removal_needs_confirmation(tmp_path: Path) -> None:
         control_assertions.require_enabled_owners(case, (fixture.OPTIONAL,))
 
 
+def test_failed_provider_removes_dependents(tmp_path: Path) -> None:
+    """A host failure disable removes the required set with no user confirmation and keeps the optional consumer."""
+    fixture.write_graph(tmp_path)
+    with closing(controls.open_control(tmp_path)) as case:
+        for owner in (fixture.BASE, fixture.CHILD, fixture.LEAF, fixture.OPTIONAL):
+            case.control.change_lifecycle(owner, case.request(ENABLE, owner, owner))
+            case.host.finish()
+        admitted = case.control.disable_failed(fixture.BASE, "failure-base")
+        assert admitted.operation is not None and admitted.operation.proposal.kind == "failure"
+        case.host.finish()
+        control_assertions.require_enabled_owners(case, (fixture.OPTIONAL,))
+
+
 def test_enable_does_not_silently_enable_provider(tmp_path: Path) -> None:
     """A new package cannot start other installed feature code without a user request."""
     fixture.write_graph(tmp_path)
     with closing(controls.open_control(tmp_path)) as case:
-        with pytest.raises(LifecycleRequestError, match="incompatible dependencies"):
+        with pytest.raises(LifecycleRequestError, match="required extension dependency"):
             case.control.change_lifecycle(fixture.CHILD, case.request(ENABLE, "missing-provider", fixture.CHILD))
         assert case.host.controller.read_state().lifecycle.pending_operation is None
 

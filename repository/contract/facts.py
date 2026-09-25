@@ -117,12 +117,3 @@ class CanonicalEventRepository(Protocol):
     def session_ids(self) -> tuple[SessionId, ...]:
         """Every session that has a `session.started` fact, most recent first."""
         ...
-
-    def page_from(self, cursor: int, limit: int) -> tuple[CanonicalEvent[EventPayload], ...]:
-        """Every session's facts after `cursor`, in the order they were accepted.
-
-        The reaction loop's whole input, and the one read that crosses sessions:
-        reactions happen in commit order, not per session, because the order two
-        sessions' facts arrived in is the order the world saw them.
-        """
-        ...

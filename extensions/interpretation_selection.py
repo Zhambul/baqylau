@@ -2,6 +2,7 @@
 """Capture interpretation identity from a retained runtime and actual storage heads."""
 
 from types import MappingProxyType
+from typing import Literal
 
 from baqylau_extension_api.models.events import ProcessingContext
 
@@ -17,8 +18,9 @@ from extensions.registry_snapshot import RuntimeSnapshot
 
 def capture_context(
     manager_id: str, snapshot: RuntimeSnapshot, original: StoredObservation, head: CanonicalPage,
+    mode: Literal["live", "replay"] = "live",
 ) -> InterpretationContext:
-    """Bind each original to the preceding accepted fact cursor.
+    """Bind each original to the preceding accepted fact cursor of the head's history.
 
     Returns:
         A data-only selection in the exact active dependency order.
@@ -28,8 +30,10 @@ def capture_context(
         manager_id=manager_id, runtime_revision=snapshot.directory.runtime_revision,
         history_revision=head.history_revision, raw_event_id=original.observation.raw_event_id,
         input_cursor=original.cursor, scope=observation_scope(original), expected_canonical_cursor=head.head,
+        mode=mode,
     )
-    return InterpretationContext(binding, original, _packages(snapshot))
+    related = () if snapshot.relations is None else snapshot.relations.related_scopes(binding.scope)
+    return InterpretationContext(binding, original, _packages(snapshot), related)
 
 
 def processing_context(context: InterpretationContext, owner: str) -> ProcessingContext:
@@ -45,7 +49,7 @@ def processing_context(context: InterpretationContext, owner: str) -> Processing
         history_revision=context.binding.history_revision, scope=context.binding.scope,
         input_cursor=context.binding.input_cursor, mode=context.binding.mode,
         settings_revision=package.selection.settings.revision,
-        settings=package.selection.settings.for_scope(context.binding.scope),
+        settings=package.selection.settings.for_scope(context.binding.scope, context.related_scopes),
     )
 
 

@@ -4,6 +4,7 @@
 from pathlib import Path
 
 from extensions.models.source_reads import source_key
+from tests import storage_reads
 from tests.extension_host import source_processing_fixture as fixtures
 
 
@@ -67,7 +68,7 @@ def test_each_call_retains_complete_evidence(tmp_path: Path) -> None:
     case = fixtures.installed(tmp_path)
     case.run()
     request = case.probe.trace.reads[0]
-    journal = case.original.store.find_source_read(
+    journal = storage_reads.find_source_read(case.original.store,
         request.context.binding.runtime_revision, request.context.binding.call_id,
     )
     assert journal is not None and journal.proposal.request == request

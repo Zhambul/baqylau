@@ -7,7 +7,7 @@ import pytest
 from baqylau_extension_api.errors import ExtensionContractError
 from baqylau_extension_api.models.events import ExtensionFact
 
-from tests import sqlite_migration_fixture as snapshots
+from tests import sqlite_migration_fixture as snapshots, storage_reads
 from tests.extension_host import (
     interpretation_fixture as fixtures,
     interpretation_results as evidence,
@@ -26,7 +26,7 @@ def test_later_body_is_retained_but_not_accepted(tmp_path: Path) -> None:
     ))
     outcome = case.store.record_interpretation(request)
     assert not outcome.accepted and outcome.deduplicated == first.accepted
-    assert case.store.find_interpretation("default", request.proposal.binding.raw_event_id) == request
+    assert storage_reads.find_interpretation(case.store, "default", request.proposal.binding.raw_event_id) == request
     assert request.proposal.facts[0] != outcome.deduplicated[0].fact
     assert case.store.translator_state(fixtures.state_key(case)).revision == STATE_REVISION
 

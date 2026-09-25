@@ -403,6 +403,6 @@ def _assert_pane_requests(daemon: client_test_servers._Capture) -> None:
     """Verify the pane read and stream requests."""
     assert daemon.delivery("/sessionData/session-one/entries").path == ("/sessionData/session-one/entries?at=4")
     assert daemon.delivery("/stream").path == (
-        "/sessionData/session-one/stream?after_cursor=4&include_application=false"
+        "/sessionData/session-one/stream?after_cursor=4&after_entry=4&include_application=false"
     )
     assert not any("width" in found.path for found in daemon.deliveries)

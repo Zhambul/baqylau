@@ -10,6 +10,7 @@ from baqylau_extension_api.runtime.call_grants import HostCallLedger
 from audit.failures import CoalescingFailureRecorder
 from extensions.manager_contract import ExtensionManager
 from extensions.models.source_processing import SourceScopeKey, SourceScopePlan
+from extensions.pass_health import HealthTracker
 from extensions.registry_contract import ExtensionRegistry
 from extensions.source_scope_contract import ExtensionSourceScopes
 from repository.contract.source_reads import ExtensionSourceRepository
@@ -33,6 +34,7 @@ class SourceCallbacks:
     changed: Callable[[], None]
     failures: CoalescingFailureRecorder
     clock: Callable[[], float] = time
+    health: HealthTracker | None = None
 
 
 @dataclass

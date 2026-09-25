@@ -3,6 +3,7 @@
 
 from pathlib import Path
 
+from tests import storage_reads
 from tests.extension_host import observation_requests, processing_pipeline_fixture as fixture
 
 
@@ -22,10 +23,23 @@ def test_next_original_receives_prior_facts(tmp_path: Path) -> None:
     case = fixture.installed(tmp_path)
     assert case.run_batch() == 1
     later = observation_requests.new_key(case.original.original.request, "later")
-    case.original.original.store.append_observations(later)
+    storage_reads.append_observations(case.original.original.store, later)
     assert case.run_batch() == 1
     call = case.probes.canonical.transform.call_args
     request = call.args[0]
     assert request.prior_state.complete and request.prior_state.after_cursor == 1
     assert len(request.prior_state.facts) == 1
     assert request.prior_state.facts[0].fact == request.inputs[0]
+
+
+def test_undeclared_prior_state_is_not_read(tmp_path: Path) -> None:
+    """A transformer that does not declare prior state gets an empty snapshot with no completeness claim."""
+    case = fixture.installed(tmp_path, prior_state=False)
+    assert case.run_batch() == 1
+    later = observation_requests.new_key(case.original.original.request, "later")
+    storage_reads.append_observations(case.original.original.store, later)
+    assert case.run_batch() == 1
+    call = case.probes.canonical.transform.call_args
+    request = call.args[0]
+    assert (request.prior_state.facts, request.prior_state.complete) == ((), False)
+    assert request.prior_state.after_cursor == 1

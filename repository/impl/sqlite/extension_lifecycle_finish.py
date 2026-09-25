@@ -9,6 +9,7 @@ from repository.impl.sqlite import (
     extension_lifecycle_reads as reads,
     extension_lifecycle_writes as writes,
     extension_resolution_validation as validation,
+    record_migration_copy,
 )
 
 
@@ -73,6 +74,8 @@ def _commit_outcome(
                 "INSERT INTO extension_runtime_resolutions(runtime_revision, resolution) VALUES(?, ?)",
                 (committed, completion.resolution.model_dump_json()),
             )
+            for record_generation in completion.resolution.record_generations:
+                record_migration_copy.promote(connection, record_generation)
         connection.execute(
             "UPDATE extension_runtime_revisions SET committed_at=? WHERE runtime_revision=?",
             (finished.updated_at, committed),

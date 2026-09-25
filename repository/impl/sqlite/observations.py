@@ -1,7 +1,6 @@
 # Copyright (c) 2026 Zhambyl Yermagambet
 """Use the existing raw table and queue for both observation branches."""
 
-from baqylau_extension_api.models.scopes import ExtensionScope
 from pydantic import StrictInt, TypeAdapter
 
 from core.work_queue import WorkKind
@@ -21,18 +20,6 @@ class SqliteObservationRepository(ObservationRepository):
         """Use the application's existing database and work notices."""
         self.database = sqlite_database
 
-    def append_observations(self, request: ObservationAppend) -> ObservationAppendOutcome:
-        """Validate the complete input before any row is accepted.
-
-        Returns:
-            Original new and repeated rows after commit.
-
-        """
-        checked = ObservationAppend.model_validate(request)
-        with self.database.write(WorkKind.RAW, notify_readers=False) as connection:
-            observation_validation.validate_append(connection, checked)
-            return observation_writes.append(connection, checked)
-
     def find_observation(self, raw_event_id: RawEventId) -> StoredObservation | None:
         """Read either input branch without requiring an active extension.
 
@@ -43,6 +30,18 @@ class SqliteObservationRepository(ObservationRepository):
         with self.database.read() as connection:
             row = connection.execute("SELECT * FROM raw_events WHERE raw_event_id=?", (raw_event_id,)).fetchone()
         return None if row is None else codec.stored_observation(row)
+
+    def append_observations(self, observation_append: ObservationAppend) -> ObservationAppendOutcome:
+        """Validate and append one owner's new originals in one transaction, and send a work notice.
+
+        Returns:
+            The new and the repeated rows.
+
+        """
+        checked = ObservationAppend.model_validate(observation_append)
+        with self.database.write(WorkKind.RAW) as connection:
+            observation_validation.validate_append(connection, checked)
+            return observation_writes.append(connection, checked)
 
     def pending_observations(self, limit: int) -> tuple[StoredObservation, ...]:
         """Read both branches from the same ordered pending queue.
@@ -57,24 +56,6 @@ class SqliteObservationRepository(ObservationRepository):
                 "SELECT raw_events.* FROM pending_raw_events "
                 "JOIN raw_events ON raw_events.id=pending_raw_events.raw_event_row_id "
                 "ORDER BY pending_raw_events.raw_event_row_id LIMIT ?", (limit,),
-            ).fetchall()
-        return tuple(codec.stored_observation(row) for row in rows)
-
-    def observations_for_scope(
-        self, scope: ExtensionScope, after_cursor: int, limit: int,
-    ) -> tuple[StoredObservation, ...]:
-        """Use the indexed complete scope, including repository worktree identity.
-
-        Returns:
-            Original observations after the selected arrival cursor.
-
-        """
-        _validate_page(after_cursor, limit)
-        selected = TypeAdapter[ExtensionScope](ExtensionScope).validate_python(scope)
-        with self.database.read() as connection:
-            rows = connection.execute(
-                "SELECT * FROM raw_events WHERE scope=? AND id>? ORDER BY id LIMIT ?",
-                (selected.model_dump_json(), after_cursor, limit),
             ).fetchall()
         return tuple(codec.stored_observation(row) for row in rows)
 

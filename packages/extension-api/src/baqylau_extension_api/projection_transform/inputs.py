@@ -4,7 +4,7 @@
 from baqylau_extension_api.errors import ExtensionContractError
 from baqylau_extension_api.manifest.data import ProcessingSelection
 from baqylau_extension_api.manifest.package import ExtensionManifest
-from baqylau_extension_api.models.canonical import CoreFact
+from baqylau_extension_api.models.canonical import fact_type
 from baqylau_extension_api.models.events import ExtensionFact
 from baqylau_extension_api.models.projection_transforms import ProjectionTransformRequest
 from baqylau_extension_api.models.projections import ProjectionRequest
@@ -44,11 +44,7 @@ def validate_transform_request(
 def _validate_selection(manifest: ExtensionManifest, request: ProjectionTransformRequest, schemas: SchemaSet) -> None:
     selection = _selection(manifest, request)
     for stored in request.events:
-        kind = (
-            stored.fact.payload.kind if isinstance(stored.fact, CoreFact)
-            else stored.fact.event_type
-        )
-        if kind not in selection.input_types:
+        if fact_type(stored.fact) not in selection.input_types:
             message = "projection transform fact type is not selected"
             raise ExtensionContractError(message)
         if isinstance(stored.fact, ExtensionFact):

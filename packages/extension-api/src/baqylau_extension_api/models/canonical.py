@@ -45,6 +45,16 @@ class CoreFact(WireModel):
 type CanonicalFact = Annotated[CoreFact | ExtensionFact, Field(discriminator="kind")]
 
 
+def fact_type(fact: CanonicalFact) -> str:
+    """Name the type that processing selections match for one fact.
+
+    Returns:
+        The core payload kind, or the extension event type.
+
+    """
+    return fact.payload.kind if isinstance(fact, CoreFact) else fact.event_type
+
+
 class CommittedFact(WireModel):
     """Attach host-owned storage metadata to an accepted fact."""
 

@@ -3,7 +3,7 @@
 
 from baqylau_extension_api.manifest.contributions import Contributions
 from baqylau_extension_api.manifest.data import DocumentDefinition, ProcessingSelection, ScopeKinds
-from baqylau_extension_api.manifest.metadata import E2eCase
+from baqylau_extension_api.manifest.e2e import E2eCase
 from baqylau_extension_api.manifest.operations import CommandDefinition, PublicService, QueryDefinition
 from baqylau_extension_api.manifest.package import ExtensionManifest
 from baqylau_extension_api.manifest.settings import SettingsDefinition
@@ -44,7 +44,7 @@ def _contributions() -> Contributions:
             effect="write", reconciliation=True,
         ),),
         processing=(ProcessingSelection(
-            capability="canonical_transformer", scopes=SESSION_SCOPES, input_types=("shell_started",),
+            capability="canonical_transformer", scopes=SESSION_SCOPES, input_types=("shell.started",),
         ),),
         services=(PublicService(name="test.reader.records", version="1.0", queries=("test.reader.read",)),),
         web=manifest_samples.web_manifest().contributions.web,

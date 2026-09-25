@@ -4,16 +4,15 @@
 from http import HTTPStatus
 from typing import Annotated
 
-from baqylau_extension_api.models.scopes import ExtensionScope
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import TypeAdapter, ValidationError
 
 from api.extensions import job_service
 from api.extensions.job_models import ExtensionJobResponse
+from api.extensions.scope_documents import request_scope
 from app.provider_extension_jobs import Jobs
+from domain.ids import ExtensionJobId
 
 router = APIRouter()
-SCOPE_ADAPTER: TypeAdapter[ExtensionScope] = TypeAdapter(ExtensionScope)
 
 
 def job_scope(scope: Annotated[str, Query(min_length=1)]) -> str:
@@ -45,11 +44,7 @@ def extension_job(
         HTTPException: If the scope is invalid or the job is absent.
 
     """
-    try:
-        selected = SCOPE_ADAPTER.validate_json(scope)
-    except ValidationError as error:
-        raise HTTPException(HTTPStatus.BAD_REQUEST, "scope must be a valid extension scope document") from error
-    job = jobs.read(extension_id, selected, job_id)
+    job = jobs.read(extension_id, request_scope(scope), ExtensionJobId(job_id))
     if job is None:
         raise HTTPException(HTTPStatus.NOT_FOUND, "extension job not found")
     return job_service.job_response(job)

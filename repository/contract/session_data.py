@@ -61,6 +61,11 @@ class SessionDelta:
     actors: tuple[ActorFacts, ...]
     entries: tuple[SessionEntry, ...]
     cursor: int
+    view_revision: int = 0
+    # The highest entry row that the reader has now. A projection commits its entries
+    # after the core entries of the same fact, with that fact's canonical cursor, so
+    # the canonical cursor alone cannot find them; their row cursors are new.
+    entry_cursor: int = 0
 
     @property
     def empty(self) -> bool:
@@ -80,6 +85,7 @@ class AggregateDelta:
     sessions: tuple[SessionFacts, ...]
     actors: tuple[ActorFacts, ...]
     cursor: int
+    view_revision: int = 0
 
     @property
     def empty(self) -> bool:

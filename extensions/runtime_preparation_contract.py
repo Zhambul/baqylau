@@ -17,6 +17,18 @@ class RuntimePreparationStoppedError(RuntimePreparationError):
     """The manager stopped before this complete candidate became ready."""
 
 
+def require_running(stop_requested: Event | None) -> None:
+    """Stop between bounded worker calls without returning partial candidate settings.
+
+    Raises:
+        RuntimePreparationStoppedError: If the manager requested a stop.
+
+    """
+    if stop_requested is not None and stop_requested.is_set():
+        message = "extension runtime preparation was stopped"
+        raise RuntimePreparationStoppedError(message)
+
+
 class PreparedExtensionRuntime(Protocol):
     """Own a ready candidate; the registry borrows its capabilities after publication."""
 

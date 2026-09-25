@@ -99,7 +99,7 @@ class SessionDataEntryRead(Protocol):
         """Read unanswered session attention."""
         ...
 
-    def delta(self, session_id: SessionId, cursor: int) -> SessionDelta:
+    def delta(self, session_id: SessionId, cursor: int, entry_cursor: int | None = None) -> SessionDelta:
         """Read changes for one session after a cursor."""
         ...
 

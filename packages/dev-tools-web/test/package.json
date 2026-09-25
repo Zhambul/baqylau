@@ -1,0 +1,30 @@
+{
+  "name": "baqylau-dev-tools-checks",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12 <23"
+  },
+  "scripts": {
+    "test": "node --test checks.test.mjs"
+  },
+  "devDependencies": {
+    "@baqylau/dev-tools": "file:..",
+    "@sveltejs/vite-plugin-svelte": "7.3.0",
+    "@vitest/coverage-v8": "4.1.11",
+    "eslint": "10.9.0",
+    "jsdom": "30.0.1",
+    "knip": "6.32.2",
+    "prettier": "3.9.6",
+    "svelte": "5.56.10",
+    "svelte-check": "4.7.6",
+    "typescript": "5.9.3",
+    "vite": "8.2.2",
+    "vitest": "4.1.11"
+  },
+  "overrides": {
+    "vite": "8.2.2",
+    "vitest": "4.1.11"
+  }
+}

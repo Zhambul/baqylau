@@ -1,6 +1,6 @@
 policy_version = "0.1.0a1"
 profile = "host"
-source_roots = ["api", "app", "bin", "client", "core", "dashboard", "audit", "domain", "engine", "extensions", "harness", "notify", "repository", "terminal", "packages/extension-api/src", "packages/extension-api-web/scripts", "packages/dev-tools/src"]
+source_roots = ["api", "app", "bin", "client", "core", "dashboard", "audit", "domain", "engine", "extensions", "harness", "notify", "repository", "terminal", "packages/extension-api/src", "packages/extension-api-web/scripts", "packages/dev-tools/src", "packages/extension-testkit/src"]
 type_only_roots = ["sdk"]
 test_roots = ["tests"]
 deadcode_roots = ["vulture_allowlist.py", "vulture_extension_api.py"]

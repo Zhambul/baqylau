@@ -74,3 +74,40 @@ jobs:
         if: runner.os == 'Linux'
         env:
           PYTEST_TIMEOUT: 180
+
+  # Build the shared packages and check them from outside the checkout's
+  # environment: a clean wheel environment reports the same policy as the
+  # host, a new package passes its gates, and the external web packages pass
+  # their npm gates with the tarballs. The artifacts stay private to this run.
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.3"
+          cache: npm
+          cache-dependency-path: |
+            dashboard/frontend/package-lock.json
+            packages/dev-tools-web/package-lock.json
+            packages/extension-api-web/package-lock.json
+      - run: python3 bin/retarget_python.py --revert
+      - run: python3 -m venv .venv
+      - run: .venv/bin/python -m pip install --upgrade pip
+      - run: .venv/bin/python -m pip install -r requirements.txt -r requirements-dev.txt
+      - run: npm install --global npm@10.9.8
+      - run: make frontend-install
+      - run: npx playwright install --with-deps chromium webkit
+        working-directory: dashboard/frontend
+      - run: make release-artifacts
+      - run: make test-release-consumers
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: dist/release
+          retention-days: 14

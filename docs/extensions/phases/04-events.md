@@ -44,7 +44,7 @@ Evidence: Schema 30 and `ObservationRepository` store original extension input i
 
 ### P04-T02 — Integrate extension sources and raw transforms
 
-Status: in_progress
+Status: done
 
 Owner: Codex
 
@@ -62,9 +62,11 @@ Verification: C06 and C08 test all raw operations and all-dropped input. C07 tes
 
 Evidence: SDK source and decoder protocols, atomic checkpoints, native watches, deadlines, and host scopes are connected. Mixed pending input now selects its decoder by typed origin. The engine calls selected raw transforms before decoding, keeps exact originals, and records failed replies without applying their output. Private-daemon cases check source-to-fact processing and restart. Mixed raw work now yields after one page or between complete originals after interval expiry. An explicit continuation completes a 101-record file-source backlog without another file change. New three-worker cases verify declared order in both activation orders, raw additions reaching the next worker, all-dropped input, and complete rejection of an invalid later reply. Core raw changes are enabled. The private-process lifecycle acceptance passes nine cases with real workers: canonical drop, replace and add, finish release, failed worker, invalid reply, restart, and raw drop, replace, and insert. See the [private-process acceptance](../lifecycle-split.md#private-process-acceptance). Multi-extension alone cases, the aggregate call budget, and unclean crash recovery are covered by the conformance record below. Timeout conformance keeps its transport-level coverage. See the work records below.
 
+Status result (2026-09-25): C21 is proven by an external package: the `baqylau-git` source watches a repository scope, reads Git's status after each notice, and records a repository observation with no session; its E2E case (`tests/e2e/test_repository_refresh.py`) sees the edit reach the repository's record through the private host (P10-T02). Partial final lines and a replaced source file keep their source tests (`tests/extension_api/test_source_failures.py`).
+
 ### P04-T03 — Apply and validate canonical transforms
 
-Status: in_progress
+Status: done
 
 Owner: Codex
 
@@ -82,9 +84,11 @@ Verification: C06 and C09 cover replace, drop, insert, wrong owners, changed sco
 
 Evidence: The engine now runs selected canonical transforms before the complete interpretation transaction and core input reactions. Shared pure checks validate scope, document declarations, original core references, cause existence, cause cycles, and first-acceptance identity. Invalid replies retain the preceding input. Required core start and finish identities and order are preserved. Tests cover suppression, insertion with a retained intermediate cause, and core post-commit reactions. Prior-state capture now has explicit coverage, count/byte bounds, and transactional completeness checks. New three-worker cases prove generated facts reach later transforms, full-result rejection retains earlier decisions, and canonical suppression permits later original processing. A real worker exit permits later processing. It exposed a daemon shutdown failure; the approved cleanup fix now passes the focused process regression. The full Python suite passes 3,259 cases. The private-process lifecycle acceptance now proves drop, replace and add, finish release, failed worker, invalid reply, and restart through actual daemon and worker processes. Multi-extension alone cases and the aggregate call budget are covered by the conformance record below. Timeout conformance keeps its transport-level coverage. See the work records below.
 
+Status result (2026-09-25): C10 at the daemon level: `tests/extension_host/test_transform_health_daemon.py` gives a transform worker a hang with a 3-second call deadline; the deadline ends the call, the preceding input is kept, and the other worker's output is applied (P08-T03). The finish-release case of the private-process acceptance proves that a dropped display item does not stop the required cleanup.
+
 ### P04-T04 — Commit complete decisions and stable identities
 
-Status: in_progress
+Status: done
 
 Owner: Codex
 
@@ -100,7 +104,7 @@ Code areas: Current `domain/records.py`, fact repository and mapper, SQLite inte
 
 Verification: C07 and C08 cover duplicates, all-dropped batches, crash after commit, and crash before commit. Inject failures between each write and confirm total rollback. Send repeated logical facts under changed settings and verify preserved first acceptance plus recorded later proposals.
 
-Evidence: Schema-32 storage implements complete transactions, stable fact identity, empty verdicts, later proposals, and pending removal. The engine now uses this transaction. Storage rejects omitted eligible transforms and false preflight failures. Private-daemon tests verify convergence and unchanged journals after restart. Core consumer progress now advances through extension-only facts, with ordered core failure and SQL rollback checks. Mixed pages limit stored content without blocking a large first fact. Unclean crash recovery is covered by the conformance record below. Extension projection and observer consumers remain open. See the mixed engine, mixed core consumption, and page content records below.
+Evidence: Schema-32 storage implements complete transactions, stable fact identity, empty verdicts, later proposals, and pending removal. The engine now uses this transaction. Storage rejects omitted eligible transforms and false preflight failures. Private-daemon tests verify convergence and unchanged journals after restart. Core consumer progress now advances through extension-only facts, with ordered core failure and SQL rollback checks. Mixed pages limit stored content without blocking a large first fact. Unclean crash recovery is covered by the conformance record below. Extension projection and observer consumers are done in P05 (P05-T01 projections, P05-T03 observers): each keeps its own cursor for each owner, scope, history, and generation, written in the same transaction as its output. Done on 2026-09-24. See the mixed engine, mixed core consumption, and page content records below.
 
 ### P04-T05 — Expose diagnostics and processing snapshots
 

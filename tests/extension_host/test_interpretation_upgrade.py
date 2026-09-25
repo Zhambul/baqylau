@@ -9,7 +9,12 @@ import pytest
 from repository.impl.sqlite.connection import SqliteDatabase
 from repository.impl.sqlite.interpretations import SqliteInterpretationRepository
 from repository.impl.sqlite.schema import MAIN_MIGRATIONS, MAIN_SCHEMA, MAIN_SCHEMA_VERSION
-from tests import sqlite_migration_events as events, sqlite_migration_fixture as snapshots, sqlite_test_fixtures
+from tests import (
+    sqlite_migration_events as events,
+    sqlite_migration_fixture as snapshots,
+    sqlite_test_fixtures,
+    storage_reads,
+)
 from tests.extension_host import interpretation_upgrade as fixtures, observation_upgrade_fixture as upgrades
 
 MIGRATION = MAIN_MIGRATIONS[fixtures.TARGET_VERSION]
@@ -23,7 +28,7 @@ def test_upgrade_retains_existing_rows_and_ddl(tmp_path: Path) -> None:
     events.require_original(current)
     assert set(snapshots.retained_lines(before)) <= set(snapshots.snapshot(current))
     store = SqliteInterpretationRepository(current)
-    assert store.find_interpretation("default", sqlite_test_fixtures.a_raw_event().raw_event_id) is None
+    assert storage_reads.find_interpretation(store, "default", sqlite_test_fixtures.a_raw_event().raw_event_id) is None
     with current.read() as connection:
         assert not connection.execute("SELECT * FROM interpretation_steps").fetchall()
         assert not connection.execute("SELECT * FROM extension_translation_state").fetchall()

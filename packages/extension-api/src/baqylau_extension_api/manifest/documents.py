@@ -85,6 +85,7 @@ def _validate_operations(manifest: ExtensionManifest) -> None:
     rules.require_owned((operation.name for operation in operations), manifest.extension_id)
     for operation in operations:
         rules.require_unique(operation.scopes, "operation scopes")
+    rules.require_unique((process.name for process in manifest.contributions.processes), "process names")
     if manifest.settings is not None:
         rules.require_unique(manifest.settings.scopes, "settings scopes")
         rules.require_unique((secret.name for secret in manifest.settings.secret_references), "secret reference names")

@@ -16,8 +16,10 @@ vi.mock('../api/extensions', () => ({
   changeExtension: vi.fn(),
   previewExtension: vi.fn(),
   readExtensionCatalog: vi.fn(),
+  readExtensionHealth: vi.fn(),
   readExtensionOperation: vi.fn(),
   readExtensionRuntime: vi.fn(),
+  readRecentOperations: vi.fn(),
   rescanExtensions: vi.fn(),
 }));
 
@@ -35,6 +37,11 @@ describe('extension management state', () => {
       extensionOperation(),
     );
     vi.mocked(api.rescanExtensions).mockResolvedValue(extensionCatalog());
+    vi.mocked(api.readRecentOperations).mockResolvedValue([]);
+    vi.mocked(api.readExtensionHealth).mockResolvedValue({
+      failure_limit: 5,
+      extensions: [],
+    });
     view = new ExtensionManagement();
   });
 
@@ -48,6 +55,37 @@ describe('extension management state', () => {
     expect(view.canWrite).toBe(true);
     expect(view.catalog?.revision).toBe(3);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('gives each extension only its own recent operations', async () => {
+    const own = extensionOperation();
+    const other = {
+      ...extensionOperation(),
+      operation_id: 'other',
+      extension_id: 'test.other',
+    };
+    vi.mocked(api.readRecentOperations).mockResolvedValue([own, other]);
+    await view.refresh();
+    expect(view.operationsFor(EXTENSION_OWNER)).toEqual([own]);
+    expect(view.operationsFor(null)).toEqual([]);
+  });
+
+  it('gives the stored health of one extension', async () => {
+    const failing = {
+      extension_id: EXTENSION_OWNER,
+      state: 'failing' as const,
+      consecutive_failures: 2,
+      last_failure_where: 'extension projection',
+      last_failure_at: 1,
+      last_success_at: null,
+    };
+    vi.mocked(api.readExtensionHealth).mockResolvedValue({
+      failure_limit: 5,
+      extensions: [failing],
+    });
+    await view.refresh();
+    expect(view.healthOf(EXTENSION_OWNER)).toEqual(failing);
+    expect(view.healthOf('test.other')).toBeNull();
   });
 
   it('keeps mutations closed after load failure until refresh succeeds', async () => {

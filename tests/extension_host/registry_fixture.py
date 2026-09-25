@@ -9,11 +9,14 @@ from baqylau_extension_api.models.directory import DirectoryEntry
 from baqylau_extension_api.runtime.call_grants import HostCallLedger
 from baqylau_extension_api.runtime.worker_models import WorkerLoadRequest
 
+from extensions.query_authority import QueryAuthority
 from extensions.registry import ActiveExtensionRegistry
 from extensions.registry_package import RegistryPackage
 from extensions.registry_services import RegistryDirectory, RegistryServiceAccess
 from extensions.registry_snapshot import RuntimeSnapshot, prepare_snapshot
 from tests.extension_api import peer_example, samples, service_samples
+
+QUERY_SECONDS = 5.0
 
 
 def peer(owner: str, revision: str = samples.RUNTIME_REVISION) -> RegistryPackage:
@@ -68,3 +71,13 @@ def service_access(
     return RegistryServiceAccess(
         WorkerLoadRequest(manifest=caller.manifest, environment=caller.environment), registry, HostCallLedger(),
     )
+
+
+def query_authority() -> QueryAuthority:
+    """Give host-started queries their own call ledger and a short deadline.
+
+    Returns:
+        The authority.
+
+    """
+    return QueryAuthority(HostCallLedger(), QUERY_SECONDS)

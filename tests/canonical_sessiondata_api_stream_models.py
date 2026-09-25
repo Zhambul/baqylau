@@ -132,12 +132,12 @@ class BrokenReadModel:
 
     failure_prefix = "cannot read session"
 
-    def delta(self, session_id: domain_ids.SessionId, cursor: int) -> Never:
+    def delta(self, session_id: domain_ids.SessionId, cursor: int, entry_cursor: int | None = None) -> Never:
         """Fail a session delta read.
 
         Raises:
             RuntimeError: For each read.
 
         """
-        message = f"{self.failure_prefix} {session_id} after cursor {cursor}"
+        message = f"{self.failure_prefix} {session_id} after cursor {cursor} and entry row {entry_cursor}"
         raise RuntimeError(message)

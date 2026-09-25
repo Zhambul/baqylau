@@ -2,12 +2,16 @@
 """Change recorded bytes through SDK-only raw transform operations."""
 
 import os
+import time
 from dataclasses import dataclass
 
 from baqylau_extension_api.contracts.processing import ExtensionRawTransformer
 from baqylau_extension_api.models import content, documents, events, raw_transforms, transforms
 
 from tests.extension_api import ordered_transform_operations as operations
+
+# Longer than any test's call deadline: the host must end the call.
+HANG_SECONDS = 3600
 
 
 @dataclass(frozen=True)
@@ -23,6 +27,8 @@ class OrderedRaw(ExtensionRawTransformer):
         """
         first = raw_request.context.extension_id == operations.FIRST_OWNER
         encoded = operations.raw_content(raw_request, raw_request.inputs[0])
+        if first and operations.decode_text(encoded).startswith("hang"):
+            time.sleep(HANG_SECONDS)
         if first and operations.decode_text(encoded).startswith("raw-drop"):
             return raw_transforms.RawTransformResult(operations=tuple(
                 transforms.Drop(input_id=source.input_id, reason="Fixture raw suppression")
