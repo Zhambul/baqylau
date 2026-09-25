@@ -22,6 +22,8 @@ class TaskStartedPayload(BaseModel):
     turn_id: CodexTurnId | None = None
     collaboration_mode_kind: str | None = None
     model_context_window: int | None = None
+    # Codex 0.156.x names the first turn of a turn chain (measured: a turn id).
+    root_turn_id: CodexTurnId | None = None
 
 
 class TaskCompleteError(BaseModel):

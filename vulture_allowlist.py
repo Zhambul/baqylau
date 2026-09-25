@@ -235,6 +235,9 @@ agent_nickname  # records.py SessionMetaPayload / ThreadSpawn
 agent_role  # records.py ThreadSpawn
 forked_from_id  # records.py SessionMetaPayload
 subagent_history_start_ordinal  # records.py SessionMetaPayload
+runtime_workspace_roots  # records.py SessionMetaPayload Codex 0.156 field
+root_turn_id  # records.py TaskStartedPayload Codex 0.156 field
+disabled_plugin_ids  # records.py TurnContextPayload Codex 0.156 field
 encrypted_content  # records.py ReasoningPayload
 namespace  # records.py FunctionCallPayload
 images  # records.py UserMessagePayload

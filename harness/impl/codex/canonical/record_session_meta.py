@@ -73,6 +73,9 @@ class SessionMetaPayload(BaseModel):
     forked_from_ordinal_exclusive: int | None = None
     multi_agent_version: str | None = None
     subagent_history_start_ordinal: int | None = None
+    # Codex 0.156.x names the workspace roots of the session (measured: the
+    # launch directory). A refused header hides the whole rollout.
+    runtime_workspace_roots: list[str] | None = None
 
 
 class CodexHookPayload(BaseModel):
