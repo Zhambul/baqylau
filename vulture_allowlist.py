@@ -294,6 +294,7 @@ stop_details  # MessageObject
 container  # MessageObject
 context_management  # MessageObject
 diagnostics  # MessageObject
+input_transformations  # MessageObject Claude 2.1 field
 sender_task_id  # Origin
 parent_uuid  # UserRecord / AssistantRecord / SystemRecord / AttachmentRecord
 session_id  # UserRecord / AssistantRecord / SystemRecord / AttachmentRecord / TitleRecord
@@ -313,6 +314,7 @@ turn_companion  # UserRecord
 user_feedback  # UserRecord
 image_paste_ids  # UserRecord
 queue_skip_attachments  # UserRecord task-notification delivery flag
+turn_origin  # UserRecord Claude 2.1 field
 is_aborted_mid_stream  # AssistantRecord
 is_api_error_message  # AssistantRecord
 api_error_status  # AssistantRecord
@@ -325,6 +327,7 @@ quota_limits  # AssistantRecord
 per_turn_effort  # AssistantRecord foreign field
 native_tool_inputs  # AssistantRecord foreign field
 native_ingest_context  # AssistantRecord foreign field
+advisor_model  # AssistantRecord Claude 2.1 field
 logical_parent_uuid  # SystemRecord
 tool_use_uppercase_id  # SystemRecord
 tool_use_id  # SystemRecord / AgentMetaFile
@@ -340,6 +343,7 @@ duration_ms  # SystemRecord / GoalStatusAttachment
 message_count  # SystemRecord
 pending_background_agent_count  # SystemRecord
 session_title  # HookPayload
+mcp_server  # HookPayload Claude 2.1 field
 
 # terminal/models/values.py WindowInfo is built from the terminal protocol.
 # Consumers use the tab-level focus values. This native pane-level field stays
@@ -356,6 +360,7 @@ trigger  # SystemRecord / HookPayload
 iterations  # GoalStatusAttachment
 sentinel  # GoalStatusAttachment
 source_uuid  # QueuedCommandAttachment
+human_turn  # QueuedCommandAttachment Claude 2.1 field
 old_string  # FileArguments
 new_string  # FileArguments
 replace_all  # FileArguments

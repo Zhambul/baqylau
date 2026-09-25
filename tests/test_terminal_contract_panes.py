@@ -75,7 +75,7 @@ def assert_tag_launch(launch: tuple[RemoteArgument, ...]) -> None:
     assert "--location=hsplit" in launch
 
 
-def test_pane_launch_keeps_focus_only_while_frontmost() -> None:
+def test_pane_keeps_focus_only_while_frontmost() -> None:
     """Verify a pane launch keeps focus only while kitty is frontmost."""
     for focused, expected in ((True, True), (False, False)):
         remote = FakeRemote(tree=[{"is_focused": focused}], printed="101")

@@ -35,7 +35,7 @@ class _SessionsControlTransport(_SessionsPromptOwners):
         *,
         timeout: float | None = None,
     ) -> ActionReceipt:
-        cursor = self.snapshot(session).cursor
+        cursor = self.snapshot(session).entry_cursor
         request_id = f"e2e-{control_name}-{uuid.uuid4()}"
         path = f"/api/sessions/{session.path_segment}/controls/{control_name}"
         status, outcome = self._post_control(

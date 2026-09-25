@@ -12,13 +12,15 @@ from harness.impl.claude_code.canonical.transcript_model_activity import (
     TeammateIdleTranscriptRecord,
     TeamMessageTranscriptRecord,
 )
+from harness.impl.claude_code.canonical.transcript_model_commands import (
+    CommandOutputTranscriptRecord,
+    SlashCommandTranscriptRecord,
+)
 from harness.impl.claude_code.canonical.transcript_model_core import (
     BadTranscriptRecord,
-    CommandOutputTranscriptRecord,
     CompactSummaryTranscriptRecord,
     CompactTranscriptRecord,
     PromptTranscriptRecord,
-    SlashCommandTranscriptRecord,
     TextTranscriptRecord,
     TranscriptKind,
 )

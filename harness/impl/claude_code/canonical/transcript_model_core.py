@@ -71,25 +71,3 @@ class PromptTranscriptRecord:
     queued: bool = False
     resumed: bool = False
     kind: TranscriptKind = TranscriptKind.PROMPT
-
-
-@dataclass(frozen=True)
-class SlashCommandTranscriptRecord:
-    """Represent slash command transcript record."""
-
-    name: str
-    arguments: str
-    text: str
-    kind: TranscriptKind = TranscriptKind.SLASH_COMMAND
-
-
-@dataclass(frozen=True)
-class CommandOutputTranscriptRecord:
-    """Represent local command output transcript record.
-
-    A `/model` or `/effort` picker turn writes its result here, not in the
-        command record: the command record carries no arguments.
-    """
-
-    text: str
-    kind: TranscriptKind = TranscriptKind.COMMAND_OUTPUT

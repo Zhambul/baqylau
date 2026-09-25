@@ -526,7 +526,7 @@ class _JourneyFlow(_JourneyUnattended):
         )
         message = f"terminal continuation was not delivered: {outcome.reason}"
         assert outcome.succeeded, message
-        return before.cursor
+        return before.entry_cursor
 
     def _announced_session(
         self,

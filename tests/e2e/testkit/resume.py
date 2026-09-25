@@ -70,7 +70,7 @@ class SessionResumeSupport:
             raise AssertionError(message)
         return ResumePreparation(
             source=source,
-            source_cursor=before.cursor,
+            source_cursor=before.entry_cursor,
             saved=saved,
             spec=SessionSpec(
                 harness=saved.harness,

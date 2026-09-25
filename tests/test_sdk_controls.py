@@ -27,7 +27,8 @@ if TYPE_CHECKING:
     from api.terminal.models.panes.pane_command_response import PaneCommandResponse
 
 
-INITIAL_CURSOR = 1_001
+# The receipt carries the newest entry cursor, and the fake session has no entries.
+NO_ENTRY_CURSOR = 0
 
 
 PANE_WIDTH_PERCENT = 35
@@ -128,7 +129,7 @@ def test_session_controls_use_one_typed_dispatch() -> None:
         "medium",
         True,
         {HTTPStatus.OK, HTTPStatus.ACCEPTED, HTTPStatus.CONFLICT},
-        INITIAL_CURSOR,
+        NO_ENTRY_CURSOR,
         "acknowledged",
     )
 

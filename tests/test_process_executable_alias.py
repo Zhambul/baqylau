@@ -48,7 +48,7 @@ def test_alias_matches_only_its_executable(tmp_path: Path, monkeypatch: pytest.M
     assert not process.process_alive(OBSERVED_PROCESS_ID, CLI_NAME)
 
 
-def test_update_sibling_matches_the_installed_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_update_sibling_matches_installed_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep matching a running CLI after the installed name moves to a newer version."""
     old_version = tmp_path / "1.2.3"
     new_version = tmp_path / "1.2.4"
