@@ -737,7 +737,14 @@ test('keeps the new-session and resume-preview modal boundaries', async ({
   const search = dialog.getByPlaceholder(
     'search all sessions in this directory…',
   );
+  // The search reply renders the list again; focus a row only after it.
+  const searched = page.waitForResponse(
+    (response) =>
+      response.url().includes('/api/resumable-sessions') &&
+      new URL(response.url()).searchParams.get('search') === 'Frontend parity',
+  );
   await search.fill('Frontend parity');
+  await searched;
   const row = dialog
     .getByRole('option')
     .filter({ hasText: 'Frontend parity work' });
