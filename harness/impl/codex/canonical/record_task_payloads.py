@@ -83,6 +83,10 @@ class ThreadSettingsBlock(BaseModel):
     # treatment as TurnContextPayload's sandbox/permission fields below.
     active_permission_profile: ForeignMetadata | None = None
     permission_profile: ForeignMetadata | None = None
+    # Codex 0.156.x repeats the header's workspace roots and the turn context's
+    # disabled plugins here (measured: the launch directory, and []).
+    runtime_workspace_roots: list[str] | None = None
+    disabled_plugin_ids: list[str] | None = None
 
 
 class ThreadSettingsAppliedPayload(BaseModel):

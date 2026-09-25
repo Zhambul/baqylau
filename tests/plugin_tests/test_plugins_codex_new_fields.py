@@ -39,7 +39,14 @@ def test_header_with_workspace_roots_is_a_lead(tmp_path: Path) -> None:
         },
     },
     {fixture.TYPE_FIELD: "turn_context", fixture.PAYLOAD_FIELD: {"disabled_plugin_ids": []}},
-], ids=["task-started-root-turn", "turn-context-disabled-plugins"])
+    {
+        fixture.TYPE_FIELD: fixture.EVENT_MSG_ID,
+        fixture.PAYLOAD_FIELD: {
+            fixture.TYPE_FIELD: "thread_settings_applied",
+            "thread_settings": {"runtime_workspace_roots": ["/work"], "disabled_plugin_ids": []},
+        },
+    },
+], ids=["task-started-root-turn", "turn-context-disabled-plugins", "thread-settings-new-fields"])
 def test_new_record_fields_translate(record: dict[str, JsonValue]) -> None:
     """A task start with its root turn and a turn context with disabled plugins translate."""
     CodexCanonicalTranslator().translate(
