@@ -21,11 +21,22 @@ if TYPE_CHECKING:
 
 
 def _finished_turn_actor(actor: actor_state.ActorFacts) -> actor_state.ActorFacts:
+    """Settle the actor of a turn that ended, and drop its attentions.
+
+    A harness cannot end a turn while its dialog waits, so an attention that
+    outlives its turn has no one left to answer it. This is the only resolution
+    left when the source lost the tool join of the aborted call, and the turn
+    end always carries it.
+
+    Returns:
+        The settled actor.
+
+    """
     has_background = actor.background.running_shell_ids or actor.running_assignment_ids_internal
     status = (
         actor_state.ActorStatus.AWAITING_BACKGROUND if has_background else actor_state.ActorStatus.AWAITING_RESPONSE
     )
-    return replace(actor, status=status)
+    return replace(actor, status=status, pending_attention_internal=())
 
 
 def _clear_actor_statuses(aggregate_state: contract.AggregateState) -> contract.AggregateState:

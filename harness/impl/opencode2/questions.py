@@ -10,19 +10,23 @@ from harness.impl.opencode2.records import NativeRecord
 def payloads(native_record: NativeRecord) -> tuple[EventPayload, ...]:
     """Read a native question with its exact choices.
 
+    Only the asked fact needs the input. A finish is resolved by the call
+    identity and the name alone, because the plugin joins the two separately
+    and a lost input must not hide an aborted question.
+
     Returns:
         The pending question, when the native tool was called.
 
     """
     tool = native_record.tool
-    if tool is None or tool.name != "question" or tool.input is None:
+    if tool is None or tool.name != "question":
         return ()
     identity = str(native_record.event.details.id)
     if native_record.event.type == "session.tool.success":
         return _answered(native_record, identity)
     if native_record.event.type == "session.tool.failed":
         return _failed(native_record, identity)
-    if native_record.event.type != "session.tool.called":
+    if native_record.event.type != "session.tool.called" or tool.input is None:
         return ()
     return (_asked(tool.input.questions, identity),)
 

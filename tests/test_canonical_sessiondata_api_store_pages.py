@@ -17,6 +17,7 @@ from domain import (
     messaging,
     outcomes,
 )
+from domain.entry_base import TurnState
 from repository.contract import session_data as session_data_contract
 from tests import canonical_sessiondata_api_entries as api_entries, canonical_sessiondata_api_values as api_values
 
@@ -138,6 +139,39 @@ def test_pending_question_is_derived_and_stops(session_data_store: SqliteSession
             ),),
         ),
         4,
+    )
+    assert read_model.pending_attention(api_values.SESSION) == ()
+
+
+def test_pending_question_ends_with_its_turn(session_data_store: SqliteSessionDataRepository) -> None:
+    """Verify a question stops being pending when its turn ends.
+
+    A source can lose the tool join of the aborted call and never resolve the
+    attention. The turn end is the one fact that cannot be lost with it: a
+    harness cannot end a turn while its dialog waits.
+    """
+    read_model = session_data_store
+    read_model.apply(
+        api_values.SESSION,
+        session_data_contract.SessionDataChanges(
+            entries=(api_entries.entry(
+                entry_attention.QuestionAskedBody(domain_ids.AttentionId("att-3"), ()),
+                entry_id=domain_ids.CanonicalEventId("asked-3"),
+            ),),
+        ),
+        1,
+    )
+    assert [entry.entry_id for entry in read_model.pending_attention(api_values.SESSION)] == ["asked-3"]
+
+    read_model.apply(
+        api_values.SESSION,
+        session_data_contract.SessionDataChanges(
+            entries=(api_entries.entry(
+                entry_conversation.TurnFinishedBody(TurnState.ABORTED),
+                entry_id=domain_ids.CanonicalEventId("aborted-3"),
+            ),),
+        ),
+        2,
     )
     assert read_model.pending_attention(api_values.SESSION) == ()
 

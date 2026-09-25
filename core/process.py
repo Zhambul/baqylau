@@ -24,10 +24,16 @@ def _matches(process: psutil.Process, process_name: str) -> bool:
     if process_name in _names(process):
         return True
     executable = shutil.which(process_name)
-    return (
-        executable is not None
-        and Path(executable).resolve() == Path(process.exe()).resolve()
-    )
+    if executable is None:
+        return False
+    installed = Path(executable).resolve()
+    running = Path(process.exe()).resolve()
+    if installed == running:
+        return True
+    # A self-update repoints the installed name while processes of the previous
+    # version still run. Accept a sibling from the same install directory: the
+    # version file changes, the CLI family does not.
+    return installed.parent == running.parent
 
 
 def _names(process: psutil.Process) -> frozenset[str]:

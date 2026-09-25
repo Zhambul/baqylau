@@ -124,6 +124,35 @@ def test_hook_without_native_identity_uses_exact(monkeypatch: pytest.MonkeyPatch
     assert str(evidence[0].raw_event.raw_event_id).endswith(payload_digest)
 
 
+def test_reclassified_hook_redelivery_is_a_second_observation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Record one payload again when agent metadata corrects its source type."""
+    monkeypatch.setenv(fixture.BAQYLAU_DATA_DIR_ENV, tmp_path.as_posix())
+    transcript = tmp_path / fixture.SESSION_ONE_JSONL_PATH
+    payload = json.dumps(
+        {
+            fixture.SESSION_ID_FIELD: fixture.SESSION_ONE_ID,
+            fixture.TRANSCRIPT_PATH: str(transcript),
+            fixture.HOOK_EVENT_NAME_FIELD: fixture.SUBAGENT_START_HOOK,
+            fixture.AGENT_ID_FIELD: fixture.WORKER_ONE_ID,
+        },
+    ).encode()
+    gateway = claude_hooks.ClaudeHookGateway()
+
+    # The meta sidecar lags the first delivery, so it reads as an ordinary child.
+    support_hooks.deliver_hook(gateway, payload)
+    metadata = transcript.with_suffix("") / fixture.SUBAGENTS / f"agent-{fixture.WORKER_ONE_ID}.meta.json"
+    metadata.parent.mkdir(parents=True)
+    metadata.write_text(json.dumps({"taskKind": "in_process_teammate"}))
+    support_hooks.deliver_hook(gateway, payload)
+
+    runtime = CanonicalRuntime(str(tmp_path / fixture.MAIN_DB_PATH))
+    evidence = runtime.raw_event_audits.audits_for_session(domain_ids.SessionId(fixture.SESSION_ONE_ID))
+    assert [str(row.raw_event.source_type) for row in evidence] == ["hook", "teammate_hook"]
+
+
 def test_hook_recording_preserves_native_child(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Verify hook recording preserves native child actor context."""
     monkeypatch.setenv(fixture.BAQYLAU_DATA_DIR_ENV, tmp_path.as_posix())

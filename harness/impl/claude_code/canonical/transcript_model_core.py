@@ -16,6 +16,7 @@ class TranscriptKind(StrEnum):
     RECAP = "recap"
     PROMPT = "prompt"
     SLASH_COMMAND = "slash_command"
+    COMMAND_OUTPUT = "command_output"
     TEAM_MESSAGE = "teammsg"
     TOOL_RESULTS = "results"
     ASSISTANT = "assistant"
@@ -80,3 +81,15 @@ class SlashCommandTranscriptRecord:
     arguments: str
     text: str
     kind: TranscriptKind = TranscriptKind.SLASH_COMMAND
+
+
+@dataclass(frozen=True)
+class CommandOutputTranscriptRecord:
+    """Represent local command output transcript record.
+
+    A `/model` or `/effort` picker turn writes its result here, not in the
+        command record: the command record carries no arguments.
+    """
+
+    text: str
+    kind: TranscriptKind = TranscriptKind.COMMAND_OUTPUT

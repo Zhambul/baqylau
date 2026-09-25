@@ -22,7 +22,8 @@ def translate_collaboration_record(
 
     """
     if isinstance(record, transcript.MonitorEndedTranscriptRecord):
-        return [monitor_ended_event(source, record, semantics.tool_calls)]
+        ended = monitor_ended_event(source, record, semantics.tool_calls)
+        return [] if ended is None else [ended]
     if isinstance(record, transcript.ActorAssignmentFinishedTranscriptRecord):
         return [assignment_finished_event(source, record, semantics.tool_calls)]
     if isinstance(record, transcript.TeammateIdleTranscriptRecord):

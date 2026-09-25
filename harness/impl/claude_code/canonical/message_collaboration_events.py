@@ -137,23 +137,23 @@ def monitor_ended_event(
     source: message_models.TranscriptSource,
     record: transcript.MonitorEndedTranscriptRecord,
     tool_calls: dependencies.toolcalls.ToolCallSemantics,
-) -> dependencies.event_base.CanonicalEvent[dependencies.event_base.EventPayload]:
+) -> dependencies.event_base.CanonicalEvent[dependencies.event_base.EventPayload] | None:
     """Finish a monitor and translate its output completion.
 
-    Returns:
-        The shell output completion event.
+    A stream-ended notice names the shell directly. An expiry notice names
+        only the task, so the arm the translator saw resolves it.
 
-    Raises:
-        TranslationError: If the command identifier is empty.
+    Returns:
+        The shell output completion event, or None when its shell is unknown.
 
     """
-    shell_id = claude_ids.shell_id_from_claude_code_call(record.operation_id)
-    if not str(shell_id):
-        msg = "Claude Code monitor end has no command id"
-        raise raw_events.TranslationError(
-            msg,
-            context=source.raw_event.source_position,
-        )
+    shell_id = (
+        claude_ids.shell_id_from_claude_code_call(record.operation_id)
+        if record.operation_id
+        else tool_calls.monitor_shell(source.raw_event, record.task)
+    )
+    if shell_id is None:
+        return None
     payload = event_shell.ShellOutputFinished(shell_id, background_outcome(record.status))
     tool_calls.monitor_finished(source.raw_event, shell_id)
     draft = dependencies.raw_event_builders.CanonicalEventDraft(

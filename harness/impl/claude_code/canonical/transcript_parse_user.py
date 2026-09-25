@@ -5,7 +5,7 @@ from harness.impl.claude_code.canonical import records
 from harness.impl.claude_code.canonical.transcript_commands import (
     bare_compact_command as _bare_compact_command,
     command_caveat as _command_caveat,
-    command_standard_output as _command_standard_output,
+    command_standard_output_text as _command_standard_output_text,
     command_text as _command_text,
     command_wrapper as _command_wrapper,
 )
@@ -15,6 +15,7 @@ from harness.impl.claude_code.canonical.transcript_model_activity import (
     TeamMessageTranscriptRecord,
 )
 from harness.impl.claude_code.canonical.transcript_model_core import (
+    CommandOutputTranscriptRecord,
     CompactSummaryTranscriptRecord,
     PromptTranscriptRecord,
     SlashCommandTranscriptRecord,
@@ -83,8 +84,11 @@ def _ordinary_user_text(
     command_name, command_arguments = _bare_compact_command(content)
     if command_name:
         return SlashCommandTranscriptRecord(command_name, command_arguments, content.strip())
-    if _command_caveat(content) or _command_standard_output(content):
+    if _command_caveat(content):
         return None
+    output_text = _command_standard_output_text(content)
+    if output_text is not None:
+        return CommandOutputTranscriptRecord(output_text)
     injected = _injected(user_record, content)
     return PromptTranscriptRecord(
         content,

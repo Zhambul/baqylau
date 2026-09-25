@@ -60,6 +60,18 @@ def alive() -> tuple[session_domain.event_base.EventPayload, ...]:
     )
 
 
+def fold_after(
+    *payloads: session_domain.event_base.EventPayload,
+) -> sessiondata_components.engine.contract.AggregateState:
+    """Apply the supplied facts to a started session.
+
+    Returns:
+        The aggregate state after the facts.
+
+    """
+    return folding.fold(*alive(), *payloads)
+
+
 def status_after(
     *payloads: session_domain.event_base.EventPayload,
 ) -> session_domain.actor_state.ActorStatus | None:
@@ -69,8 +81,7 @@ def status_after(
         The resulting lead actor status, which can be None.
 
     """
-    actor = folding.fold(*alive(), *payloads).actor(session_values.LEAD)
-    assert actor is not None, "the lead actor has no row"
+    actor = folding.lead_from(fold_after(*payloads))
     return actor.status
 
 

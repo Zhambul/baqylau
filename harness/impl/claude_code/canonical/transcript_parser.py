@@ -21,6 +21,7 @@ KINDS = (
     "recap",
     TranscriptKind.PROMPT.value,
     TranscriptKind.SLASH_COMMAND.value,
+    TranscriptKind.COMMAND_OUTPUT.value,
     TranscriptKind.TEAM_MESSAGE.value,
     "results",
     TranscriptKind.ASSISTANT.value,

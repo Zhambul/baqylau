@@ -122,6 +122,24 @@ Feature: planning tools update the session goal and tasks
       | harness | model        |
       | codex   | gpt-5.6-luna |
 
+  Scenario Outline: a native goal command sets the session goal
+    # Harness limit: codex only. The /goal command is a Codex TUI command that confirms with a goal event and no prompt echo.
+    Given session configuration "primary" uses <harness> with model <model> and low effort
+    When I launch session "primary" as turn "goal ready" with prompt
+      """
+      Do not use tools. Reply only with GOAL_READY.
+      """
+    Then turn "goal ready" completes
+    And turn "goal ready" has final answer 'GOAL_READY'
+    When I send native command '/goal Reply only with NATIVE_GOAL_DONE and use no tools' to session "primary" as control "native goal"
+    Then control "native goal" response is accepted
+    And control "native goal" reports sent delivery
+    And session "primary" has goal 'Reply only with NATIVE_GOAL_DONE and use no tools'
+
+    Examples:
+      | harness | model        |
+      | codex   | gpt-5.6-luna |
+
   Scenario Outline: a dashboard choice approves a harness plan
     # Harness limit: codex, claude_code only. OpenCode2 has no plan decision control.
     Given session configuration "primary" uses <harness> with model <model> and low effort

@@ -7,7 +7,7 @@ from unittest.mock import Mock
 import pytest
 
 from harness.impl.codex.canonical import rollout, source_catalog
-from harness.impl.codex.controls import controller_rollout
+from harness.impl.codex.controls import controller_rollout, controller_rollout_modes, controller_values
 
 
 def test_normal_send_does_not_scan_history(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -30,3 +30,29 @@ def test_confirmation_stops_at_prompt(tmp_path: Path, monkeypatch: pytest.Monkey
     monkeypatch.setattr(rollout, "parse_line", parse)
     assert controller_rollout.confirmed_prompt_after(str(source), 0, "Go")
     parse.assert_called_once_with(prompt)
+
+
+GOAL_EVENT = (
+    '{"timestamp":"2026-09-14T08:52:42.009Z","type":"event_msg","payload":{"type":"thread_goal_updated",'
+    '"threadId":"01a09ebf-67cb-7212-9cd4-a31aab2e4243","goal":{"threadId":"01a09ebf-67cb-7212-9cd4-a31aab2e4243",'
+    '"objective":"do all tasks","status":"active","tokensUsed":0,"timeUsedSeconds":0,'
+    '"createdAt":1789375962,"updatedAt":1789375962}}}'
+)
+
+
+def test_goal_command_confirms_from_goal_event(tmp_path: Path) -> None:
+    """Confirm a /goal command from the goal event Codex writes for it."""
+    source = tmp_path / "session.jsonl"
+    source.write_text(f"{GOAL_EVENT}\n")
+    assert controller_rollout_modes.goal_set_after(str(source), 0, "do all tasks")
+    assert not controller_rollout_modes.goal_set_after(str(source), 0, "another objective")
+    assert not controller_rollout_modes.goal_set_after(str(source), source.stat().st_size, "do all tasks")
+
+
+def test_command_argument_reads_one_command() -> None:
+    """Read the argument of one slash command and nothing else."""
+    prefix = controller_values.GOAL_COMMAND_PREFIX
+    assert controller_rollout.command_argument("/goal do all tasks", prefix) == "do all tasks"
+    assert controller_rollout.command_argument("/goal   ", prefix) is None
+    assert controller_rollout.command_argument("/rename do all tasks", prefix) is None
+    assert controller_rollout.command_argument("do all tasks", prefix) is None

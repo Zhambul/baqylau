@@ -8,7 +8,7 @@ from harness.impl.claude_code.canonical.message_collaboration_events import (
     goal_event,
     monitor_event,
 )
-from harness.impl.claude_code.canonical.message_commands import slash_command
+from harness.impl.claude_code.canonical.message_commands import command_output, slash_command
 from harness.impl.claude_code.canonical.message_prompts import translate_prompt
 
 
@@ -27,6 +27,8 @@ def translate_direct_record(
         return translate_prompt(source, record, semantics)
     if isinstance(record, transcript.SlashCommandTranscriptRecord):
         return slash_command(source, record, semantics)
+    if isinstance(record, transcript.CommandOutputTranscriptRecord):
+        return command_output(source, record, semantics)
     return translate_direct_system_record(source, record, semantics)
 
 

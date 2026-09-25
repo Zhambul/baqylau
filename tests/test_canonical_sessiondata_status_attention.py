@@ -3,7 +3,11 @@
 
 from __future__ import annotations
 
-from tests import canonical_sessiondata_fixtures as session_fixtures, canonical_sessiondata_values as session_values
+from tests import (
+    canonical_sessiondata_fixtures as session_fixtures,
+    canonical_sessiondata_folding as session_folding,
+    canonical_sessiondata_values as session_values,
+)
 from tests.canonical_sessiondata_components import domain as session_domain
 
 COMPACTED_ITEMS = 200
@@ -107,8 +111,15 @@ def test_compaction_finish_keeps_turn_working() -> None:
     )
 
 
-def test_turn_that_ends_with_nothing_running() -> None:
-    """Verify a turn that ends with nothing running is awaiting a response."""
+def test_turn_end_settles_status_and_attention() -> None:
+    """Verify a turn end settles the status and the attentions of its actor.
+
+    The turn end ends the attentions too: a harness cannot end a turn while its
+    dialog waits, so an attention that outlives its turn has no one left to
+    answer it. This is the only resolution left when a source loses the tool
+    join of the aborted call, and the finished work of a later turn must not
+    repaint the actor as awaiting an answer that nobody can give.
+    """
     assert (
         session_fixtures.status_after(
             session_domain.event_conversation.TurnStarted(None),
@@ -123,6 +134,20 @@ def test_turn_that_ends_with_nothing_running() -> None:
         )
         == session_values.AWAITING_RESPONSE_STATE
     )
+    asked = session_domain.event_work.QuestionAsked(session_values.QUESTION_ATTENTION_ID, ())
+    finished_work = session_domain.event_shell.ShellFinished(
+        session_values.PRIMARY_SHELL_ID,
+        session_domain.outcomes.Outcome.SUCCEEDED,
+        None,
+        0,
+    )
+    for ended in (session_fixtures.succeeded_turn(), session_domain.event_conversation.TurnAborted(None)):
+        actor = session_folding.lead_from(session_fixtures.fold_after(asked, ended))
+        assert actor.pending_attention_internal == ()
+        assert (
+            session_fixtures.status_after(asked, ended, finished_work)
+            == session_values.AWAITING_RESPONSE_STATE
+        )
 
 
 def test_turn_that_ends_over_running_bg_job() -> None:

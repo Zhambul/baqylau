@@ -8,7 +8,7 @@ import pytest
 from domain import (
     ids as domain_ids,
 )
-from harness.impl.codex.controls import controller as codexcontroller, controller_timeouts
+from harness.impl.codex.controls import controller as codexcontroller, controller_send_state, controller_timeouts
 from harness.models import controls as control_models
 from harness.models.session import (
     Session,
@@ -80,3 +80,52 @@ def test_codex_idle_send_reports_missing_native(monkeypatch: pytest.MonkeyPatch,
     assert isinstance(outcome, control_models.ControlResult)
     assert outcome.status == "indeterminate"
     assert outcome.reason == "Codex did not confirm the submitted message"
+
+
+GOAL_OBJECTIVE = "Finish the goal sample"
+GOAL_EVENT = (
+    '{"timestamp":"2026-09-14T08:52:42.009Z","type":"event_msg","payload":{"type":"thread_goal_updated",'
+    '"goal":{"objective":"Finish the goal sample","status":"active"}}}\n'
+)
+
+
+def test_codex_goal_command_confirms_from_goal_event(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Confirm a /goal send from the goal event, which has no user prompt echo."""
+    source = tmp_path / fixture.ROLLOUT_JSONL_PATH
+    source.write_text("", encoding=fixture.TEXT_ENCODING)
+    submit_message = controller_send_state.submit_message
+
+    def submit_and_record_goal(
+        request: control_models.SendText,
+        control_context: control_models.ControlContext,
+        window_id: domain_ids.WindowId,
+        send_state: controller_send_state.SendState,
+    ) -> control_models.ControlResult:
+        result = submit_message(request, control_context, window_id, send_state)
+        with source.open("a", encoding=fixture.TEXT_ENCODING) as rollout:
+            rollout.write(GOAL_EVENT)
+        return result
+
+    monkeypatch.setattr(controller_send_state, "submit_message", submit_and_record_goal)
+    session = Session(
+        control_state_values.PRIMARY_SESSION,
+        control_state_values.PRIMARY_ACTOR,
+        control_basic_support.source_name(source),
+        str(tmp_path),
+    )
+    request = control_models.SendText(
+        session_id=session.session_id,
+        request_id=control_state_values.PRIMARY_REQUEST,
+        text=f"/goal {GOAL_OBJECTIVE}",
+    )
+
+    outcome = control_driver_support.controller(CODEX_HARNESS).execute(
+        request,
+        support_controls.control_context(
+            session,
+            FakeTerminal(screen_text=fixture.ASK_CODEX_TO_DO_ANYTHING_TEXT).plugin(),
+        ),
+    )
+
+    assert isinstance(outcome, control_models.MessageDeliveryResult)
+    assert outcome.status == fixture.SENT

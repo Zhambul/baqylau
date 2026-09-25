@@ -18,6 +18,8 @@ from harness.impl.claude_code.ids import ClaudeCodeActorId, ClaudeCodeCallId, Cl
 TASK_NOTIFICATION = re.compile(r"<task-notification>(.*?)</task-notification>", re.DOTALL)
 BACKGROUND_SUMMARY_PREFIX = "Background command"
 MONITOR_SUMMARY_PREFIX = "Monitor"
+MONITOR_EVENT_SUMMARY_PREFIX = "Monitor event:"
+MONITOR_EXPIRED_MARKER = "[Monitor expired"
 COMPLETED_STATUS = "completed"
 
 
@@ -44,12 +46,31 @@ def task_notification(content: str) -> TranscriptRecord:
     summary = note_tag(document, "summary") or ""
     if summary.startswith(BACKGROUND_SUMMARY_PREFIX):
         return background_notification(document)
+    if _monitor_ended(summary, document):
+        return monitor_ended_notification(document)
     event = note_tag(document, "event")
     if event is not None:
         return monitor_notification(document, summary, event)
-    if summary.startswith(MONITOR_SUMMARY_PREFIX):
-        return monitor_ended_notification(document)
     return assignment_notification(document, summary)
+
+
+def _monitor_ended(summary: str, document: str) -> bool:
+    """Return whether a task notification ends a monitor.
+
+    A monitor's own end arrives in two shapes: a `Monitor "..." stream ended`
+        summary, which may also carry the last event, and an expiry notice whose
+        event text says the monitor expired. Only a `Monitor event:` summary is
+        a progress event.
+
+    Returns:
+        Whether the notification ends a monitor.
+
+    """
+    if not summary.startswith(MONITOR_SUMMARY_PREFIX):
+        return False
+    if summary.startswith(MONITOR_EVENT_SUMMARY_PREFIX):
+        return MONITOR_EXPIRED_MARKER in (note_tag(document, "event") or "")
+    return True
 
 
 def background_notification(document: str) -> BackgroundCommandCompletedTranscriptRecord:

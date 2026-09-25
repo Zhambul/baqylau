@@ -64,3 +64,7 @@ class MessageObject(BaseModel):
     container: ForeignMetadata | None = None
     context_management: ForeignMetadata | None = None
     diagnostics: ForeignMetadata | None = None
+    # Claude Code 2.1.x carries the model's input transformations beside the
+    # message (corpus: always an empty list so far). A record it refuses loses
+    # the whole message, so the field is read even when empty.
+    input_transformations: list[ForeignMetadata] | None = None

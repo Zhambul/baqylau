@@ -93,6 +93,65 @@ def test_claude_monitor_ends_on_its_own_notice() -> None:
     assert finished_event.payload.outcome == fixture.SUCCEEDED
 
 
+def test_claude_monitor_stream_end_carries_its_last_event() -> None:
+    """End the monitor when its stream-ended notice also carries the last event."""
+    translator = ClaudeCanonicalTranslator()
+    armed_monitor(translator)
+
+    ended = translator.translate(
+        monitor_notification(
+            "monitor-stream-end",
+            "<task-id>bmfwjr03l</task-id>"
+            "<tool-use-id>monitor-op-one</tool-use-id>"
+            "<output-file>/tmp/tasks/bmfwjr03l.output</output-file>"
+            "<status>completed</status>"
+            '<summary>Monitor "ticks" stream ended</summary>'
+            "<event>backend test job success</event>",
+        ),
+    )
+
+    finished = payloads(ended, shell_events.ShellOutputFinished)
+    assert len(finished) == 1
+    assert finished[0].payload.shell_id == domain_ids.ShellId(fixture.MONITOR_OP_ONE)
+    # the last event rides the end notice; it is not a progress row of its own
+    assert not payloads(ended, shell_events.ShellProgressed)
+
+
+def test_claude_monitor_expiry_ends_the_armed_shell() -> None:
+    """End a monitor whose expiry notice names only its task, not its shell."""
+    translator = ClaudeCanonicalTranslator()
+    armed_monitor(translator)
+
+    ended = translator.translate(
+        monitor_notification(
+            "monitor-expiry",
+            "<task-id>bmfwjr03l</task-id>"
+            '<summary>Monitor event: "ticks"</summary>'
+            "<event>[Monitor expired after 30m with 0 events delivered."
+            " Re-arm it if you still need the watch.]</event>",
+        ),
+    )
+
+    finished = payloads(ended, shell_events.ShellOutputFinished)
+    assert len(finished) == 1
+    assert finished[0].payload.shell_id == domain_ids.ShellId(fixture.MONITOR_OP_ONE)
+
+
+def test_claude_monitor_expiry_without_its_arm_is_dropped() -> None:
+    """Drop an expiry whose monitor this translator never saw."""
+    translation = ClaudeCanonicalTranslator().translate(
+        monitor_notification(
+            "orphan-expiry",
+            "<task-id>never-seen</task-id>"
+            '<summary>Monitor event: "ticks"</summary>'
+            "<event>[Monitor expired after 30m with 0 events delivered.]</event>",
+        ),
+    )
+
+    assert translation.canonical_events == ()
+    assert translation.decision == fixture.IGNORED_NONSEMANTIC
+
+
 def test_claude_task_notices_are_counted_once() -> None:
     """The queue owns a monitor event and its later user copy is plumbing."""
     translator = ClaudeCanonicalTranslator()

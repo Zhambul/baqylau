@@ -113,28 +113,30 @@ class SendTextHandler(models.contract.ControlHandler):
         window_id: models.ids.WindowId,
         send_state: operations.controller_send_state.SendState,
     ) -> bool:
-        if (
-            send_state.expected_message == operations.controller_values.PLAN_COMMAND
-            and (
-                operations.controller_values.PLAN_MODE_MARKER in (send_state.driver.read_text(window_id) or "")
-                or any(
-                    operations.controller_rollout_modes.plan_mode_applied_after(position.path, position.position)
-                    for position in send_state.source_positions
-                )
+        return (
+            _plan_mode_confirmed(window_id, send_state)
+            or self._rename_confirmed(control_context, send_state)
+            or _goal_confirmed(send_state)
+            or self._confirmed_prompt(send_state) is not None
+            or (
+                send_state.rewind_pending
+                and self._rewind_started(send_state.source_positions, control_context.session.source_reference)
             )
-        ):
-            return True
-        renamed_to = operations.controller_rollout.renamed_to(send_state.expected_message)
-        if renamed_to is not None:
-            observed_title = self.titles.read_title(control_context.session.source_reference)
-            if observed_title is not None and observed_title.text == renamed_to:
-                return True
-        if self._confirmed_prompt(send_state) is not None:
-            return True
-        return send_state.rewind_pending and self._rewind_started(
-            send_state.source_positions,
-            control_context.session.source_reference,
         )
+
+    def _rename_confirmed(
+        self,
+        control_context: models.controls.ControlContext,
+        send_state: operations.controller_send_state.SendState,
+    ) -> bool:
+        renamed_to = operations.controller_rollout.command_argument(
+            send_state.expected_message,
+            operations.controller_values.RENAME_COMMAND_PREFIX,
+        )
+        if renamed_to is None:
+            return False
+        observed_title = self.titles.read_title(control_context.session.source_reference)
+        return observed_title is not None and observed_title.text == renamed_to
 
     def _confirmed_prompt(
         self,
@@ -171,3 +173,28 @@ class SendTextHandler(models.contract.ControlHandler):
             )
             for path in self.rollouts.paths()
         )
+
+
+def _plan_mode_confirmed(
+    window_id: models.ids.WindowId,
+    send_state: operations.controller_send_state.SendState,
+) -> bool:
+    if send_state.expected_message != operations.controller_values.PLAN_COMMAND:
+        return False
+    return operations.controller_values.PLAN_MODE_MARKER in (send_state.driver.read_text(window_id) or "") or any(
+        operations.controller_rollout_modes.plan_mode_applied_after(position.path, position.position)
+        for position in send_state.source_positions
+    )
+
+
+def _goal_confirmed(send_state: operations.controller_send_state.SendState) -> bool:
+    objective = operations.controller_rollout.command_argument(
+        send_state.expected_message,
+        operations.controller_values.GOAL_COMMAND_PREFIX,
+    )
+    if objective is None:
+        return False
+    return any(
+        operations.controller_rollout_modes.goal_set_after(position.path, position.position, objective)
+        for position in send_state.source_positions
+    )
