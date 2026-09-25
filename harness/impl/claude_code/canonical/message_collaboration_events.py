@@ -133,20 +133,33 @@ def monitor_event(
     return [dependencies.support.event(source.raw_event, draft)]
 
 
-def monitor_ended_event(
+def monitor_ended_events(
+    source: message_models.TranscriptSource,
+    record: transcript.MonitorEndedTranscriptRecord,
+    tool_calls: dependencies.toolcalls.ToolCallSemantics,
+) -> list[dependencies.event_base.CanonicalEvent[dependencies.event_base.EventPayload]]:
+    """Translate a monitor's last event, then finish the monitor.
+
+    The last event is translated first, while the arm still resolves its shell.
+
+    Returns:
+        The last event's progress, if any, and the output completion.
+
+    """
+    last = [] if record.last_event is None else monitor_event(
+        source, transcript.MonitorEventTranscriptRecord(record.task, "", record.last_event), tool_calls,
+    )
+    ended = _monitor_output_finished(source, record, tool_calls)
+    return last if ended is None else [*last, ended]
+
+
+def _monitor_output_finished(
     source: message_models.TranscriptSource,
     record: transcript.MonitorEndedTranscriptRecord,
     tool_calls: dependencies.toolcalls.ToolCallSemantics,
 ) -> dependencies.event_base.CanonicalEvent[dependencies.event_base.EventPayload] | None:
-    """Finish a monitor and translate its output completion.
-
-    A stream-ended notice names the shell directly. An expiry notice names
-        only the task, so the arm the translator saw resolves it.
-
-    Returns:
-        The shell output completion event, or None when its shell is unknown.
-
-    """
+    # A stream-ended notice names the shell directly. An expiry notice names only
+    # the task, so the arm the translator saw resolves it.
     shell_id = (
         claude_ids.shell_id_from_claude_code_call(record.operation_id)
         if record.operation_id

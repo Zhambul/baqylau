@@ -339,6 +339,7 @@ has_output  # SystemRecord
 hook_additional_context  # SystemRecord
 hook_count  # SystemRecord
 hook_errors  # SystemRecord
+command_run  # SystemRecord Claude 2.1 field
 hook_infos  # SystemRecord
 prevent_continuation  # SystemRecord
 prevented_continuation  # SystemRecord

@@ -16,9 +16,11 @@ class _LocatedReply:
     reply: bytes
 
 
+# No reply to the kitty keyboard query (`CSI ? u`): this emulator does not support
+# the protocol, and a program learns that from the DA1 reply that comes alone.
+# The false reply reached Claude Code 2.1 as a typed `u` in its input.
 _QUERY_REPLIES = (
     _TerminalQuery(b"\x1b[c", b"\x1b[?1;2c"),
-    _TerminalQuery(b"\x1b[?u", b"\x1b[?0u"),
     _TerminalQuery(b"\x1b]10;?\x07", b"\x1b]10;rgb:ffff/ffff/ffff\x1b\\"),
     _TerminalQuery(b"\x1b]10;?\x1b\\", b"\x1b]10;rgb:ffff/ffff/ffff\x1b\\"),
     _TerminalQuery(b"\x1b]11;?\x07", b"\x1b]11;rgb:0000/0000/0000\x1b\\"),

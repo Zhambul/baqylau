@@ -11,6 +11,7 @@ from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTransla
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_events import payloads
 from tests.plugin_tests.support_hooks import armed_monitor, monitor_notification
+from tests.plugin_tests.support_values import text_of
 
 
 def test_monitor_stream_end_carries_last_event() -> None:
@@ -33,8 +34,9 @@ def test_monitor_stream_end_carries_last_event() -> None:
     finished = payloads(ended, shell_events.ShellOutputFinished)
     assert len(finished) == 1
     assert finished[0].payload.shell_id == domain_ids.ShellId(fixture.MONITOR_OP_ONE)
-    # the last event rides the end notice; it is not a progress row of its own
-    assert not payloads(ended, shell_events.ShellProgressed)
+    # the last event rides the end notice, and it stays the monitor's latest status
+    progressed = payloads(ended, shell_events.ShellProgressed)
+    assert [text_of(event.payload.content) for event in progressed] == ["backend test job success"]
 
 
 def test_monitor_expiry_ends_the_armed_shell() -> None:

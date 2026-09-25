@@ -44,6 +44,8 @@ class MonitorEndedTranscriptRecord:
     task: ClaudeCodeShellId
     operation_id: ClaudeCodeCallId
     status: str
+    # A stream-ended notice can carry the monitor's last event; an expiry notice carries none.
+    last_event: str | None = None
     kind: TranscriptKind = TranscriptKind.MONITOR_ENDED
 
 
