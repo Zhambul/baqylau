@@ -33,6 +33,7 @@ from harness.impl.claude_code.canonical.transcript_user_text import (
     classify_user_text,
     injected as _injected,
     interrupted as _interrupted,
+    pasted_text as _pasted_text,
     resumes_turn as _resumes_turn,
     teammate_idle_notifications,
 )
@@ -93,7 +94,7 @@ def _ordinary_user_text(
         return CommandOutputTranscriptRecord(output_text)
     injected = _injected(user_record, content)
     return PromptTranscriptRecord(
-        content,
+        _pasted_text(content),
         injected,
         _interrupted(user_record, content),
         user_record.prompt_source == "queued",
