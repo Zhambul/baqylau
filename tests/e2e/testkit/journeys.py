@@ -13,7 +13,15 @@ from domain.ids import HarnessName
 from harness.impl.opencode2 import launch_startup
 from sdk import client as sdk_client, state as sdk_state, wait_states
 from terminal import launch as terminal_launch, models as terminal_models
-from tests.e2e.testkit import journey_launch, journey_models, journey_opencode, references, resume, selector_turns
+from tests.e2e.testkit import (
+    journey_launch,
+    journey_models,
+    journey_new_conversation,
+    journey_opencode,
+    references,
+    resume,
+    selector_turns,
+)
 from tests.harness_names import CLAUDE_CODE_HARNESS, OPENCODE_HARNESS
 
 TERMINAL_TITLES = MappingProxyType({CLAUDE_CODE_HARNESS: "Claude Code", OPENCODE_HARNESS: "OpenCode2"})
@@ -432,6 +440,7 @@ class _JourneyFlow(_JourneyUnattended):
             session_summary.session.session_id for session_summary in self._client.sessions.list().sessions
         )
         self.submit_native_command(journey, "/new")
+        journey_new_conversation.choose_place(self._terminal, journey.window_id)
         self.submit_native_command(journey, prompt)
         session_candidates = wait_states.SessionCandidates()
 
