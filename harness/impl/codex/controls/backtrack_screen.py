@@ -9,7 +9,8 @@ from harness.impl.codex.controls import composer_state
 
 ESCAPE_HINT = "esc again to edit previous message"
 TRANSCRIPT_HEADER = "/ T R A N S C R I P T /"
-TRANSCRIPT_FOOTER = "enter to edit message"
+# codex-cli 0.144 wrote "enter to edit message"; 0.156 writes "Browsing transcript · … · ↵ rewind".
+TRANSCRIPT_FOOTERS = ("enter to edit message", "Browsing transcript")
 SELECTED_STYLE_END_CODE = 27
 REVERSE_VIDEO_CODE = 7
 ANSI_STYLE_PATTERN = re.compile(r"\x1b\[([0-9;]*)m")
@@ -23,7 +24,7 @@ def transcript_open(screen: str | None) -> bool:
 
     """
     text = screen or ""
-    return TRANSCRIPT_HEADER in text and TRANSCRIPT_FOOTER in text
+    return TRANSCRIPT_HEADER in text and any(footer in text for footer in TRANSCRIPT_FOOTERS)
 
 
 def _normalized(text: str) -> str:

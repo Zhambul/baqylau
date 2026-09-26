@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import dataclasses
+from pathlib import Path
+
 from domain import ids as domain_ids, messaging
 from harness import contract as harness_contract
 from harness.impl.codex import ids_session, ids_session_types
@@ -68,6 +71,8 @@ class CodexRawEventSources(harness_contract.HarnessRawEventSources):
             child_source = self._child_source(session, cached, child_path)
             if child_source is not None:
                 session_sources.append(child_source)
+        if cached.owns_lead_session:
+            session_sources.extend(_page_sources(self._child_sources, session, self._known_rollout_paths))
         return tuple(session_sources)
 
     def _child_rollout_paths(
@@ -157,3 +162,38 @@ class CodexRawEventSources(harness_contract.HarnessRawEventSources):
             )
             self._child_sources[key] = child_source
         return child_source
+
+
+def _page_sources(
+    sources: dict[tuple[domain_ids.SessionId, str, messaging.ActorRole], source_readers.CodexRolloutRawEventSource],
+    session: session_models.Session,
+    rollout_paths: frozenset[str],
+) -> list[source_readers.CodexRolloutRawEventSource]:
+    session_id = ids_session.codex_session_id_from_domain(session.session_id)
+    return [_page_source(sources, session, page_path) for page_path in _session_pages(rollout_paths, session_id)]
+
+
+def _page_source(
+    sources: dict[tuple[domain_ids.SessionId, str, messaging.ActorRole], source_readers.CodexRolloutRawEventSource],
+    session: session_models.Session,
+    page_path: str,
+) -> source_readers.CodexRolloutRawEventSource:
+    key = session.session_id, page_path, messaging.ActorRole.LEAD
+    page_source = sources.get(key)
+    if page_source is None:
+        page_source = source_readers.CodexRolloutRawEventSource(
+            dataclasses.replace(session.source_context, source_reference=page_path),
+        )
+        sources[key] = page_source
+    return page_source
+
+
+def _session_pages(
+    rollout_paths: frozenset[str], session_id: ids_session_types.CodexSessionId,
+) -> tuple[str, ...]:
+    # Codex 0.156 continues a session in a new file after a rewind. The file is
+    # named `<session id>_<page id>` and starts from the rewind point, so each
+    # page is read after the ones before it.
+    prefix = f"{session_id}_"
+    pages = (path for path in rollout_paths if source_catalog.codex_session_id(path).startswith(prefix))
+    return tuple(sorted(pages, key=lambda path: Path(path).name))

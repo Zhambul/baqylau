@@ -141,7 +141,7 @@ def test_codex_backtrack_selects_named_prompt() -> None:
 
 def test_codex_backtrack_can_verify_plain_pty() -> None:
     """Verify codex backtrack can verify a plain pty transcript."""
-    screen = f"{backtrack.TRANSCRIPT_HEADER}\n\u203a Reply only with the word first.\n{backtrack.TRANSCRIPT_FOOTER}"
+    screen = f"{backtrack.TRANSCRIPT_HEADER}\n\u203a Reply only with the word first.\n{backtrack.TRANSCRIPT_FOOTERS[1]}"
 
     assert backtrack.selected_prompt(screen, "Reply only with the word first.")
 

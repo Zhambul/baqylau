@@ -50,7 +50,7 @@ class BacktrackDriver:
         if self.state == fixture.TRANSCRIPT_SOURCE:
             selected_prompt = self._prompts[self.selected]
             styled_prompt = f"\x1b[7m{selected_prompt}\x1b[27m" if ansi else selected_prompt
-            return f"{backtrack.TRANSCRIPT_HEADER}\n{styled_prompt}\n{backtrack.TRANSCRIPT_FOOTER}"
+            return f"{backtrack.TRANSCRIPT_HEADER}\n{styled_prompt}\n{backtrack.TRANSCRIPT_FOOTERS[0]}"
         if self.state == "restored":
             restored_prompt = self._prompts[self.selected]
             return f"\u203a {restored_prompt}\n  gpt-5.6-luna low"
