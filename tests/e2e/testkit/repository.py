@@ -110,7 +110,7 @@ Path(__file__).with_name("blocking-stop.started").write_text(
 print(json.dumps({
     "decision": "block",
     "reason": (
-        "Run the exact foreground Bash command `sleep 8`. Wait for it. "
+        "Run the exact foreground Bash command `sleep 20`. Wait for it. "
         "Then reply only with BLOCKED_STOP_CONTINUED."
     ),
 }))
