@@ -6,14 +6,14 @@ Feature: web activity stays on the work that requested it
     When I launch session "primary" and assign work "tool discovery" to the lead with prompt
       """
       Your first tool call must be ToolSearch with the exact query
-      select:Monitor,TaskOutput and max_results 2. After it returns, reply with
+      select:Monitor,TaskStop and max_results 2. After it returns, reply with
       the exact marker TOOL_DISCOVERY_DONE and no other text.
       """
     Then work "tool discovery" completes
     And work "tool discovery" has final answer 'TOOL_DISCOVERY_DONE'
-    When I name the search in work "tool discovery" with query containing 'select:Monitor,TaskOutput' "tool search"
+    When I name the search in work "tool discovery" with query containing 'select:Monitor,TaskStop' "tool search"
     Then search "tool search" has result containing '→ loaded tool: Monitor'
-    And search "tool search" has result containing '→ loaded tool: TaskOutput'
+    And search "tool search" has result containing '→ loaded tool: TaskStop'
 
     Examples:
       | harness     | model |
