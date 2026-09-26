@@ -16,9 +16,9 @@ class _LocatedReply:
     reply: bytes
 
 
-# No reply to the kitty keyboard query (`CSI ? u`): this emulator does not support
-# the protocol, and a program learns that from the DA1 reply that comes alone.
-# The false reply reached Claude Code 2.1 as a typed `u` in its input.
+# No reply to the progressive keyboard query (`CSI ? u`): this emulator does not
+# support that protocol, and a program learns that from the DA1 reply that comes
+# alone. A false reply reached a harness as a typed `u` in its input.
 _QUERY_REPLIES = (
     _TerminalQuery(b"\x1b[c", b"\x1b[?1;2c"),
     _TerminalQuery(b"\x1b]10;?\x07", b"\x1b]10;rgb:ffff/ffff/ffff\x1b\\"),

@@ -143,20 +143,24 @@ def pending_attention(entries: Sequence[SessionEntry]) -> tuple[SessionEntry, ..
         ):
             open_attentions.pop(entry_body.attention_id, None)
         elif isinstance(entry_body, entry_conversation.TurnFinishedBody):
-            open_attentions = _open_after_turn(open_attentions, entry, entry_body)
+            open_attentions = {
+                attention_id: open_entry
+                for attention_id, open_entry in open_attentions.items()
+                if _open_after_turn(open_entry, entry, entry_body)
+            }
     return tuple(open_attentions.values())
 
 
 def _open_after_turn(
-    open_attentions: Mapping[AttentionId, SessionEntry],
-    turn_end: SessionEntry,
+    open_session_entry: SessionEntry,
+    turn_end_session_entry: SessionEntry,
     turn_body: entry_conversation.TurnFinishedBody,
-) -> dict[AttentionId, SessionEntry]:
-    # A question cannot outlive its turn. Codex finishes the turn that proposes a
-    # plan and then waits for the decision, so only an aborted turn ends a plan.
-    return {
-        attention_id: open_entry
-        for attention_id, open_entry in open_attentions.items()
-        if open_entry.actor_id != turn_end.actor_id
-        or (turn_body.state is TurnState.FINISHED and isinstance(open_entry.body, entry_attention.PlanProposedBody))
-    }
+) -> bool:
+    # A question cannot outlive its turn. A harness can finish the turn that
+    # proposes a plan and then wait for the decision, so only an aborted turn
+    # ends a plan.
+    if open_session_entry.actor_id != turn_end_session_entry.actor_id:
+        return True
+    return turn_body.state is TurnState.FINISHED and isinstance(
+        open_session_entry.body, entry_attention.PlanProposedBody,
+    )

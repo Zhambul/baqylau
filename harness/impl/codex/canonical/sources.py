@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import dataclasses
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from domain import ids as domain_ids, messaging
 from harness import contract as harness_contract
@@ -18,6 +19,9 @@ from harness.impl.codex.canonical import (
     title as native_title,
 )
 from harness.models import raw_events, session as session_models
+
+if TYPE_CHECKING:
+    from collections.abc import MutableMapping
 
 
 class CodexRawEventSources(harness_contract.HarnessRawEventSources):
@@ -165,7 +169,9 @@ class CodexRawEventSources(harness_contract.HarnessRawEventSources):
 
 
 def _page_sources(
-    sources: dict[tuple[domain_ids.SessionId, str, messaging.ActorRole], source_readers.CodexRolloutRawEventSource],
+    sources: MutableMapping[
+        tuple[domain_ids.SessionId, str, messaging.ActorRole], source_readers.CodexRolloutRawEventSource,
+    ],
     session: session_models.Session,
     rollout_paths: frozenset[str],
 ) -> list[source_readers.CodexRolloutRawEventSource]:
@@ -174,7 +180,9 @@ def _page_sources(
 
 
 def _page_source(
-    sources: dict[tuple[domain_ids.SessionId, str, messaging.ActorRole], source_readers.CodexRolloutRawEventSource],
+    sources: MutableMapping[
+        tuple[domain_ids.SessionId, str, messaging.ActorRole], source_readers.CodexRolloutRawEventSource,
+    ],
     session: session_models.Session,
     page_path: str,
 ) -> source_readers.CodexRolloutRawEventSource:
