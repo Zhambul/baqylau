@@ -79,6 +79,9 @@ class CompactedPayload(BaseModel):
     model_config = FOREIGN
     message: str | None = None
     replacement_history: list[CompactedHistoryItem] | None = None
+    # Codex 0.156.x describes each replacement history item (measured: its author
+    # and a model hash). Nothing here reads it.
+    replacement_history_metadata: list[ForeignMetadata] | None = None
     guardian_history: list[CompactedHistoryItem] | None = None
     retained_context: ForeignMetadata | None = None
     compaction_response_id: CodexResponseId | None = None
