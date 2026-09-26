@@ -47,7 +47,7 @@ def feed_snapshot_extends_only_with_newer_entries(
     for identity, entry in old_entries.items():
         assert new_entries[identity] == entry
     assert all(
-        entry.cursor > old.read.snapshot.cursor
+        entry.cursor > old.read.snapshot.entry_cursor
         for identity, entry in new_entries.items()
         if identity not in old_entries
     )

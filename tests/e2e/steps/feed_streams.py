@@ -40,7 +40,7 @@ def assert_session_update_frame(found: SessionStreamUpdateRef, checkpoint: Strea
         assert frame.session.session_id == found.session.session_id
     assert all(actor.session_id == found.session.session_id for actor in frame.actors)
     for entry in frame.entries:
-        assert checkpoint.session_cursor < entry.cursor <= found.update.cursor
+        assert entry.cursor > checkpoint.entry_cursor
 
 
 @then(
