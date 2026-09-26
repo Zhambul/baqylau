@@ -166,14 +166,14 @@ Evidence (2026-09-25):
   - SDK: `contracts/session_lists.py`, `models/session_lists.py`, `runtime/session_access.py`, and the manifest flag `uses_sessions`.
   - Host: `extensions/session_access.py`, `repository/impl/sqlite/session_rows.py`, and the wiring in `worker_host_services.py`, `impl/process/channel.py`, and `app/provider_worker_services.py`.
   - The host service maps each session's working directory to its repository by the SDK's rule. `tests/extension_host/test_session_access.py` covers it.
-- The Git package declares an optional dependency on `baqylau.adapters` (`>=0.1,<1`), consumes `baqylau.adapters.git-activity` (`>=1,<2`, not required), and sets `uses_sessions`.
-- `baqylau.git.activity` (repository scope, `adapters_activity.py`) reads the service for each session of the repository, and merges the calls in time order. A received call ignores fields that a later 1.x version adds. Without adapters, the read gives the peer's `unavailable` reason, and every other Git read and write works the same.
+- The Git package declares an optional dependency on `baqylau.adapters` (`>=0.1,<1`), consumes `baqylau.adapters.git-activity` (`>=1.1,<2`, not required), and sets `uses_sessions`.
+- `baqylau.git.activity` (repository scope, `adapters_activity.py`) makes one service read in the repository scope (service 1.1, see P09-T06). The service gives the calls of all the repository's sessions in time order, each with its session. The package lists the sessions only to tell "no sessions" from "no calls". A received call ignores fields that a later 1.x version adds. Without adapters, the read gives the peer's `unavailable` reason, and every other Git read and write works the same.
 - The repository page has an Adapters section that shows the calls or the reason.
 - Direct Git and adapters Git calls change the same repository, and the existing repository watch refreshes the page after either one. The Git package makes no feed entries of its own for these calls, so the two sources cannot give duplicate entries.
 - Tests:
-  - `tests/test_adapters_activity.py` covers the merge of two sessions, a disabled peer, and no sessions.
+  - `tests/test_adapters_activity.py` covers the calls of two sessions, a disabled peer, and no sessions.
   - `tests/e2e/test_adapters_activity.py` (case `adapters-activity`, peer `baqylau.adapters`) runs Git alone in a private host, through the new session list over the real worker RPC. The page test checks the Adapters section.
   - Package gates `baqylau_dev check --gate lint` pass, and the runner passes 13 repeatable cases.
 - Open:
-  - Both packages active with a real session in the repository need a live harness session. A repeatable host has no session.
+  - Live harness E2E (2026-09-26): in `tests/e2e/features/extensions.feature`, both packages are active. Codex, Claude Code, and OpenCode each run `adapters commit --help` in an isolated repository workspace. The Git activity of that repository then has the `commit` call. The three scenarios pass.
   - Real Kitty runs need the user's approval.

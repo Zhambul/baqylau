@@ -41,6 +41,8 @@ MODULE_TEXT = """export function mount(target, context) {
 """
 MODULE_SOURCE = MODULE_TEXT.replace("REPLACED", REPLACED).replace("DECORATION", DECORATION).encode()
 MOUNT_MS = 15000
+# An open page learns of a disable at the web view catalog's 15-second refresh.
+REFRESH_MS = 30000
 TEST_TIMEOUT_SECONDS = 180
 
 
@@ -84,4 +86,4 @@ def test_feed_views_follow_the_package(tmp_path: Path) -> None:
         page = live_entries.session_page(cleanup, client)
         expect(page.get_by_text(DECORATION)).to_be_visible(timeout=MOUNT_MS)
         stored_entries.change(client, "disable", "disable-feed")
-        expect(page.get_by_text(DECORATION)).to_have_count(0, timeout=MOUNT_MS)
+        expect(page.get_by_text(DECORATION)).to_have_count(0, timeout=REFRESH_MS)

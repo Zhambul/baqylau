@@ -29,6 +29,7 @@ scenarios(
     "features/background.feature",
     "features/catalog.feature",
     "features/compaction.feature",
+    "features/extensions.feature",
     "features/composer.feature",
     "features/controls.feature",
     "features/files.feature",
