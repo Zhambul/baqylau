@@ -40,6 +40,7 @@ def manifest(*, effect: Literal["read", "write"] = "read", reconciliation: bool 
                 name=operation_samples.SOURCE_TYPE, schema_ref=schema.reference, scopes=SCOPES,
             ),),
             processing=(ObserverSelection(
+                capability="observer",
                 scopes=SCOPES, input_types=(EVENT_TYPE, "turn.started"), effect=effect, reconciliation=reconciliation,
             ), data.ProcessingSelection(
                 capability="raw_transformer", scopes=("session",), input_types=("test.record",),
