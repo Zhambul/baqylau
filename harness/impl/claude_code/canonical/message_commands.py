@@ -150,7 +150,7 @@ def _slash_selection_event(
         semantics.selections.model(
             source.raw_event.session_id,
             source.raw_event.actor_id,
-            dependencies.support.model_reference(dependencies.model.ClaudeCodeModel(selection)),
+            dependencies.support.model_reference(dependencies.model_names.record_model(selection)),
             work_state.ModelChangeReason.SELECTED,
             dependencies.model_names.selection_key(selection),
         )

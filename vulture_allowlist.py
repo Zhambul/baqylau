@@ -320,8 +320,6 @@ image_paste_ids  # UserRecord
 queue_skip_attachments  # UserRecord task-notification delivery flag
 turn_origin  # UserRecord Claude 2.1 field
 queue_priority  # UserRecord Claude 2.1 goal check-in field
-CLAUDE_OPUS_FIVE_FIVE  # ClaudeCodeModel member read by value from a record
-CLAUDE_OPUS_FIVE_FIVE_MILLION  # ClaudeCodeModel member read by value from a record
 is_aborted_mid_stream  # AssistantRecord
 is_api_error_message  # AssistantRecord
 api_error_status  # AssistantRecord

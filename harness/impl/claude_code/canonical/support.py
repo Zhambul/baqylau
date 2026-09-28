@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from domain.content import Content, MediaType, StructuredContent, TextContent
 from domain.references import ModelReference
-from harness.impl.claude_code import model, model_names
+from harness.impl.claude_code import model_names
 from harness.models.raw_event_builders import CanonicalEventDraft as CanonicalEventDraft, canonical_event
 
 if TYPE_CHECKING:
@@ -23,7 +23,7 @@ SYNTHETIC_MODEL_ID = "<synthetic>"
 ContentValue = str | float | bool | BaseModel | None
 
 
-def model_reference(claude_code_model: model.ClaudeCodeModel) -> ModelReference:
+def model_reference(claude_code_model: str) -> ModelReference:
     """Return the model reference.
 
     Returns:

@@ -61,7 +61,7 @@ def _launch_model_event(
     changed = selection_semantics.model(
         raw_event.session_id,
         raw_event.actor_id,
-        dependencies.support.model_reference(dependencies.model.ClaudeCodeModel(model_selection)),
+        dependencies.support.model_reference(dependencies.model_names.record_model(model_selection)),
         work_state.ModelChangeReason.SELECTED,
         dependencies.model_names.selection_key(model_selection),
     )
