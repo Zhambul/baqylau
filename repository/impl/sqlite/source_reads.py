@@ -1,8 +1,6 @@
 # Copyright (c) 2026 Zhambyl Yermagambet
 """Expose one atomic source operation through its explicit repository protocol."""
 
-from baqylau_extension_api.models.base import Identifier
-from pydantic import TypeAdapter
 
 from core.work_queue import WorkKind
 from extensions.models.source_reads import SourceCheckpoint, SourceKey, SourceReadCommit, SourceReadOutcome
@@ -40,15 +38,3 @@ class SqliteExtensionSourceRepository(ExtensionSourceRepository):
         notices = (WorkKind.RAW,) if checked.proposal.response.observations else ()
         with self.database.write(*notices, notify_readers=False) as connection:
             return source_read_writes.commit_read(connection, checked)
-
-    def find_source_read(self, runtime_revision: Identifier, call_id: Identifier) -> SourceReadCommit | None:
-        """Inspect a successful call without requiring an active owner.
-
-        Returns:
-            The first complete accepted request and reply, or no record.
-
-        """
-        TypeAdapter[Identifier](Identifier).validate_python(runtime_revision)
-        TypeAdapter[Identifier](Identifier).validate_python(call_id)
-        with self.database.read() as connection:
-            return codec.read_call(connection, runtime_revision, call_id)

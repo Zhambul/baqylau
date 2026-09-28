@@ -20,7 +20,7 @@ SCOPE = InstallationScope()
 REQUEST_KEY = "request-1"
 ARGUMENTS = '"input"'
 JOB_ID = "job-1"
-THIRD_REVISION = 3
+FIRST_REVISION = 1
 
 type TransportPost = tuple[str, BaseModel, set[int], float | None]
 
@@ -48,8 +48,8 @@ class CommandTransport:
 
         """
         self.posts.append((path, document, accepted_statuses, timeout))
-        return 200, _transport_response(adapter, {
-            "job_id": JOB_ID, "kind": "command", "state": "succeeded", "revision": THIRD_REVISION,
+        return 202, _transport_response(adapter, {
+            "job_id": JOB_ID, "kind": "command", "state": "accepted", "revision": FIRST_REVISION,
         })
 
 
@@ -65,4 +65,4 @@ def test_extension_command_posts_the_request() -> None:
     assert posted[0] == f"/api/extensions/{OWNER}/commands/{COMMAND_ID}"
     assert isinstance(posted[1], ExtensionCommandRequest)
     assert posted[1].request_key == REQUEST_KEY
-    assert (job.job_id, job.state, job.revision) == (JOB_ID, "succeeded", THIRD_REVISION)
+    assert (job.job_id, job.state, job.revision) == (JOB_ID, "accepted", FIRST_REVISION)

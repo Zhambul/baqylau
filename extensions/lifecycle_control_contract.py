@@ -31,3 +31,7 @@ class ExtensionLifecycleControl(Protocol):
     def change_lifecycle(self, extension_id: ExtensionId, request: LifecycleRequest) -> LifecycleAdmission:
         """Validate, confirm, and accept one user request without choosing runtime authority."""
         ...
+
+    def disable_failed(self, extension_id: ExtensionId, request_id: str) -> LifecycleAdmission:
+        """Disable a failed extension and its required dependents as a recorded failure operation."""
+        ...

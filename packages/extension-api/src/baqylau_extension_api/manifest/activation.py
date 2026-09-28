@@ -5,7 +5,7 @@ import heapq
 from graphlib import CycleError, TopologicalSorter
 
 from baqylau_extension_api.errors import ExtensionContractError
-from baqylau_extension_api.manifest import peers, rules
+from baqylau_extension_api.manifest import peers, rules, selections
 from baqylau_extension_api.manifest.package import ExtensionManifest
 from baqylau_extension_api.manifest.validation import require_compatible_api, validate_manifest
 
@@ -35,6 +35,7 @@ def _validate_package(manifest: ExtensionManifest, proposed: tuple[ExtensionMani
     validate_manifest(manifest, peer_schemas)
     require_compatible_api(manifest)
     peers.validate_required_services(manifest, proposed)
+    selections.validate_peer_input_types(manifest, proposed)
 
 
 def _ordered(sorter: TopologicalSorter[str]) -> tuple[str, ...]:

@@ -24,8 +24,8 @@ def collect_cleanup(runtime: ManagerRuntime) -> None:
     """Read only a completed cleanup task; never wait for a feature under the mutex."""
     if runtime.cleanup_task is not None and runtime.cleanup_task.done():
         runtime.cleanup_issues = runtime.cleanup_task.result()
-        if not runtime.cleanup_issues:
-            runtime.retired = ()
+        # A closed owner is finished; its issues stay as evidence in the report.
+        runtime.retired = tuple(owner for owner in runtime.retired if not owner.closed)
         runtime.cleanup_task = None
 
 

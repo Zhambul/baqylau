@@ -49,6 +49,9 @@ class QueuedCommandAttachment(BaseModel):
     # Claude 2.1.x marks a queued command that came from a person (corpus:
     # true). A record it refuses loses the queued prompt.
     human_turn: Annotated[bool | None, Field(alias="humanTurn")] = None
+    # Claude 2.1.x reports what a queued task notification cost (corpus:
+    # totalTokens, durationMs). Nothing here reads it.
+    usage: ForeignMetadata | None = None
     origin: Origin | None = None
     source_uuid: str | None = None
     timestamp: str | None = None

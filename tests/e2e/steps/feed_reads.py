@@ -47,7 +47,12 @@ def save_stream_checkpoint(
     snapshot = feed_snapshots.get(snapshot_name)
     stream_checkpoints.bind(
         checkpoint_name,
-        StreamCheckpointRef(snapshot.session, snapshot.read.snapshot.cursor, client.sessions.list().cursor),
+        StreamCheckpointRef(
+            snapshot.session,
+            snapshot.read.snapshot.cursor,
+            client.sessions.list().cursor,
+            snapshot.read.snapshot.entry_cursor,
+        ),
     )
 
 

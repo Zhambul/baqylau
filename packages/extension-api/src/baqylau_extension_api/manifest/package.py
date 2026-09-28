@@ -7,7 +7,8 @@ from pydantic import Field
 
 from baqylau_extension_api.manifest.contributions import Contributions
 from baqylau_extension_api.manifest.data import CapabilityName
-from baqylau_extension_api.manifest.metadata import BackendEntry, E2eCase, LoadOrder, PackageAsset, PackageDependency
+from baqylau_extension_api.manifest.e2e import E2eCase
+from baqylau_extension_api.manifest.metadata import BackendEntry, LoadOrder, PackageAsset, PackageDependency
 from baqylau_extension_api.manifest.migrations import DeclaredMigrationPath
 from baqylau_extension_api.manifest.settings import SettingsDefinition
 from baqylau_extension_api.models.base import ExtensionId, NonemptyText, WireModel

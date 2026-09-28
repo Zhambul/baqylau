@@ -65,8 +65,10 @@ class KittyQueryOperations(KittySocketOperations):
             True when kitty is the frontmost application.
 
         """
-        try:
-            windows = self.ls() if tree is None else tree
-            return any(os_window.is_focused for os_window in windows or ())
-        except Exception:  # noqa: BLE001 - A focus probe must never raise into a launch.
-            return False
+        windows = tree
+        if windows is None:
+            try:
+                windows = self.ls()
+            except Exception:  # noqa: BLE001 - A focus probe must never raise into a launch.
+                return False
+        return any(os_window.is_focused for os_window in windows or ())

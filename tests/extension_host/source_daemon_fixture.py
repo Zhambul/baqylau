@@ -11,7 +11,7 @@ from pydantic import TypeAdapter
 from extensions.models import interpretations, observations as original_models, source_reads
 from repository.impl.sqlite import databases, interpretations as fact_storage, observations, session_data
 from sdk.client import BaqylauClient
-from tests import terminal_pty_waits
+from tests import storage_reads, terminal_pty_waits
 from tests.extension_api import operation_samples, source_example, source_samples
 from tests.extension_host import environment_fixture, lifecycle_http_fixture, package_fixture
 
@@ -44,7 +44,7 @@ class SourceDaemon:
         database = databases.read_only(databases.main_database(str(self.directory / DATABASE_NAME)))
         store = observations.SqliteObservationRepository(database)
         return tuple(
-            row.observation for row in store.observations_for_scope(scopes.InstallationScope(), 0, 1000)
+            row.observation for row in storage_reads.observations_for_scope(store, scopes.InstallationScope(), 0, 1000)
             if isinstance(row.observation, original_models.ExtensionObservation)
         )
 
@@ -139,7 +139,9 @@ def journals(case: SourceDaemon) -> tuple[interpretations.InterpretationCommit, 
     """
     database = databases.read_only(databases.main_database(str(case.directory / DATABASE_NAME)))
     store = fact_storage.SqliteInterpretationRepository(database)
-    completed = (store.find_interpretation("default", original.raw_event_id) for original in case.originals())
+    completed = (storage_reads.find_interpretation(
+        store, "default", original.raw_event_id,
+    ) for original in case.originals())
     return tuple(commit for commit in completed if commit is not None)
 
 

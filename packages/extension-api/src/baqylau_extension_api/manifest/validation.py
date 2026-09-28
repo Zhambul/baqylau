@@ -4,7 +4,7 @@
 from packaging.specifiers import SpecifierSet
 
 from baqylau_extension_api.errors import ExtensionContractError
-from baqylau_extension_api.manifest import documents, presentation, services, structure
+from baqylau_extension_api.manifest import documents, presentation, selections, services, structure
 from baqylau_extension_api.manifest.package import ExtensionManifest
 from baqylau_extension_api.models.documents import SchemaDefinition
 from baqylau_extension_api.versions import API_VERSION
@@ -28,6 +28,7 @@ def validate_manifest(
     documents.validate_documents(checked, peer_schemas)
     presentation.validate_views(checked)
     services.validate_services(checked)
+    selections.validate_input_types(checked)
     return checked
 
 

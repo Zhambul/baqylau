@@ -65,7 +65,7 @@ def test_terminal_replies_to_program_queries(terminal: pty_fixture.PtyFixture) -
         "import os, tty; "
         "tty.setraw(0); "
         "queries = ["
-        r"b'\x1b[6n', b'\x1b[c', b'\x1b[?u', "
+        r"b'\x1b[6n', b'\x1b[c', b'\x1b[?u\x1b[c', "
         r"b'\x1b]10;?\x1b\\', b'\x1b]11;?\x07']; "
         "replies = []; "
         "[(os.write(1, query), replies.append(os.read(0, 64))) "
@@ -81,6 +81,8 @@ def test_terminal_replies_to_program_queries(terminal: pty_fixture.PtyFixture) -
     assert "1b5b" in screen
     assert "1b5d31303b7267623a" in screen
     assert "1b5d31313b7267623a" in screen
+    # The emulator has no kitty keyboard protocol, so `CSI ? u` gets no `CSI ? 0 u` reply.
+    assert "1b5b3f3075" not in screen
 
 
 def test_screen_is_what_is_visible_not_everything(terminal: pty_fixture.PtyFixture) -> None:

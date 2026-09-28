@@ -1,6 +1,6 @@
 import { fileURLToPath, URL } from 'node:url';
 
-import { coverageThresholds } from '@baqylau/dev-tools/coverage';
+import { testProfile } from '@baqylau/dev-tools/vitest';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { defineConfig } from 'vitest/config';
 
@@ -29,34 +29,28 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
   },
-  test: {
+  test: testProfile({
     include: ['src/**/*.test.ts'],
-    coverage: {
-      exclude: ['src/main.ts', 'src/test/**'],
-      include: [
-        'src/app/route.ts',
-        'src/application/usage-layout.ts',
-        'src/attachments/attachment-tray.svelte.ts',
-        'src/commands/command-menu.ts',
-        'src/dictation/dictation-controller.svelte.ts',
-        'src/entries/feed-model.ts',
-        'src/entries/markup.ts',
-        'src/extensions/catalog.ts',
-        'src/extensions/management.svelte.ts',
-        'src/sessions/agent-presentation.ts',
-        'src/sessions/global-reducer.ts',
-        'src/sessions/grouping.ts',
-        'src/sessions/optimistic-prompts.ts',
-        'src/sessions/session-reducer.ts',
-        'src/sessions/shell-fold.ts',
-        'src/shared/browser/keyboard.ts',
-        'src/shared/browser/presence.ts',
-      ],
-      provider: 'v8',
-      reporter: ['text', 'html'],
-      thresholds: coverageThresholds,
-    },
-    environment: 'jsdom',
+    coverageExclude: ['src/main.ts', 'src/test/**'],
+    coverageInclude: [
+      'src/app/route.ts',
+      'src/application/usage-layout.ts',
+      'src/attachments/attachment-tray.svelte.ts',
+      'src/commands/command-menu.ts',
+      'src/dictation/dictation-controller.svelte.ts',
+      'src/entries/feed-model.ts',
+      'src/entries/markup.ts',
+      'src/extensions/catalog.ts',
+      'src/extensions/management.svelte.ts',
+      'src/sessions/agent-presentation.ts',
+      'src/sessions/global-reducer.ts',
+      'src/sessions/grouping.ts',
+      'src/sessions/optimistic-prompts.ts',
+      'src/sessions/session-reducer.ts',
+      'src/sessions/shell-fold.ts',
+      'src/shared/browser/keyboard.ts',
+      'src/shared/browser/presence.ts',
+    ],
     setupFiles: ['./src/test/setup.ts'],
-  },
+  }),
 });

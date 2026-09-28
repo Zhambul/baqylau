@@ -180,6 +180,7 @@ function entryType(value: unknown, name: string): EntryContent['type'] {
     case 'assignment_finished':
     case 'model_change':
     case 'effort_change':
+    case 'extension':
       return candidate;
     default:
       throw new EntryValidationFailure('entry has an unknown type');
@@ -422,6 +423,16 @@ function entryContent(wire: EntryWireContent): EntryContent {
         body: {
           current: text(body, 'current'),
           previous: optionalText(body, 'previous'),
+        },
+      };
+    case 'extension':
+      return {
+        type: wire.type,
+        body: {
+          owner: text(body, 'owner'),
+          entryType: text(body, 'entry_type'),
+          sourceEventId: text(body, 'source_event_id'),
+          document: text(body, 'document'),
         },
       };
   }

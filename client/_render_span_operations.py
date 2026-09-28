@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from _render_styles import Color, Span, _SpanSplit, spans_width
+from _render_width import cut, text_width
 
 
 def _merged(spans: list[Span]) -> list[Span]:
@@ -62,11 +63,17 @@ def _take(spans: list[Span], width: int) -> _SpanSplit:
     available = max(0, width)
     while remaining and available:
         span = remaining.pop(0)
-        if len(span.text) <= available:
+        if text_width(span.text) <= available:
             taken.append(span)
-            available -= len(span.text)
+            available -= text_width(span.text)
             continue
-        taken.append(span.sized(span.text[:available]))
-        remaining.insert(0, span.sized(span.text[available:]))
+        taken.extend(_head(span, available))
+        rest = span.text[cut(span.text, available):]
+        remaining.insert(0, span.sized(rest))
         available = 0
     return _SpanSplit(taken, remaining)
+
+
+def _head(span: Span, columns: int) -> list[Span]:
+    fitting = cut(span.text, columns)
+    return [span.sized(span.text[:fitting])] if fitting else []

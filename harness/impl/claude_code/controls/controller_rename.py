@@ -95,6 +95,13 @@ def _rename_with_preserved_draft(
             control_models.ControlAcknowledgement.INDETERMINATE,
             str(error),
         )
+    except probe.ComposerError as error:
+        # The draft could not be cleared, so the rename was not typed.
+        return control_models.ControlResult(
+            request.request_id,
+            control_models.ControlAcknowledgement.REJECTED,
+            str(error),
+        )
 
 
 class RenameSessionHandler(ControlHandler):

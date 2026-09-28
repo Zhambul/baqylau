@@ -22,6 +22,8 @@ pytest_plugins = (
     "tests.e2e.real_terminal.fixtures",
     "tests.e2e.steps.accounts",
     "tests.e2e.steps.browser",
+    "tests.e2e.steps.extensions",
+    "tests.e2e.steps.extension_checks",
     "tests.e2e.steps.browser_status",
     "tests.e2e.steps.browser_alerts",
     "tests.e2e.steps.browser_workspace",
@@ -120,8 +122,9 @@ def isolated_application_files(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Keep application state out of the user's data directory."""
+    """Keep application state and secret values out of the user's data directory and Keychain."""
     monkeypatch.setenv("BAQYLAU_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
     monkeypatch.setenv("BAQYLAU_TERMINAL", "none")
+    monkeypatch.setenv("PYTHON_KEYRING_BACKEND", "tests.memory_keyring.MemoryKeyring")
     monkeypatch.delenv("KITTY_WINDOW_ID", raising=False)

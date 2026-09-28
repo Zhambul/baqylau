@@ -9,6 +9,7 @@ from extensions.models.catalog import ExtensionCatalogSnapshot
 from extensions.models.lifecycle_requests import LifecyclePlan
 from extensions.models.lifecycle_selection import ExtensionIntent, RuntimePackageSelection
 from extensions.models.manager import ManagerSnapshot
+from extensions.models.record_migration import StoredRecordSchema
 from extensions.models.runtime_candidates import RuntimePackageCandidate
 
 
@@ -27,6 +28,7 @@ class LifecyclePlanningState:
     manager: ManagerSnapshot
     catalog: ExtensionCatalogSnapshot
     selected: tuple[SelectedPackage, ...]
+    record_schemas: tuple[StoredRecordSchema, ...] = ()
 
 
 @dataclass(frozen=True)

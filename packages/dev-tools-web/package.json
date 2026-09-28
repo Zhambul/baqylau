@@ -1,6 +1,8 @@
 {
   "name": "@baqylau/dev-tools",
   "version": "0.1.0-alpha.1",
+  "author": "Zhambyl Yermagambet",
+  "license": "UNLICENSED",
   "type": "module",
   "engines": {
     "node": ">=22.12 <23"
@@ -22,12 +24,24 @@
       "types": "./dist/eslint.d.mts",
       "default": "./eslint.mjs"
     },
+    "./knip": {
+      "types": "./dist/knip.d.mts",
+      "default": "./knip.mjs"
+    },
+    "./pins": {
+      "types": "./dist/pins.d.mts",
+      "default": "./pins.mjs"
+    },
     "./prettier": {
       "types": "./dist/prettier.d.mts",
       "default": "./prettier.mjs"
     },
     "./tsconfig/browser": "./tsconfig.browser.json",
-    "./tsconfig/node": "./tsconfig.node.json"
+    "./tsconfig/node": "./tsconfig.node.json",
+    "./vitest": {
+      "types": "./dist/vitest.d.mts",
+      "default": "./vitest.mjs"
+    }
   },
   "scripts": {
     "prepack": "npm run build",
@@ -49,5 +63,8 @@
   },
   "devDependencies": {
     "@types/node": "22.20.1"
+  },
+  "bin": {
+    "baqylau-dev-tools-pins": "./check-pins.mjs"
   }
 }

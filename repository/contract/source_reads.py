@@ -3,8 +3,6 @@
 
 from typing import Protocol
 
-from baqylau_extension_api.models.base import Identifier
-
 from extensions.models.source_reads import SourceCheckpoint, SourceKey, SourceReadCommit, SourceReadOutcome
 
 
@@ -17,8 +15,4 @@ class ExtensionSourceRepository(Protocol):
 
     def record_source_read(self, request: SourceReadCommit) -> SourceReadOutcome:
         """Commit original rows, pending input, the read record, and source progress together."""
-        ...
-
-    def find_source_read(self, runtime_revision: Identifier, call_id: Identifier) -> SourceReadCommit | None:
-        """Read a complete accepted source call without requiring its worker to run."""
         ...

@@ -11,6 +11,8 @@ export type ExtensionPlan = Schemas['LifecyclePlanResponse'];
 export type ExtensionPreviewRequest = Schemas['LifecyclePreviewRequest'];
 export type ExtensionChangeRequest = Schemas['LifecycleChangeRequest'];
 export type ExtensionAction = ExtensionPreviewRequest['action'];
+export type ExtensionHealthReport = Schemas['ExtensionHealthResponse'];
+export type ExtensionHealth = ExtensionHealthReport['extensions'][number];
 
 export function readExtensionCatalog(
   signal: AbortSignal,
@@ -34,6 +36,28 @@ export function readExtensionOperation(
       signal,
     }),
   );
+}
+
+/** Each extension's consecutive worker failures; no row means no failures. */
+export function readExtensionHealth(
+  signal: AbortSignal,
+): Promise<ExtensionHealthReport> {
+  return execute(() => apiClient.GET('/api/extensions/health', { signal }));
+}
+
+const RECENT_OPERATIONS = 20;
+
+/** The newest lifecycle operations of all extensions, newest first. */
+export async function readRecentOperations(
+  signal: AbortSignal,
+): Promise<readonly ExtensionOperation[]> {
+  const reply = await execute(() =>
+    apiClient.GET('/api/extensions/operations', {
+      params: { query: { limit: RECENT_OPERATIONS } },
+      signal,
+    }),
+  );
+  return reply.operations;
 }
 
 export function previewExtension(

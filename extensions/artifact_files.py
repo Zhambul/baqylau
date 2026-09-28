@@ -3,6 +3,7 @@
 
 import errno
 import os
+import shutil
 from contextlib import ExitStack
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from extensions.discovery_files import PackageFile
 from extensions.models.files import FileBytes
 
 READ_ONLY_DIRECTORY = 0o555
+WRITABLE_DIRECTORY = 0o755
 
 
 def capture_inventory(source: Path, destination: Path, inventory: tuple[PackageFile, ...]) -> None:
@@ -29,6 +31,13 @@ def seal_directory(directory: Path) -> None:
         path = Path(parent)
         path.chmod(READ_ONLY_DIRECTORY)
         _sync_directory(path)
+
+
+def remove_sealed(directory: Path) -> None:
+    """Give the owner write access to a sealed tree again, then delete it."""
+    for parent, _, _ in os.walk(directory):
+        Path(parent).chmod(WRITABLE_DIRECTORY)
+    shutil.rmtree(directory)
 
 
 def publish_directory(staged: Path, target: Path) -> None:

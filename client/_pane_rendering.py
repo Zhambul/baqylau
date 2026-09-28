@@ -7,6 +7,7 @@ import shutil
 import sys
 from typing import TYPE_CHECKING, Protocol
 
+import _extension_sections
 import _handoff
 import _render
 
@@ -31,6 +32,7 @@ def terminal_width() -> int:
 class _PaneRenderingContext(Protocol):
     kind: str
     session_id: str
+    sections: _extension_sections.SectionCache
     model: _model.SessionModel
     width: int
     _busy: bool
@@ -71,16 +73,19 @@ class PaneRendering:
 
     def _picture(self: _PaneRenderingContext) -> str:
         if self.kind == "mirror":
-            picture = _render.mirror(
+            painted = _render.mirror_rows(
                 self.model,
                 self.width,
                 copy=self._copy_link,
                 view=self._view_link,
                 opened=self._opened,
             )
+            sections = _extension_sections.mirror_rows(self.sections.current(self.width), self.width)
+            picture = _render.mirror_screen(painted, self.width, sections)
             self._publish()
             return picture
-        return _render.scoreboard(self.model, self.width)
+        chips = _extension_sections.score_chips(self.sections.current(self.width))
+        return _render.scoreboard(self.model, self.width, chips)
 
     def _copy_link(self: _PaneRenderingContext, name: str) -> str:
         return _render.COPY_SCHEME % (self.session_id, self.kind, name)

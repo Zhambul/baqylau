@@ -108,6 +108,9 @@ def _find_actor_from_assignment(
     assignment_state = _one(assignments, f"assignment {assignment_reference.assignment_id!r}")
     if assignment_state is None or assignment_state.actor_id is None:
         return None
+    # The assignment can name its child before the child's own start fact arrives.
+    if not any(actor.actor_id == assignment_state.actor_id for actor in snapshot.session_data.actors):
+        return None
     candidate = snapshot.actor(assignment_state.actor_id)
     if candidate.parent_actor_id is None:
         return None

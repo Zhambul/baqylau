@@ -29,7 +29,7 @@ def test_one_mixed_page_precedes_reactions(monkeypatch: pytest.MonkeyPatch, comp
     trace.attach_mock(engine.reactions.drain, "react")
     engine.run({work_queue.WorkKind.RAW})
     assert trace.mock_calls == [
-        call.interpret(engine.interpreter.translation, ANY, yield_requested=ANY), call.react(ANY),
+        call.interpret(engine.interpreter.translation, ANY, yield_requested=ANY), call.react(ANY, None),
     ]
     delay = mixed_processing.CONTINUATION_SECONDS if completed else None
     engine.queue.set_deadline.assert_called_once_with(

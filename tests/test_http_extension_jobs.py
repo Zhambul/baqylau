@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 
 from baqylau_extension_api.models import scopes
 
+from domain.ids import ExtensionJobId
 from repository.contract.extension_jobs import CommandJobRequest
 from repository.impl.sqlite import databases
 from tests import (
@@ -36,7 +37,7 @@ def seed_job(tmp_path: Path) -> None:
     database = databases.main_database(str(tmp_path / DATA_DIRECTORY / DATABASE_NAME))
     events.populate(database)
     repository_dependencies.SqliteExtensionJobRepository(database).accept_command(CommandJobRequest(
-        owner=OWNER, scope=SCOPE, job_id="job-1", request_key="r1", binding=BINDING, request=REQUEST,
+        owner=OWNER, scope=SCOPE, job_id=ExtensionJobId("job-1"), request_key="r1", binding=BINDING, request=REQUEST,
     ))
 
 
@@ -50,9 +51,9 @@ def test_job_route_returns_a_stored_job(tmp_path: Path) -> None:
 
     document = response[2].json
     assert response[0] == HTTPStatus.OK
-    assert (document["job_id"], document["kind"], document["state"], document["revision"]) == (
-        "job-1", "command", "accepted", FIRST_REVISION,
-    )
+    identity = (document["job_id"], document["kind"])
+    assert identity == ("job-1", "command")
+    assert (document["state"], document["revision"]) == ("accepted", FIRST_REVISION)
 
 
 def test_job_route_rejects_an_unknown_job(tmp_path: Path) -> None:

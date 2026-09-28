@@ -12,12 +12,13 @@ from repository.mapper.documents import encode_document
 if TYPE_CHECKING:
     import sqlite3
 
+    from domain.entries import SessionEntry
     from domain.ids import SessionId
     from repository.contract.session_data import SessionDataChanges
 
-_ENTRY_COLUMNS = (
-    "commit_cursor, position, entry_id, session_id, entry_type, actor_id, parent_actor_id, turn_id, "
-    "occurred_at, summary, payload"
+_ENTRY_SQL = (
+    "INSERT OR IGNORE INTO session_entries(commit_cursor, position, entry_id, session_id, entry_type, actor_id, "
+    "parent_actor_id, turn_id, occurred_at, summary, payload) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 )
 
 
@@ -37,25 +38,14 @@ def write_changes(
     session_id: SessionId,
     session_data_changes: SessionDataChanges,
     canonical_cursor: int,
+    projection_revision: str = extension_records.DEFAULT_PROJECTION_REVISION,
 ) -> None:
-    """Write one change set without advancing the core progress mark."""
+    """Write one change set without advancing the core progress mark.
+
+    Record changes keep the projection generation that produced them.
+    """
     for position, entry in enumerate(session_data_changes.entries):
-        connection.execute(
-            f"INSERT OR IGNORE INTO session_entries({_ENTRY_COLUMNS}) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                canonical_cursor,
-                position,
-                str(entry.entry_id),
-                str(entry.session_id),
-                ENTRY_TYPES[type(entry.body)],
-                str(entry.actor_id),
-                str(entry.parent_actor_id) if entry.parent_actor_id else None,
-                str(entry.turn_id) if entry.turn_id else None,
-                entry.occurred_at,
-                entry.summary,
-                encode_document(entry.body).decode("utf-8"),
-            ),
-        )
+        insert_entry(connection, _ENTRY_SQL, (canonical_cursor, position), entry)
     if session_data_changes.session is not None:
         goal_dismissals.expire(connection, session_id, session_data_changes.session.goal, canonical_cursor)
         connection.execute(
@@ -80,7 +70,34 @@ def write_changes(
             ),
         )
     if session_data_changes.records:
-        extension_records.apply_record_changes(connection, session_data_changes.records, canonical_cursor)
+        extension_records.apply_record_changes(
+            connection, session_data_changes.records, canonical_cursor, projection_revision,
+        )
+
+
+def insert_entry(
+    connection: sqlite3.Connection,
+    statement: str,
+    leading_columns: tuple[str | int, ...],
+    session_entry: SessionEntry,
+) -> None:
+    """Insert one feed row; the statement's first columns take the leading values."""
+    parent = None if session_entry.parent_actor_id is None else str(session_entry.parent_actor_id)
+    turn = None if session_entry.turn_id is None else str(session_entry.turn_id)
+    body = session_entry.body
+    payload = encode_document(body).decode("utf-8")
+    connection.execute(statement, (
+        *leading_columns,
+        str(session_entry.entry_id),
+        str(session_entry.session_id),
+        ENTRY_TYPES[type(body)],
+        str(session_entry.actor_id),
+        parent,
+        turn,
+        session_entry.occurred_at,
+        session_entry.summary,
+        payload,
+    ))
 
 
 def clear_read_model(connection: sqlite3.Connection) -> None:

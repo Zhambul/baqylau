@@ -15,6 +15,10 @@
   import SessionHeader from './SessionHeader.svelte';
   import ShellSectionView from './ShellSectionView.svelte';
   import SessionTabs from './SessionTabs.svelte';
+  import ExtensionSlot from '../../extensions/views/ExtensionSlot.svelte';
+  import ExtensionViewMount from '../../extensions/views/ExtensionViewMount.svelte';
+  import WorkspaceLinks from '../../extensions/views/WorkspaceLinks.svelte';
+  import { webViewCatalog } from '../../extensions/views/web-view-catalog.svelte';
 
   let { route }: { route: SessionRoute } = $props();
 
@@ -25,6 +29,34 @@
     initialRoute.actorId,
     appState,
   );
+
+  const catalog = webViewCatalog();
+  const sessionScope = $derived.by(() => {
+    const session = view.session;
+    const actorId = view.scopedActorId;
+    if (session === null || actorId === null) return null;
+    return {
+      kind: 'session',
+      session_id: session.sessionId,
+      actor_id: actorId,
+      harness: session.harness,
+    } as const;
+  });
+  const extensionMount = $derived.by(() => {
+    const reference = route.extensionView;
+    const scope = sessionScope;
+    const runtimeRevision = catalog?.runtimeRevision ?? null;
+    const selected =
+      reference === undefined ? null : (catalog?.find(reference) ?? null);
+    if (selected === null || scope === null || runtimeRevision === null)
+      return null;
+    return {
+      key: `${runtimeRevision}:${selected.extension_id}:${selected.view_id}:${scope.actor_id}`,
+      view: selected,
+      runtimeRevision,
+      scope,
+    };
+  });
 
   onMount(() => {
     const controller = new AbortController();
@@ -46,9 +78,29 @@
   {/if}
 {:else}
   <SessionHeader {view} />
+  {#if sessionScope !== null}
+    <WorkspaceLinks
+      scope={sessionScope}
+      directory={view.session.workingDirectory}
+    />
+  {/if}
   <SessionTabs {route} {view} />
 
-  {#if route.tab === 'mirror'}
+  {#if route.extensionView !== undefined}
+    {#if extensionMount === null}
+      <div class="empty" role="status">
+        This extension view is not available.
+      </div>
+    {:else}
+      {#key extensionMount.key}
+        <ExtensionViewMount
+          view={extensionMount.view}
+          scope={extensionMount.scope}
+          runtimeRevision={extensionMount.runtimeRevision}
+        />
+      {/key}
+    {/if}
+  {:else if route.tab === 'mirror'}
     {#if route.actorId === undefined}
       <GoalTasks
         session={view.session}
@@ -86,8 +138,11 @@
         >{view.visibleFeedCount} of {view.feedItems.length} shown</span
       >
     </div>
+    {#if sessionScope !== null}
+      <ExtensionSlot slot="feed" scope={sessionScope} label="feed additions" />
+    {/if}
     <div class="split">
-      <div class="scol"><FeedView {view} /></div>
+      <div class="scol"><FeedView {view} scope={sessionScope} /></div>
       <aside class="rail" aria-label="agents">
         {#if view.childActors.length > 0}<div class="mhead">agents</div>{/if}
         {#each view.childActors as actor (actor.actorId)}

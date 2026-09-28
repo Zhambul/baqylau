@@ -1,15 +1,10 @@
-import { coverageThresholds } from '@baqylau/dev-tools/coverage';
+import { testProfile } from '@baqylau/dev-tools/vitest';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
-  test: {
+  test: testProfile({
     include: ['src/**/*.test.ts'],
-    environment: 'jsdom',
-    coverage: {
-      provider: 'v8',
-      include: ['src/host/**/*.ts'],
-      exclude: ['src/**/*.test.ts'],
-      thresholds: coverageThresholds,
-    },
-  },
+    coverageInclude: ['src/host/**/*.ts'],
+    coverageExclude: ['src/**/*.test.ts'],
+  }),
 });

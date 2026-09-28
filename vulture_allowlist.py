@@ -235,6 +235,10 @@ agent_nickname  # records.py SessionMetaPayload / ThreadSpawn
 agent_role  # records.py ThreadSpawn
 forked_from_id  # records.py SessionMetaPayload
 subagent_history_start_ordinal  # records.py SessionMetaPayload
+runtime_workspace_roots  # records.py SessionMetaPayload Codex 0.156 field
+root_turn_id  # records.py TaskStartedPayload Codex 0.156 field
+disabled_plugin_ids  # records.py TurnContextPayload Codex 0.156 field
+replacement_history_metadata  # records.py CompactedPayload Codex 0.156 field
 encrypted_content  # records.py ReasoningPayload
 namespace  # records.py FunctionCallPayload
 images  # records.py UserMessagePayload
@@ -294,6 +298,7 @@ stop_details  # MessageObject
 container  # MessageObject
 context_management  # MessageObject
 diagnostics  # MessageObject
+input_transformations  # MessageObject Claude 2.1 field
 sender_task_id  # Origin
 parent_uuid  # UserRecord / AssistantRecord / SystemRecord / AttachmentRecord
 session_id  # UserRecord / AssistantRecord / SystemRecord / AttachmentRecord / TitleRecord
@@ -313,6 +318,7 @@ turn_companion  # UserRecord
 user_feedback  # UserRecord
 image_paste_ids  # UserRecord
 queue_skip_attachments  # UserRecord task-notification delivery flag
+turn_origin  # UserRecord Claude 2.1 field
 is_aborted_mid_stream  # AssistantRecord
 is_api_error_message  # AssistantRecord
 api_error_status  # AssistantRecord
@@ -325,6 +331,7 @@ quota_limits  # AssistantRecord
 per_turn_effort  # AssistantRecord foreign field
 native_tool_inputs  # AssistantRecord foreign field
 native_ingest_context  # AssistantRecord foreign field
+advisor_model  # AssistantRecord Claude 2.1 field
 logical_parent_uuid  # SystemRecord
 tool_use_uppercase_id  # SystemRecord
 tool_use_id  # SystemRecord / AgentMetaFile
@@ -333,6 +340,7 @@ has_output  # SystemRecord
 hook_additional_context  # SystemRecord
 hook_count  # SystemRecord
 hook_errors  # SystemRecord
+command_run  # SystemRecord Claude 2.1 field
 hook_infos  # SystemRecord
 prevent_continuation  # SystemRecord
 prevented_continuation  # SystemRecord
@@ -340,6 +348,7 @@ duration_ms  # SystemRecord / GoalStatusAttachment
 message_count  # SystemRecord
 pending_background_agent_count  # SystemRecord
 session_title  # HookPayload
+mcp_server  # HookPayload Claude 2.1 field
 
 # terminal/models/values.py WindowInfo is built from the terminal protocol.
 # Consumers use the tab-level focus values. This native pane-level field stays
@@ -356,6 +365,7 @@ trigger  # SystemRecord / HookPayload
 iterations  # GoalStatusAttachment
 sentinel  # GoalStatusAttachment
 source_uuid  # QueuedCommandAttachment
+human_turn  # QueuedCommandAttachment Claude 2.1 field
 old_string  # FileArguments
 new_string  # FileArguments
 replace_all  # FileArguments
@@ -572,3 +582,32 @@ STANDARD  # records.py UsageServiceTier / UsageSpeed
 NOT_AVAILABLE  # records.py UsageInferenceGeo
 log_directory  # OpenCode2 PluginOptions: serialized as logDirectory for the native plugin.
 package  # OpenCode2 PluginPackage: serialized native package reference.
+REQUESTED  # domain/extension_jobs.py JobCancelStatus: built by value from the SDK stop status.
+NOT_RUNNING  # domain/extension_jobs.py JobCancelStatus: built by value from the SDK stop status.
+
+# Pydantic writes and reads these fields by name: the stored journal header's
+# codec discriminator, and the rebuild and reprocessing comparisons that the
+# generation and history routes return to clients.
+_.codec_version
+_.live_records
+_.candidate_records
+_.equal_records
+_.live_entries
+_.candidate_entries
+_.equal_entries
+_.live_facts
+_.candidate_facts
+WebViewResponse.module_url
+WebViewResponse.style_urls
+# The health store writes these from SQL rows, and the health route returns them.
+HealthState.HEALTHY
+HealthState.FAILING
+ExtensionHealth.last_failure_where
+ExtensionHealth.last_failure_at
+ExtensionHealth.last_success_at
+# The extension pane (P07-T02) paints a daemon-served terminal view with this;
+# until it exists, the client render tests are its only caller.
+view_rows
+# FastAPI validates the core pane path value against these members.
+CorePane.MIRROR
+CorePane.SCOREBOARD

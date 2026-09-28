@@ -7,7 +7,7 @@ from harness.impl.claude_code.canonical import (
     message_models,
     message_subject_values,
     transcript,
-    transcript_commands,
+    transcript_selections,
 )
 from harness.models import raw_event_builders, raw_events
 
@@ -98,7 +98,7 @@ def command_output(
         The selection event, or no events for other command output.
 
     """
-    choice = transcript_commands.output_selection(record.text)
+    choice = transcript_selections.output_selection(record.text)
     if choice is None:
         return []
     name, selection = choice

@@ -50,7 +50,7 @@ class _BrowserComposerDriver(browser_navigation.BrowserNavigationDriver):
         return browser_references.TurnRef(
             session,
             prompt,
-            before.cursor,
+            before.entry_cursor,
             lead.statistics.prompt_count + 1,
             actor_id=lead.actor_id,
         )
@@ -78,7 +78,7 @@ class _BrowserComposerDriver(browser_navigation.BrowserNavigationDriver):
         return browser_references.TurnRef(
             session,
             prompt,
-            before.cursor,
+            before.entry_cursor,
             lead.statistics.prompt_count + 1,
             actor_id=lead.actor_id,
         )
@@ -254,7 +254,7 @@ class _BrowserHistoryDriver(_BrowserFeedDriver):
         option_button.click()
         card.get_by_role(BUTTON_ROLE, name=regular_expressions.compile("^submit answer(s)?$")).click()
         self._wait_for_question_resolution(reference)
-        return browser_references.BrowserActionRef(reference.session, snapshot.cursor)
+        return browser_references.BrowserActionRef(reference.session, snapshot.entry_cursor)
 
     def discuss_question(self, reference: browser_references.QuestionRef) -> browser_references.BrowserActionRef:
         snapshot = self._client.sessions.snapshot(reference.session)
@@ -263,7 +263,7 @@ class _BrowserHistoryDriver(_BrowserFeedDriver):
         browser_expectation(card).to_have_count(1, timeout=self._milliseconds(self._wait_policy.feed))
         card.get_by_role(BUTTON_ROLE, name="chat about this", exact=True).click()
         self._wait_for_question_resolution(reference)
-        return browser_references.BrowserActionRef(reference.session, snapshot.cursor)
+        return browser_references.BrowserActionRef(reference.session, snapshot.entry_cursor)
 
     def decide_plan(
         self,
@@ -283,7 +283,7 @@ class _BrowserHistoryDriver(_BrowserFeedDriver):
             browser_capabilities.BrowserPlanAction.feedback: "changes_requested",
         }[action]
         self._wait_for_plan_resolution(reference, wanted)
-        return browser_references.BrowserActionRef(reference.session, snapshot.cursor)
+        return browser_references.BrowserActionRef(reference.session, snapshot.entry_cursor)
 
 
 class _BrowserStatusDriver(_BrowserHistoryDriver):

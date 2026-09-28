@@ -11,7 +11,7 @@ from api.extensions.admission import require_extension_json
 from api.extensions.lifecycle_admission import admission_response
 from api.extensions.lifecycle_routes import LIFECYCLE_RESPONSES
 from api.extensions.settings_dependencies import SettingsSelection
-from app.provider_extension_controls import ControlPolicy
+from app.provider_extension_policy import ControlPolicy
 from app.provider_extension_settings import SettingsControlService
 
 router = APIRouter(responses=LIFECYCLE_RESPONSES)

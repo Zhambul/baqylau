@@ -12,6 +12,7 @@ from multiprocessing.context import SpawnProcess
 from typing import TYPE_CHECKING
 
 from api.runtime import ApplicationConfig, ApplicationEndpoint, DashboardApplication
+from tests.e2e.testkit.orphan_watch import stop_when_orphaned
 
 if TYPE_CHECKING:
 
@@ -91,6 +92,7 @@ def _audit_finding(problem: AuditProblemResponse) -> str:
 
 
 def _run_application(config: ApplicationConfig, messages: Connection) -> None:
+    stop_when_orphaned()
     try:
         _run_and_report(config, messages)
     except BaseException as error:

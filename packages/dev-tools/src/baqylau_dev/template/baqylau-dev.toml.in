@@ -1,0 +1,4 @@
+policy_version = "$policy_version"
+profile = "extension"
+source_roots = ["src"]
+test_roots = ["tests"]

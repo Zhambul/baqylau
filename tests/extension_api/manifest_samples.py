@@ -2,7 +2,8 @@
 """Build package declarations without importing any feature implementation."""
 
 from baqylau_extension_api.manifest.contributions import Contributions
-from baqylau_extension_api.manifest.metadata import BackendEntry, E2eCase, PackageAsset
+from baqylau_extension_api.manifest.e2e import E2eCase
+from baqylau_extension_api.manifest.metadata import BackendEntry, PackageAsset
 from baqylau_extension_api.manifest.package import ExtensionManifest
 from baqylau_extension_api.manifest.views import WebView
 from baqylau_extension_api.versions import API_VERSION

@@ -26,6 +26,7 @@ ReasoningId = NewType("ReasoningId", str)
 ClientId = NewType("ClientId", str)
 TaskListId = NewType("TaskListId", str)
 QuestionId = NewType("QuestionId", str)
+ExtensionJobId = NewType("ExtensionJobId", str)
 
 
 HarnessName = NewType("HarnessName", str)

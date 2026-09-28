@@ -41,6 +41,18 @@ def test_enable_and_disable_through_control(tmp_path: Path) -> None:
         control_assertions.require_empty(case)
 
 
+def test_failed_extension_is_disabled_by_the_host(tmp_path: Path) -> None:
+    """The host records a failure operation that disables the extension."""
+    package_fixture.write_package(tmp_path / PACKAGES, web=True)
+    with closing(fixtures.open_control(tmp_path)) as case:
+        case.control.change_lifecycle(OWNER, case.request(ENABLE, "enable-before-failure"))
+        case.host.finish()
+        admitted = case.control.disable_failed(OWNER, "failure-one")
+        assert admitted.operation is not None and admitted.operation.proposal.kind == "failure"
+        case.host.finish()
+        control_assertions.require_empty(case)
+
+
 def test_reload_selects_new_captured_digest(tmp_path: Path) -> None:
     """A new selected digest replaces only the target; source changes alone do not enable it."""
     source = package_fixture.write_package(tmp_path / PACKAGES, web=True)

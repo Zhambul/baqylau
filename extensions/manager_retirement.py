@@ -4,7 +4,8 @@
 from dataclasses import dataclass
 from typing import Literal
 
-from baqylau_extension_api.models.lifecycle import DeactivationRequest
+from baqylau_extension_api.models.lifecycle import DeactivationRequest, DeactivationResult
+from baqylau_extension_api.runtime.models import ExtensionTransportError
 
 from extensions.models.cleanup import RetirementIssue, RuntimeShutdown
 from extensions.registry_package import RegistryPackage
@@ -25,12 +26,15 @@ class RetirementOwner:
     def retire(self, reason: Literal["replace", "shutdown"]) -> tuple[RetirementIssue, ...]:
         """Release only acknowledged work, then close the owned process resources.
 
+        A worker whose transport has failed can never acknowledge. Its issue
+        stays as evidence, but it does not keep the resources open.
+
         Returns:
             Remaining uncertainty; an empty tuple means cleanup completed.
 
         """
         self.deactivate(reason)
-        if not self.issues:
+        if not self.pending:
             self.close_resources()
         return self.observation().issues
 
@@ -41,8 +45,9 @@ class RetirementOwner:
         attempted = tuple(
             (package, _deactivate(package, self.revision, reason)) for package in self.pending
         )
-        self.pending = tuple(package for package, issue in attempted if issue is not None)
-        self.issues = tuple(issue for _, issue in attempted if issue is not None)
+        self.pending = tuple(package for package, outcome in attempted if outcome.retry)
+        issues = (outcome.issue for _, outcome in attempted)
+        self.issues = tuple(issue for issue in issues if issue is not None)
 
     def close_resources(self) -> None:
         """Close a drained runtime once, without changing its unresolved-job evidence."""
@@ -94,26 +99,40 @@ def retire_all(
     return tuple(issue for owner in retired for issue in owner.retire(reason))
 
 
+@dataclass(frozen=True)
+class _Deactivation:
+    """Keep the issue of one deactivation, and whether a later attempt can still succeed."""
+
+    issue: RetirementIssue | None = None
+    retry: bool = False
+
+
 def _deactivate(
     package: RegistryPackage, revision: str, reason: Literal["replace", "shutdown"],
-) -> RetirementIssue | None:
+) -> _Deactivation:
     if package.plugin is None:
-        return None
+        return _Deactivation()
+    failed = RetirementIssue(
+        runtime_revision=revision, extension_id=package.manifest.extension_id, reason="deactivation_failed",
+    )
     try:
         response = package.plugin.capabilities.lifecycle.deactivate(DeactivationRequest(
             runtime_revision=revision, reason=reason,
         ))
+    except ExtensionTransportError:
+        # The worker process or its transport is gone; no retry can reach it.
+        return _Deactivation(failed)
     except Exception:  # noqa: BLE001 -- Retain the owner rather than discard uncertain external work.
-        return RetirementIssue(
-            runtime_revision=revision, extension_id=package.manifest.extension_id, reason="deactivation_failed",
-        )
-    if response.runtime_revision != revision:
-        return RetirementIssue(
-            runtime_revision=revision, extension_id=package.manifest.extension_id, reason="deactivation_failed",
-        )
+        return _Deactivation(failed, retry=True)
+    return _answered(response, failed)
+
+
+def _answered(response: DeactivationResult, failed: RetirementIssue) -> _Deactivation:
+    if response.runtime_revision != failed.runtime_revision:
+        return _Deactivation(failed, retry=True)
     if response.pending_job_ids:
-        return RetirementIssue(
-            runtime_revision=revision, extension_id=package.manifest.extension_id, reason="unresolved_jobs",
+        return _Deactivation(RetirementIssue(
+            runtime_revision=failed.runtime_revision, extension_id=failed.extension_id, reason="unresolved_jobs",
             pending_job_ids=response.pending_job_ids,
-        )
-    return None
+        ), retry=True)
+    return _Deactivation()

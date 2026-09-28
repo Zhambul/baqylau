@@ -14,6 +14,7 @@ from tests import (
     foundation_test_sources,
 )
 from tests.harness_names import CODEX_HARNESS
+from tests.storage_reads import page_from
 
 MAIN_DATABASE_NAME = "main.db"
 FIXTURE_SOURCE_IDENTITY = "fixture:source"
@@ -139,7 +140,7 @@ def test_interpreter_pulls_translates_and_commits(
         CODEX_HARNESS, foundation_test_events.example_session(),
     )
     runtime.interpreter.tick()
-    committed = runtime.store.page_from(0, 10)
+    committed = page_from(runtime.store, 0, 10)
     assert [committed_event.event_id for committed_event in committed] == [event.event_id]
     assert committed[0].payload == event.payload
 
@@ -175,7 +176,7 @@ def test_one_failing_source_neither_stops_its(
     )
     runtime.interpreter.tick()
     runtime.interpreter.tick()
-    assert len(runtime.store.page_from(0, 10)) == 1
+    assert len(page_from(runtime.store, 0, 10)) == 1
     assert audited.failures() == ["source read"]
     failure_context = audited.errors[0][1]
     assert isinstance(failure_context, foundation_dependencies.audit.FailureContext)

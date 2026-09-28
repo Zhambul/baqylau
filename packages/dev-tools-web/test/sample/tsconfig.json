@@ -1,0 +1,4 @@
+{
+  "extends": "@baqylau/dev-tools/tsconfig/browser",
+  "include": ["src/**/*.ts", "src/**/*.svelte"]
+}

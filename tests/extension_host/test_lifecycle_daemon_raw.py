@@ -11,6 +11,7 @@ from tests.extension_host import (
     lifecycle_daemon_fixture as fixture,
     lifecycle_daemon_payloads as payloads,
     process_fixture,
+    public_audit_checks as audit,
 )
 
 RAW_DROP_BEHAVIOR = "rawdrop"
@@ -90,6 +91,7 @@ def test_raw_dropped_input_keeps_session(tmp_path: Path, runtime_wheels: Path) -
         commit = checks.only_journal(case)
         assert checks.step_stages(commit) == RAW_STAGES
         assert checks.fact_kinds(commit) == REQUIRED_KINDS
+        assert audit.public_step(client, case, RAW_STAGE).operation_kinds == ("drop",)
         payloads.require_payload(case, hook)
 
 
@@ -107,6 +109,7 @@ def test_raw_replaced_input_changes_activity(tmp_path: Path, runtime_wheels: Pat
         step = raw_step(commit)
         assert checks.step_stages(commit) == TRANSLATED_STAGES
         assert raw_operation_kinds(step) == ("replace",)
+        assert audit.public_step(client, case, RAW_STAGE).operation_kinds == ("replace",)
         assert set(replaced_content_ids(step)).isdisjoint(original_content_ids(step))
         payloads.require_payload(case, hook)
 
@@ -124,4 +127,5 @@ def test_raw_inserted_input_adds_activity(tmp_path: Path, runtime_wheels: Path) 
         commit = checks.only_journal(case)
         assert checks.step_stages(commit) == INSERTED_STAGES
         assert raw_operation_kinds(raw_step(commit)) == ("keep", "insert")
+        assert audit.public_step(client, case, RAW_STAGE).operation_kinds == ("keep", "insert")
         payloads.require_payload(case, hook)

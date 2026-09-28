@@ -7,7 +7,7 @@ from baqylau_extension_api.models.canonical import CoreStateSnapshot
 from baqylau_extension_api.models.scopes import ExtensionScope
 from baqylau_extension_api.models.translation_inputs import TranslationState
 
-from domain.ids import CanonicalEventId, RawEventId
+from domain.ids import CanonicalEventId
 from extensions.models.interpretation_reads import CanonicalPage, TranslationStateKey
 from extensions.models.interpretation_snapshot import PriorStateRequest
 from extensions.models.interpretations import InterpretationCommit, InterpretationOutcome, StoredCanonicalFact
@@ -26,10 +26,6 @@ class InterpretationRepository(CanonicalFactReader, Protocol):
 
     def record_interpretation(self, request: InterpretationCommit) -> InterpretationOutcome:
         """Commit the verdict, journal, final facts, source links, and live pending removal together."""
-        ...
-
-    def find_interpretation(self, history_revision: str, raw_event_id: RawEventId) -> InterpretationCommit | None:
-        """Read the original complete decision without requiring an active extension."""
         ...
 
     def find_fact(self, history_revision: str, event_id: CanonicalEventId) -> StoredCanonicalFact | None:

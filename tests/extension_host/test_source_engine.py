@@ -12,7 +12,13 @@ from core.work_queue import WorkKind
 from engine import mixed_processing
 from engine.source_processing import SOURCE_DEADLINE_KEY
 from extensions.registry_snapshot import prepare_snapshot
-from tests.extension_host import registry_memory_fixture, source_engine_fixture, source_processing_fixture
+from tests import storage_reads
+from tests.extension_host import (
+    registry_busy_fixture,
+    registry_memory_fixture,
+    source_engine_fixture,
+    source_processing_fixture,
+)
 
 
 def test_source_timer_skips_core_scan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -42,9 +48,9 @@ def test_batch_keeps_runtime_through_core_work(tmp_path: Path, monkeypatch: pyte
     """Raw translation and canonical reactions use the same retained runtime as sources."""
     source = source_processing_fixture.installed(tmp_path)
     engine = source_engine_fixture.engine(monkeypatch, source.runtime)
-    check = partial(source_engine_fixture.require_busy, source)
+    check = partial(registry_busy_fixture.require_busy, source)
     engine.interpreter.translation.accept_interpretation.side_effect = partial(
-        source_engine_fixture.accepted_busy, source,
+        registry_busy_fixture.accepted_busy, source,
     )
     engine.reactions.drain.side_effect = check
     engine.run({WorkKind.SOURCES})
@@ -59,7 +65,7 @@ def test_batch_keeps_runtime_through_core_work(tmp_path: Path, monkeypatch: pyte
 def test_source_failure_keeps_core_work(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A rejected source call does not prevent the core stages or lose its retry deadline."""
     source = source_processing_fixture.installed(tmp_path)
-    source.original.original.store.append_observations(source.original.original.request)
+    storage_reads.append_observations(source.original.original.store, source.original.original.request)
     source.probe.behavior.fail_read = True
     engine = source_engine_fixture.engine(monkeypatch, source.runtime)
     engine.run({WorkKind.SOURCES})

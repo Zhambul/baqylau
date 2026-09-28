@@ -14,7 +14,7 @@ class JobNotFoundError(LookupError):
     """Reject a read for an absent job."""
 
 
-def job_response(job: ExtensionJob) -> ExtensionJobResponse:
+def job_response(extension_job: ExtensionJob) -> ExtensionJobResponse:
     """Map one stored job onto the typed response.
 
     Returns:
@@ -22,19 +22,22 @@ def job_response(job: ExtensionJob) -> ExtensionJobResponse:
 
     """
     return ExtensionJobResponse(
-        job_id=job.job_id,
-        kind=job.kind,
-        state=job.state,
-        revision=job.revision,
-        consumer_cursor=job.consumer_cursor,
-        result=_result(job),
-        diagnostic=None if job.diagnostic is None else TypeAdapter(Diagnostic).validate_json(job.diagnostic),
+        job_id=extension_job.job_id,
+        kind=extension_job.kind,
+        state=extension_job.state,
+        revision=extension_job.revision,
+        consumer_cursor=extension_job.consumer_cursor,
+        result=_result(extension_job),
+        diagnostic=(
+            None if extension_job.diagnostic is None
+            else TypeAdapter(Diagnostic).validate_json(extension_job.diagnostic)
+        ),
     )
 
 
-def _result(job: ExtensionJob) -> CommandResult | ObservationJobResult | None:
-    if job.result is None:
+def _result(extension_job: ExtensionJob) -> CommandResult | ObservationJobResult | None:
+    if extension_job.result is None:
         return None
-    if job.kind == "command":
-        return TypeAdapter(CommandResult).validate_json(job.result)
-    return TypeAdapter(ObservationJobResult).validate_json(job.result)
+    if extension_job.kind == "command":
+        return TypeAdapter(CommandResult).validate_json(extension_job.result)
+    return TypeAdapter(ObservationJobResult).validate_json(extension_job.result)

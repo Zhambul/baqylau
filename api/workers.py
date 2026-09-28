@@ -8,8 +8,12 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from api import worker_plans
-from app import provider_extension_runtime, provider_runtime as runtime_providers, provider_uploads as upload_providers
+from api import job_workers, worker_plans
+from app import (
+    provider_extension_runtime,
+    provider_runtime as runtime_providers,
+    provider_uploads as upload_providers,
+)
 from app.injection import Instances, resolve, seed
 from extensions.manager_contract import ExtensionManager
 from terminal.contract import TerminalPlugin
@@ -104,9 +108,12 @@ def background_workers(instances: Instances) -> Iterator[None]:
     resolve(instances, upload_providers.uploads).prune()
     factory = resolve(instances, provider_extension_runtime.extension_manager_factory)
     extensions = factory.open_manager()
-    seed(instances, provider_extension_runtime.extension_runtime, provider_extension_runtime.RuntimeManager(extensions))
-    workers = _start_workers(instances, extensions)
-    try:
-        yield
-    finally:
-        workers.close()
+    with job_workers.job_executor(instances, extensions) as jobs:
+        runtime = provider_extension_runtime.RuntimeManager(extensions)
+        seed(instances, provider_extension_runtime.extension_runtime, runtime)
+        jobs.submit_accepted(job_workers.RECOVERY_JOB_LIMIT)
+        workers = _start_workers(instances, extensions)
+        try:
+            yield
+        finally:
+            workers.close()

@@ -7,6 +7,7 @@
   import ExtensionCard from './ExtensionCard.svelte';
   import { ExtensionManagement } from './management.svelte';
   import ShutdownEvidence from './ShutdownEvidence.svelte';
+  import { webViewCatalog } from './views/web-view-catalog.svelte';
 
   const view = new ExtensionManagement();
   let confirmationDialog = $state<HTMLDialogElement | undefined>();
@@ -17,6 +18,22 @@
       ? []
       : extensionRows(view.catalog, view.runtime),
   );
+
+  // A lifecycle change publishes a new runtime; show its views at once
+  // and do not wait for the catalog's periodic refresh.
+  const webViews = webViewCatalog();
+  const runtimeRevision = $derived(
+    view.runtime?.directory?.runtime_revision ?? null,
+  );
+  $effect(() => {
+    if (
+      webViews === undefined ||
+      runtimeRevision === null ||
+      runtimeRevision === webViews.runtimeRevision
+    )
+      return;
+    webViews.refreshNow();
+  });
 
   onMount(() => {
     void view.refresh();
@@ -135,6 +152,8 @@
         {#each rows as row (row.key)}
           <ExtensionCard
             {row}
+            operations={view.operationsFor(row.owner)}
+            health={view.healthOf(row.owner)}
             blocked={!view.canWrite || view.confirmation !== null}
             onpreview={(
               owner: string,

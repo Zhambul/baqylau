@@ -20,6 +20,7 @@ from tests import (
     foundation_test_primitives,
     foundation_test_reactions,
     foundation_test_sources,
+    storage_reads,
 )
 
 IGNORED_TRANSLATION = foundation_components.raw_events.TranslationResult(
@@ -53,7 +54,7 @@ def test_interpretation_commits_verdict_canon(
     runtime.recorder.record((foundation_test_reactions.first_raw_observation(),))
     runtime.interpreter.tick()
     assert not runtime.recorder.unverdicted(10)
-    committed = runtime.store.page_from(cursor=0, limit=10)[0]
+    committed = storage_reads.page_from(runtime.store, cursor=0, limit=10)[0]
     assert foundation_dependencies.standard.replace(committed, cursor=None, accepted_at=None) == event
     connection = foundation_dependencies.standard.sqlite3.connect(runtime.store.sqlite_database.path)
     assert connection.execute("SELECT count(*) FROM raw_events").fetchone()[0] == 1
@@ -85,7 +86,7 @@ def test_replay_is_idempotent_and_second(tmp_path: foundation_dependencies.stand
     ))
     runtime.recorder.record((foundation_test_events.raw_observation(SECOND_RAW_EVENT_ID),))
     runtime.interpreter.tick()
-    stored = runtime.store.page_from(cursor=0, limit=10)
+    stored = storage_reads.page_from(runtime.store, cursor=0, limit=10)
     assert len(stored) == 1
     assert foundation_test_interpreter.provenance(runtime.store, stored[0]) == (
         foundation_dependencies.domain.domain_ids.RawEventId(FIRST_RAW_EVENT_ID),
@@ -148,7 +149,7 @@ def test_re_observing_one_fact_is_idempotent_even(
     assert [event.event_id for event in converged.deduplicated] == [
         foundation_dependencies.domain.domain_ids.CanonicalEventId("event-message"),
     ]
-    stored = runtime.store.page_from(0, 10)
+    stored = storage_reads.page_from(runtime.store, 0, 10)
     assert len(stored) == 1
     assert (
         isinstance(stored[0].payload, foundation_dependencies.domain.event_conversation.MessageCreated)

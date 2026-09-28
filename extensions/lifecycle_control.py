@@ -15,10 +15,15 @@ from extensions.lifecycle_control_contract import (
 )
 from extensions.lifecycle_plan_resources import CheckedLifecyclePlan
 from extensions.manager_contract import ExtensionManager
-from extensions.models import lifecycle_operations as operations, lifecycle_requests as requests
-from extensions.models.lifecycle_state import LifecycleAdmission
+from extensions.models import (
+    lifecycle_operations as operations,
+    lifecycle_requests as requests,
+    lifecycle_state,
+    record_migration,
+)
 from extensions.models.runtime_candidates import runtime_candidate
 from repository.contract.extension_catalog import ExtensionCatalogRepository
+from repository.contract.record_migrations import StoredRecordSchemaReader
 
 
 @dataclass(frozen=True)
@@ -28,6 +33,7 @@ class LifecycleControl(ExtensionLifecycleControl):
     manager: ExtensionManager | None
     catalog: ExtensionCatalogRepository
     policy: ExtensionControlPolicy = field(default_factory=ExtensionControlPolicy)
+    records: StoredRecordSchemaReader | None = None
 
     def preview_lifecycle(
         self, extension_id: ExtensionId, request: requests.LifecyclePlanRequest,
@@ -38,12 +44,14 @@ class LifecycleControl(ExtensionLifecycleControl):
             Exact affected owners for explicit dependent confirmation.
 
         """
-        state = lifecycle_plan_reads.planning_state(self._owner.read_state(), self.catalog, request)
+        state = lifecycle_plan_reads.planning_state(
+            self._owner.read_state(), self.catalog, request, self._schemas(),
+        )
         return lifecycle_planner.plan_lifecycle(state, extension_id, request).public
 
     def change_lifecycle(
         self, extension_id: ExtensionId, request: requests.LifecycleRequest,
-    ) -> LifecycleAdmission:
+    ) -> lifecycle_state.LifecycleAdmission:
         """Replay the original request or prepare a newly confirmed complete candidate.
 
         Returns:
@@ -54,13 +62,44 @@ class LifecycleControl(ExtensionLifecycleControl):
         origin = requests.LifecycleRequestOrigin(extension_id=extension_id, request=request)
         return control_admission.submit_request(self._owner, origin, partial(self._prepare, origin))
 
+    def disable_failed(self, extension_id: ExtensionId, request_id: str) -> lifecycle_state.LifecycleAdmission:
+        """Disable an extension that failed too many consecutive calls, with its required dependents.
+
+        The host makes this change, so it confirms the exact dependents and is
+        not a user write under the read-only policy.
+
+        Returns:
+            Durable admission of the recorded failure operation.
+
+        """
+        state = self._owner.read_state()
+        plan = requests.LifecyclePlanRequest(
+            action="disable", expected_revision=state.lifecycle.revision,
+            expected_catalog_revision=self.catalog.read_extension_catalog().revision,
+        )
+        affected = self.preview_lifecycle(extension_id, plan).affected_extensions
+        request = requests.LifecycleRequest(
+            action=plan.action, expected_revision=plan.expected_revision,
+            expected_catalog_revision=plan.expected_catalog_revision, request_id=request_id,
+            confirmed_dependents=tuple(owner for owner in affected if owner != extension_id),
+        )
+        origin = requests.LifecycleRequestOrigin(extension_id=extension_id, request=request)
+        return control_admission.submit_request(self._owner, origin, partial(self._prepare, origin, failure=True))
+
     @property
     def _owner(self) -> ExtensionManager:
         """The daemon-owned manager, checked when a request uses the service."""
         return control_admission.require_manager(self.manager)
 
-    def _prepare(self, origin: requests.LifecycleRequestOrigin, operation_id: str) -> operations.LifecycleProposal:
-        state = lifecycle_plan_reads.planning_state(self._owner.read_state(), self.catalog, origin.request)
+    def _schemas(self) -> tuple[record_migration.StoredRecordSchema, ...]:
+        return () if self.records is None else self.records.stored_record_schemas()
+
+    def _prepare(
+        self, origin: requests.LifecycleRequestOrigin, operation_id: str, *, failure: bool = False,
+    ) -> operations.LifecycleProposal:
+        state = lifecycle_plan_reads.planning_state(
+            self._owner.read_state(), self.catalog, origin.request, self._schemas(),
+        )
         planned = lifecycle_planner.plan_lifecycle(state, origin.extension_id, requests.plan_request(origin.request))
         _require_confirmation(planned, origin)
         manager_id = state.manager.lifecycle.manager_id
@@ -69,7 +108,8 @@ class LifecycleControl(ExtensionLifecycleControl):
             raise LifecycleUnavailableError(message)
         return operations.LifecycleProposal(
             operation_id=operation_id, manager_id=manager_id,
-            expected_revision=origin.request.expected_revision, kind=origin.request.action,
+            expected_revision=origin.request.expected_revision,
+            kind="failure" if failure else origin.request.action,
             candidate=runtime_candidate(
                 runtime_revision=f"runtime-{operation_id}", catalog_revision=origin.request.expected_catalog_revision,
                 packages=planned.packages,

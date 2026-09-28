@@ -6,6 +6,7 @@ from pathlib import Path
 from extensions.models.lifecycle_operations import LifecycleOperation
 from extensions.models.lifecycle_selection import RuntimeSelection
 from extensions.models.lifecycle_state import ManagerClaim
+from tests import storage_reads
 from tests.extension_host import lifecycle_fixture as fixtures, lifecycle_settings_fixture as settings
 
 
@@ -31,7 +32,7 @@ def test_admission_keeps_commit_separate(tmp_path: Path) -> None:
     assert accepted.state.committed_runtime is None
     assert accepted.state.pending_operation == proposed.operation_id
     assert accepted.state.intents == proposed.intents
-    assert store.read_extension_runtime(proposed.candidate.runtime_revision) == proposed.candidate
+    assert storage_reads.read_extension_runtime(store, proposed.candidate.runtime_revision) == proposed.candidate
 
 
 def test_success_survives_reopen(tmp_path: Path) -> None:
@@ -46,7 +47,7 @@ def test_success_survives_reopen(tmp_path: Path) -> None:
     operation = reopened.read_extension_operation(proposed.operation_id)
     assert operation is not None and operation.status == "succeeded"
     assert reopened.read_extension_operation("unknown") is None
-    assert reopened.read_extension_runtime("unknown") is None
+    assert storage_reads.read_extension_runtime(reopened, "unknown") is None
 
 
 def test_failed_reload_keeps_committed_runtime(tmp_path: Path) -> None:
@@ -62,7 +63,7 @@ def test_failed_reload_keeps_committed_runtime(tmp_path: Path) -> None:
     assert finished.accepted and finished.state.committed_runtime == first.candidate
     assert finished.state.pending_operation is None
     _assert_failed(store.read_extension_operation(replacement.operation_id))
-    assert store.read_extension_runtime(replacement.candidate.runtime_revision) == replacement.candidate
+    assert storage_reads.read_extension_runtime(store, replacement.candidate.runtime_revision) == replacement.candidate
 
 
 def _assert_failed(operation: LifecycleOperation | None) -> None:

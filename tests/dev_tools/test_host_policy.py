@@ -69,4 +69,4 @@ def test_host_type_and_product_roots_are_explicit() -> None:
     assert "tests" not in profile.source_roots
     assert profile.test_roots == ("tests",)
     assert profile.type_only_roots == ("sdk",)
-    assert set(profile.source_roots) == PRODUCT_ROOTS | {"packages/dev-tools/src"}
+    assert set(profile.source_roots) == PRODUCT_ROOTS | {"packages/dev-tools/src", "packages/extension-testkit/src"}

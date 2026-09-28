@@ -13,6 +13,7 @@ from baqylau_dev.parity import write_configuration
 from baqylau_dev.profiles import load_profile
 from baqylau_dev.resources import policy_digest, policy_version, require_tool_versions, tool_versions
 from baqylau_dev.runner import run_gate
+from baqylau_dev.templates import PackageChoice, create_package
 
 
 def main() -> int:
@@ -23,17 +24,25 @@ def main() -> int:
 
     """
     parser = argparse.ArgumentParser(description="Use the shared Baqylau Python quality rules.")
-    parser.add_argument("command", choices=("check", "generate", "report"))
+    parser.add_argument("command", choices=("check", "generate", "report", "new"))
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--gate", choices=get_args(Gate.__value__), default="lint")
+    parser.add_argument("--id", dest="extension_id", help="the new package's extension ID")
+    parser.add_argument("--web", action="store_true", help="add a web view")
+    parser.add_argument("--terminal", action="store_true", help="add a terminal view")
     arguments = parser.parse_args()
     try:
-        return _execute(
-            arguments.command, arguments.root.resolve(), TypeAdapter(Gate).validate_python(arguments.gate),
-        )
+        return _dispatch(arguments)
     except (OSError, ValueError) as error:
         sys.stderr.write(f"Policy error: {error}\n")
         return 2
+
+
+def _dispatch(arguments: argparse.Namespace) -> int:
+    root = arguments.root.resolve()
+    if arguments.command == "new":
+        return _new(root, PackageChoice(arguments.extension_id, web=arguments.web, terminal=arguments.terminal))
+    return _execute(arguments.command, root, TypeAdapter(Gate).validate_python(arguments.gate))
 
 
 def _execute(command: str, root: Path, gate: Gate) -> int:
@@ -44,6 +53,15 @@ def _execute(command: str, root: Path, gate: Gate) -> int:
         write_configuration(root, load_profile(root))
         return 0
     return run_gate(root, gate)
+
+
+def _new(root: Path, choice: PackageChoice) -> int:
+    if not choice.extension_id:
+        message = "a new package needs --id"
+        raise ValueError(message)
+    create_package(root, choice)
+    sys.stdout.write(f"Created {choice.extension_id} in {root}\n")
+    return 0
 
 
 def _report() -> int:

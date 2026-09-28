@@ -6,6 +6,7 @@ from baqylau_extension_api.models.base import Digest, ExtensionId, NonemptyText,
 from baqylau_extension_api.versions import PackageVersion
 
 from extensions.models.catalog import DiscoveryIssue, RootDiscoveryIssue
+from extensions.models.extension_health import ExtensionHealth
 
 
 class ExtensionPackageResponse(WireModel):
@@ -33,3 +34,10 @@ class RescanExtensionsRequest(WireModel):
     """Reject stale management writes before package files are read."""
 
     expected_revision: Revision
+
+
+class ExtensionHealthResponse(WireModel):
+    """Report the durable health of every extension that has failed at least once."""
+
+    failure_limit: int
+    extensions: tuple[ExtensionHealth, ...]

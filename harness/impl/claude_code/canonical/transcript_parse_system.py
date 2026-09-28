@@ -7,9 +7,11 @@ from harness.impl.claude_code.canonical.transcript_commands import (
     command_wrapper as _command_wrapper,
 )
 from harness.impl.claude_code.canonical.transcript_model_activity import GoalTranscriptRecord
+from harness.impl.claude_code.canonical.transcript_model_commands import (
+    SlashCommandTranscriptRecord,
+)
 from harness.impl.claude_code.canonical.transcript_model_core import (
     CompactTranscriptRecord,
-    SlashCommandTranscriptRecord,
     TextTranscriptRecord,
     TranscriptKind,
 )

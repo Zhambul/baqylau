@@ -75,3 +75,33 @@ encode_content
 activation_order
 ExtensionManifest.manifest_version
 ExtensionManifest.quality_policy
+
+# Peer workers read this public wire field of a peer job stop reply.
+ServiceJobCancelled.cancel_status
+ActivationRequest.removed_services
+
+# External extension tests call these public test kit entry points; pytest loads the fixture by name.
+rescan
+signoff
+baqylau_host
+# Pytest calls these hooks by name.
+pytest_configure
+CaseOutcomes.pytest_collection_finish
+CaseOutcomes.pytest_runtest_logreport
+# External extension tests call these browser, terminal, data, and runner entry points.
+session_view_url
+settings_url
+open_pane
+query
+PaneReply.opened
+PaneReply.focused
+PaneReply.reason
+workspace_view_url
+repository_view_url
+extension_view
+terminal_view
+# External extension tests build their wheel environment with this entry point.
+build_environment
+# External extension tests hold a scope's change stream open with this entry point.
+watching
+ChangeWatch.wait_for

@@ -1,32 +1,20 @@
 # Copyright (c) 2026 Zhambyl Yermagambet
 """Project accepted facts into extension entries and records outside transactions."""
 
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
+from typing import Self
 
-from baqylau_extension_api.models import (
-    canonical,
-    projection_changes as change_models,
-    projection_transforms,
-    projections,
-    scopes,
-)
+from baqylau_extension_api.models import projection_changes as change_models, projections, scopes
 from baqylau_extension_api.projection import results as projection_results, selection as projection_selection
-from baqylau_extension_api.projection_transform import results as transform_results
-from baqylau_extension_api.schemas import SchemaSet
 
 from domain.ids import SessionId
+from extensions import pass_health, processing_selection as selection, projector_packages, transformer_packages
 from extensions.models import interpretations
 from extensions.projection_changes import committed_changes, projection_changes
-from extensions.projection_models import (
-    ProjectionFacts,
-    ProjectionTransformerPackage,
-    ProjectorPackage,
-    projection_binding,
-    projection_snapshot,
-)
+from extensions.projection_models import GenerationHeads, ProjectionFacts, projection_binding, projection_snapshot
 from extensions.registry_package import RegistryPackage
-from repository.contract import extension_projections, extension_records
+from repository.contract import extension_projections, extension_records, pending_scope_query, session_data
 
 DEFAULT_HISTORY_REVISION = "default"
 DEFAULT_GENERATION = "default"
@@ -38,91 +26,85 @@ class ProjectionPass:
     """Run one package's pure projection for one scope, then commit once."""
 
     facts: ProjectionFacts
-    record_reader: extension_records.ExtensionRecordRepository
+    record_reader: extension_records.RecordStateReader
     store: extension_projections.ExtensionProjectionRepository
     history_revision: str = DEFAULT_HISTORY_REVISION
     generation: str = DEFAULT_GENERATION
     batch_size: int = PROJECTION_BATCH_SIZE
+    heads: GenerationHeads | None = None
 
     def run_selected(
         self,
         registry_packages: Sequence[RegistryPackage],
-        after_cursor: int,
         limit: int,
-        on_failure: Callable[[], None],
+        health: pass_health.PassHealth,
     ) -> int:
-        """Project every enabled projector package for every scope with new facts.
+        """Project, for every enabled projector package, the declared scopes after its own live cursor.
+
+        A package's first live pass starts it at the canonical head, so enable
+        applies to future facts; a rebuild reads the past.
 
         Returns:
-            The number of facts projected across packages.
+            The number of facts read across packages.
 
         """
-        packages = self.packages(registry_packages)
-        if not packages:
-            return 0
-        transformers = self.transformers(registry_packages)
+        transformers = transformer_packages.projection_transformer_packages(registry_packages)
         total = 0
-        for scope in self.store.scopes_after(self.history_revision, after_cursor, limit):
-            for package in packages:
-                try:
-                    total += self.run(package, scope, transformers)
-                except Exception:  # noqa: BLE001 -- Record one projection failure and continue others.
-                    on_failure()
+        for package in projector_packages.projector_packages(registry_packages):
+            live = _live(self.heads, self.generation, package.extension_id)
+            self.store.ensure_floor(package.extension_id, self.history_revision, live)
+            total += self.for_generation(live).project_owner(package, transformers, limit, health)
         return total
 
-    def packages(self, registry_packages: Sequence[RegistryPackage]) -> tuple[ProjectorPackage, ...]:
-        """Select the enabled packages which declare a projector.
+    def for_generation(self, generation: str) -> Self:
+        """Select the generation that this pass reads cursors of and writes to.
 
         Returns:
-            The projector packages in their active order.
+            The same pass for another generation.
 
         """
-        selected: list[ProjectorPackage] = []
-        for package in registry_packages:
-            plugin = package.plugin
-            if plugin is None or plugin.capabilities.projector is None:
-                continue
-            selected.append(ProjectorPackage(
-                extension_id=package.manifest.extension_id,
-                runtime_revision="" if package.environment is None else package.environment.runtime_revision,
-                settings_revision=package.settings.revision,
-                manifest=package.manifest,
-                schemas=SchemaSet(package.manifest.schemas),
-                projector=plugin.capabilities.projector,
-            ))
-        return tuple(selected)
+        return replace(self, generation=generation)
 
-    def transformers(
-        self, registry_packages: Sequence[RegistryPackage],
-    ) -> tuple[ProjectionTransformerPackage, ...]:
-        """Select the enabled packages which declare a projection transform.
+    def project_owner(
+        self,
+        package: projector_packages.ProjectorPackage,
+        transformers: Sequence[transformer_packages.ProjectionTransformerPackage],
+        limit: int,
+        health: pass_health.PassHealth,
+    ) -> int:
+        """Project one package's declared scopes after its cursors of this pass's generation.
 
         Returns:
-            The transform packages in their active order.
+            The number of facts read.
 
         """
-        selected: list[ProjectionTransformerPackage] = []
-        for package in registry_packages:
-            plugin = package.plugin
-            if plugin is None or plugin.capabilities.projection_transformer is None:
-                continue
-            selected.append(ProjectionTransformerPackage(
-                extension_id=package.manifest.extension_id,
-                runtime_revision="" if package.environment is None else package.environment.runtime_revision,
-                settings_revision=package.settings.revision,
-                manifest=package.manifest,
-                schemas=SchemaSet(package.manifest.schemas),
-                transformer=plugin.capabilities.projection_transformer,
-            ))
-        return tuple(selected)
+        pending = self.store.pending_scopes(pending_scope_query.PendingScopeQuery(
+            owner=package.extension_id,
+            scope_kinds=selection.declared_scope_kinds(package.manifest, selection.FactCapability.PROJECTOR),
+            history_revision=self.history_revision,
+            generation=self.generation,
+            limit=limit,
+        ))
+        total = 0
+        for scope in pending:
+            try:
+                total += self.run(package, scope, transformers)
+            except Exception:  # noqa: BLE001 -- Record one projection failure and continue others.
+                health.failed(package.extension_id)
+            else:
+                health.succeeded(package.extension_id)
+        return total
 
     def run(
         self,
-        package: ProjectorPackage,
+        package: projector_packages.ProjectorPackage,
         scope: scopes.ExtensionScope,
-        transformers: Sequence[ProjectionTransformerPackage] = (),
+        transformers: Sequence[transformer_packages.ProjectionTransformerPackage] = (),
     ) -> int:
         """Project the facts after this package's cursor for one scope.
+
+        The projector and each transform get only the facts that they select. A
+        page with no selected fact commits only the cursor.
 
         Returns:
             The number of facts the projection consumed.
@@ -132,86 +114,82 @@ class ProjectionPass:
         page = self.facts.facts_for_scope(self.history_revision, scope, cursor, self.batch_size)
         if not page.facts:
             return 0
-        snapshot = projection_snapshot(scope, self.history_revision, self.generation, cursor)
-        binding = projection_binding(package, snapshot, page.facts[-1].cursor)
-        changes = self._changes(package, scope, binding, _committed(page.facts), transformers)
-        self.store.apply_projection(extension_projections.ProjectionCommit(
-            owner=package.extension_id,
-            scope=scope,
-            history_revision=self.history_revision,
-            generation=self.generation,
-            commit_cursor=page.facts[-1].cursor,
-            changes=committed_changes(package.extension_id, scope, page.facts, changes),
-            session_id=SessionId(scope.session_id) if scope.kind == "session" else None,
-        ))
+        last = page.facts[-1].cursor
+        selected = _selected(package, scope, page.facts)
+        changes = self._changes(package, scope, (cursor, last), selected, transformers)
+        self.store.apply_projection(self._commit(package, scope, last, committed_changes(
+            package.extension_id, scope, selected, changes,
+        )))
         return len(page.facts)
 
     def _changes(
         self,
-        package: ProjectorPackage,
+        package: projector_packages.ProjectorPackage,
         scope: scopes.ExtensionScope,
-        binding: projections.ProjectionBinding,
-        committed: tuple[canonical.CommittedFact, ...],
-        transformers: Sequence[ProjectionTransformerPackage],
+        cursors: tuple[int, int],
+        facts: tuple[interpretations.StoredCanonicalFact, ...],
+        transformers: Sequence[transformer_packages.ProjectionTransformerPackage],
     ) -> tuple[change_models.ProjectionChange, ...]:
-        selection_request = projections.ProjectionSelectionRequest(binding=binding, events=committed)
-        selection = projection_selection.validate_read_set(
+        if not facts:
+            return ()
+        request = self._request(package, scope, cursors, facts)
+        projected = _projected(package, scope, request)
+        return transformer_packages.apply_transforms(transformers, request, facts, projected)
+
+    def _request(
+        self,
+        package: projector_packages.ProjectorPackage,
+        scope: scopes.ExtensionScope,
+        cursors: tuple[int, int],
+        facts: Sequence[interpretations.StoredCanonicalFact],
+    ) -> projections.ProjectionRequest:
+        snapshot_cursor, input_cursor = cursors
+        snapshot = projection_snapshot(scope, self.history_revision, self.generation, snapshot_cursor)
+        selection_request = projections.ProjectionSelectionRequest(
+            binding=projection_binding(package, snapshot, input_cursor),
+            events=tuple(stored.committed() for stored in facts),
+        )
+        read_set = projection_selection.validate_read_set(
             selection_request, package.projector.select_records(selection_request),
         )
-        request = projection_selection.capture_projection_request(
-            selection_request, selection, self.record_reader.record_states(selection.keys),
-        )
-        result = projection_results.validate_projection_result(request, package.projector.project(request))
-        projection_results.validate_projection_documents(package.manifest, package.schemas, result)
-        return _apply_transforms(
-            transformers, request, committed, projection_changes(package.extension_id, scope, result),
+        return projection_selection.capture_projection_request(
+            selection_request, read_set, self.record_reader.record_states(read_set.keys),
         )
 
+    def _commit(
+        self,
+        package: projector_packages.ProjectorPackage,
+        scope: scopes.ExtensionScope,
+        commit_cursor: int,
+        changes: session_data.SessionDataChanges,
+    ) -> extension_projections.ProjectionCommit:
+        return extension_projections.ProjectionCommit(
+            owner=package.extension_id,
+            scope=scope,
+            history_revision=self.history_revision,
+            generation=self.generation,
+            commit_cursor=commit_cursor,
+            changes=changes,
+            session_id=SessionId(scope.session_id) if scope.kind == "session" else None,
+        )
 
-def _apply_transforms(
-    transformers: Sequence[ProjectionTransformerPackage],
-    request: projections.ProjectionRequest,
-    committed: tuple[canonical.CommittedFact, ...],
-    changes: tuple[change_models.ProjectionChange, ...],
+
+def _live(heads: GenerationHeads | None, generation: str, owner: str) -> str:
+    return generation if heads is None else heads.active_generation(owner)
+
+
+def _selected(
+    package: projector_packages.ProjectorPackage,
+    scope: scopes.ExtensionScope,
+    facts: Sequence[interpretations.StoredCanonicalFact],
+) -> tuple[interpretations.StoredCanonicalFact, ...]:
+    projector_selection = selection.scope_selection(package.manifest, selection.FactCapability.PROJECTOR, scope.kind)
+    return selection.selected_facts(projector_selection, facts)
+
+
+def _projected(
+    package: projector_packages.ProjectorPackage, scope: scopes.ExtensionScope, request: projections.ProjectionRequest,
 ) -> tuple[change_models.ProjectionChange, ...]:
-    """Apply every enabled transform to the complete proposal.
-
-    Returns:
-        The transformed changes.
-
-    """
-    for transformer in transformers:
-        changes = _transform(transformer, request, committed, changes)
-    return changes
-
-
-def _transform(
-    transformer: ProjectionTransformerPackage,
-    request: projections.ProjectionRequest,
-    committed: tuple[canonical.CommittedFact, ...],
-    changes: tuple[change_models.ProjectionChange, ...],
-) -> tuple[change_models.ProjectionChange, ...]:
-    """Apply one enabled projection transform to the complete proposal.
-
-    Returns:
-        The transformed changes.
-
-    """
-    binding = projection_binding(transformer, request.binding.snapshot, request.binding.context.input_cursor)
-    transform_request = projection_transforms.ProjectionTransformRequest(
-        binding=binding,
-        events=committed,
-        prior_records=request.prior_records,
-        changes=changes,
-    )
-    result = transformer.transformer.transform(transform_request)
-    return transform_results.apply_projection_transform(
-        transformer.manifest, transform_request, result, transformer.schemas,
-    )
-
-
-def _committed(facts: Sequence[interpretations.StoredCanonicalFact]) -> tuple[canonical.CommittedFact, ...]:
-    return tuple(
-        canonical.CommittedFact(fact=stored.fact, cursor=stored.cursor, accepted_at=stored.accepted_at)
-        for stored in facts
-    )
+    projection_result = projection_results.validate_projection_result(request, package.projector.project(request))
+    projection_results.validate_projection_documents(package.manifest, package.schemas, projection_result)
+    return projection_changes(package.extension_id, scope, projection_result)

@@ -9,6 +9,7 @@ import pytest
 from extensions.models.lifecycle_state import ManagerClaim
 from repository.impl.sqlite import extension_lifecycle_writes as writes
 from repository.impl.sqlite.connection import SqliteDatabase
+from tests import storage_reads
 from tests.extension_host import lifecycle_fixture as fixtures, lifecycle_settings_fixture as settings
 
 
@@ -22,7 +23,7 @@ def test_failed_acceptance_rolls_back_all_rows(tmp_path: Path, monkeypatch: pyte
         store.accept_extension_operation(proposed, fixtures.NOW)
     assert store.read_extension_lifecycle() == before
     assert store.read_extension_operation(proposed.operation_id) is None
-    assert store.read_extension_runtime(proposed.candidate.runtime_revision) is None
+    assert storage_reads.read_extension_runtime(store, proposed.candidate.runtime_revision) is None
 
 
 def test_failed_commit_restores_pending_operation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

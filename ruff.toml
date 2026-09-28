@@ -31,6 +31,9 @@ runtime-evaluated-decorators = [
 "client/*.py" = ["PLC2701"]
 ".agents/skills/github-projects/scripts/test_*.py" = ["S101"]
 "domain/content.py" = ["TID251"]
+# An example extension package is not a host Python package: the worker loads its flat backend module.
+"examples/*/**/*.py" = ["INP001"]
+"examples/*/tests/**/*.py" = ["INP001", "S101"]
 
 # The runner places these relative patterns in the selected project config.
 [lint.per-file-ignores]

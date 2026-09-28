@@ -1,0 +1,4 @@
+{
+  "extends": "@baqylau/dev-tools/tsconfig/node",
+  "include": ["vite.config.ts", "knip.config.ts", "eslint.config.js"]
+}

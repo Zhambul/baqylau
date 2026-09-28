@@ -28,11 +28,11 @@ def process_capabilities(selection: ProxySelection) -> ExtensionCapabilities:
     return ExtensionCapabilities(
         lifecycle=proxies.RemoteLifecycle(selection.caller),
         sources=selection.select("sources", RemoteSources),
-        translator=selection.select("translator", RemoteTranslator),
-        raw_transformer=selection.select("raw_transformer", proxies.RemoteRawTransformer),
-        canonical_transformer=selection.select("canonical_transformer", proxies.RemoteCanonicalTransformer),
-        projector=selection.select("projector", projection.RemoteProjector),
-        projection_transformer=selection.select(
+        translator=selection.select_pure("translator", RemoteTranslator),
+        raw_transformer=selection.select_pure("raw_transformer", proxies.RemoteRawTransformer),
+        canonical_transformer=selection.select_pure("canonical_transformer", proxies.RemoteCanonicalTransformer),
+        projector=selection.select_pure("projector", projection.RemoteProjector),
+        projection_transformer=selection.select_pure(
             "projection_transformer", projection_transforms.RemoteProjectionTransformer,
         ),
         queries=selection.select("queries", queries.RemoteQueries),

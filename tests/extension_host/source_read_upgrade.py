@@ -12,6 +12,7 @@ from repository.impl.sqlite import (
     extension_lifecycle_reads,
     interpretation_journal_writes,
     interpretation_reads,
+    record_migration_copy,
 )
 from repository.impl.sqlite.connection import SqliteDatabase
 from tests import sqlite_migration_events as events
@@ -34,6 +35,7 @@ def previous(directory: Path) -> SqliteDatabase:
         patch.setattr(databases, "MAIN_SCHEMA_VERSION", PREVIOUS_VERSION)
         # Seed only schema-32 data. Restore the new reader before the actual upgrade.
         patch.setattr(extension_lifecycle_reads, "latest_record", lambda _connection: None)
+        patch.setattr(record_migration_copy, "discard_interrupted", lambda _connection: None)
         patch.setattr(interpretation_reads, "read_journal", lambda *_args, **_kwargs: None)
         patch.setattr(interpretation_journal_writes, "write_journal", _legacy_journal)
         case = interpretations.installed(directory)

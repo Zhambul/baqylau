@@ -4,6 +4,7 @@
 from pathlib import Path
 
 from domain.ids import CanonicalEventId
+from tests import storage_reads
 from tests.extension_host import interpretation_fixture as fixtures
 
 HISTORY = "default"
@@ -16,7 +17,7 @@ def test_fact_commits_with_complete_journal(tmp_path: Path) -> None:
     outcome = case.store.record_interpretation(request)
     assert not outcome.repeated and not outcome.deduplicated
     assert outcome.accepted[0].fact == request.proposal.facts[0]
-    assert case.store.find_interpretation(HISTORY, request.proposal.binding.raw_event_id) == request
+    assert storage_reads.find_interpretation(case.store, HISTORY, request.proposal.binding.raw_event_id) == request
     assert not case.original.store.pending_observations(10)
     assert case.store.translator_state(fixtures.state_key(case)).revision == 1
 
@@ -31,7 +32,7 @@ def test_retry_retains_time_and_state(tmp_path: Path) -> None:
     assert repeated.repeated and not repeated.accepted
     assert repeated.deduplicated == first.accepted
     assert case.store.translator_state(fixtures.state_key(case)).revision == 1
-    journal = case.store.find_interpretation(HISTORY, request.proposal.binding.raw_event_id)
+    journal = storage_reads.find_interpretation(case.store, HISTORY, request.proposal.binding.raw_event_id)
     assert journal is not None and journal.completed_at == request.completed_at - 1
 
 

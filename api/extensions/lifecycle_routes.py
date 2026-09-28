@@ -7,12 +7,13 @@ from baqylau_extension_api.models.base import ExtensionId, Identifier
 from fastapi import APIRouter, Depends, HTTPException
 
 from api.extensions import lifecycle_mapper, lifecycle_models
-from api.extensions.admission import require_extension_json
+from api.extensions.admission import require_catalog_write, require_extension_json
 from api.extensions.dependencies import Manager
 from api.extensions.lifecycle_admission import admission_response
 from api.extensions.lifecycle_requests import LifecycleChangeRequest, LifecyclePreviewRequest
 from api.responses import errors
-from app.provider_extension_controls import ControlPolicy, LifecycleControlService
+from app.provider_extension_controls import LifecycleControlService
+from app.provider_extension_policy import ControlPolicy
 
 LIFECYCLE_RESPONSES = errors({
     403: "Extension changes are read-only or the browser origin is not accepted.",
@@ -80,3 +81,19 @@ def change_extension_lifecycle(
     """
     admitted = control.change_lifecycle(extension_id, lifecycle_change_request)
     return admission_response(admitted)
+
+
+@router.post(
+    "/api/extensions/cleanup/retry",
+    dependencies=[Depends(require_catalog_write)],
+    status_code=HTTPStatus.ACCEPTED,
+)
+def retry_extension_cleanup(manager: Manager, policy: ControlPolicy) -> lifecycle_models.ExtensionRuntimeResponse:
+    """Retry retained worker cleanup; no command or preparation runs again.
+
+    Returns:
+        The runtime state after the retry is scheduled.
+
+    """
+    manager.retry_cleanup()
+    return lifecycle_mapper.runtime_response(manager.read_state(), policy)

@@ -215,6 +215,15 @@ export type EntryContent =
         readonly current: string;
         readonly previous: string | null;
       };
+    }
+  | {
+      readonly type: 'extension';
+      readonly body: {
+        readonly owner: string;
+        readonly entryType: string;
+        readonly sourceEventId: string;
+        readonly document: string;
+      };
     };
 
 export type Entry = EntryEnvelope & EntryContent;

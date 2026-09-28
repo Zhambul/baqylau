@@ -8,7 +8,7 @@ import pytest
 from tests.provider_graph import ProviderGraph
 
 
-def test_graph_without_isolated_data_directory_is_refused(
+def test_graph_without_isolated_data_is_refused(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Verify the graph refuses the user's default data directory."""

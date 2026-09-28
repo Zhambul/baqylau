@@ -1,7 +1,6 @@
 # Copyright (c) 2026 Zhambyl Yermagambet
 """Connect the real engine stage order to controlled core consumers."""
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from threading import Event
 from unittest.mock import Mock
@@ -9,12 +8,10 @@ from unittest.mock import Mock
 import pytest
 
 from core import input_events, work_queue
-from engine import source_processing, worker
+from engine import extension_services, worker
 from engine.interpret.loop import Interpreter
 from engine.react.loop import ReactionLoop
-from extensions import processing_contract, registry_snapshot
-from extensions.models import interpretations, observations
-from tests.extension_host import registry_memory_fixture, source_processing_fixture
+from extensions import processing_contract
 
 
 @dataclass(frozen=True)
@@ -48,7 +45,7 @@ def engine(
     queue = Mock(spec=work_queue.WorkQueue)
     monkeypatch.setattr("engine.worker.InputEvents", Mock(return_value=inputs))
     return EngineCase(worker.EngineWorker(
-        interpreter, reactions, queue, (), source_processing.EngineExtensionServices(processing=processing),
+        interpreter, reactions, queue, (), extension_services.EngineExtensionServices(processing=processing),
     ), interpreter, reactions, inputs, queue)
 
 
@@ -63,27 +60,3 @@ def _interpreter() -> Mock:
     runtime = Mock(clock=Mock(return_value=1000))
     interpreter.dependencies = Mock(repositories=repositories, runtime=runtime)
     return interpreter
-
-
-def require_busy(source: source_processing_fixture.SourceCase, stopped: Callable[[], bool] | None = None) -> int:
-    """Require the registry read during source, interpretation, or reaction work.
-
-    Returns:
-        Zero for the controlled engine step.
-
-    """
-    assert stopped is None or not stopped()
-    registry = source.runtime.services.registry
-    replacement = registry_snapshot.prepare_snapshot(100, "replacement", ())
-    assert registry.publish_snapshot(1, replacement, registry_memory_fixture.MEMORY_COMMIT).status == "busy"
-    return 0
-
-
-def accepted_busy(
-    source: source_processing_fixture.SourceCase,
-    original: observations.StoredObservation, outcome: interpretations.InterpretationOutcome,
-) -> None:
-    """Require fact acceptance before the core callback, with publication still held."""
-    require_busy(source)
-    assert source.runtime.stores.facts.find_interpretation("default", original.observation.raw_event_id) is not None
-    assert outcome.accepted

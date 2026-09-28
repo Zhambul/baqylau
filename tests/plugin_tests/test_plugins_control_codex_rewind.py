@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Zhambyl Yermagambet
 """Cross-harness canonical translation tests from native fixture shapes."""
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -89,24 +90,33 @@ GOAL_EVENT = (
 )
 
 
-def test_codex_goal_command_confirms_from_goal_event(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Confirm a /goal send from the goal event, which has no user prompt echo."""
-    source = tmp_path / fixture.ROLLOUT_JSONL_PATH
-    source.write_text("", encoding=fixture.TEXT_ENCODING)
-    submit_message = controller_send_state.submit_message
+class _GoalRecordingSubmit:
+    """Submit the message, then write the goal event that Codex writes for `/goal`."""
 
-    def submit_and_record_goal(
+    def __init__(self, source: Path, submit: Callable[..., control_models.ControlResult]) -> None:
+        self.source = source
+        self.submit = submit
+
+    def __call__(
+        self,
         request: control_models.SendText,
         control_context: control_models.ControlContext,
         window_id: domain_ids.WindowId,
         send_state: controller_send_state.SendState,
     ) -> control_models.ControlResult:
-        result = submit_message(request, control_context, window_id, send_state)
-        with source.open("a", encoding=fixture.TEXT_ENCODING) as rollout:
+        result = self.submit(request, control_context, window_id, send_state)
+        with self.source.open("a", encoding=fixture.TEXT_ENCODING) as rollout:
             rollout.write(GOAL_EVENT)
         return result
 
-    monkeypatch.setattr(controller_send_state, "submit_message", submit_and_record_goal)
+
+def test_codex_goal_confirms_from_goal_event(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Confirm a /goal send from the goal event, which has no user prompt echo."""
+    source = tmp_path / fixture.ROLLOUT_JSONL_PATH
+    source.write_text("", encoding=fixture.TEXT_ENCODING)
+    monkeypatch.setattr(
+        controller_send_state, "submit_message", _GoalRecordingSubmit(source, controller_send_state.submit_message),
+    )
     session = Session(
         control_state_values.PRIMARY_SESSION,
         control_state_values.PRIMARY_ACTOR,

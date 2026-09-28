@@ -8,6 +8,7 @@ from tests import (
     foundation_dependencies,
     foundation_test_events,
     foundation_test_primitives,
+    storage_reads,
 )
 from tests.harness_names import CODEX_HARNESS
 
@@ -128,7 +129,7 @@ def save_example_sessions(sessions: foundation_dependencies.repository.SqliteSes
 
 def assert_only_aborted_event(runtime: foundation_test_events.InterpreterRuntime) -> None:
     """Check that the first event page contains only one turn abort."""
-    events = runtime.store.page_from(0, 10)
+    events = storage_reads.page_from(runtime.store, 0, 10)
     assert [type(stored_event.payload) for stored_event in events] == [
         foundation_dependencies.domain.event_conversation.TurnAborted,
     ]

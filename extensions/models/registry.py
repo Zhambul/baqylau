@@ -28,16 +28,19 @@ class RuntimeSettings(WireModel):
     default: EncodedDocument | None = None
     scopes: Annotated[tuple[ScopedRuntimeSettings, ...], Field(max_length=1000)] = ()
 
-    def for_scope(self, scope: ExtensionScope) -> EncodedDocument | None:
-        """Read an exact captured value or the captured fallback.
+    def for_scope(
+        self, scope: ExtensionScope, related: tuple[ExtensionScope, ...] = (),
+    ) -> EncodedDocument | None:
+        """Read an exact captured value, then each related scope's value, then the captured fallback.
 
         Returns:
             A fixed effective document, with no storage or feature call.
 
         """
-        for entry in self.scopes:
-            if entry.scope == scope:
-                return entry.settings
+        for selected in (scope, *related):
+            for entry in self.scopes:
+                if entry.scope == selected:
+                    return entry.settings
         return self.default
 
     def validate_declaration(self, manifest: ExtensionManifest, schemas: SchemaSet) -> None:

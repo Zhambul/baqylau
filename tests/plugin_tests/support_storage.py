@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from domain import content as domain_content, event_base, event_shell, ids as domain_ids
+from tests import storage_reads
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_values import text_of
 
@@ -30,7 +31,7 @@ def stored_payloads[PayloadType: event_base.EventPayload](
     """
     return [
         event.payload
-        for event in runtime.store.page_from(0, fixture.CANONICAL_PAGE_LIMIT)
+        for event in storage_reads.page_from(runtime.store, 0, fixture.CANONICAL_PAGE_LIMIT)
         if event.session_id == session_id and isinstance(event.payload, payload_type)
     ]
 

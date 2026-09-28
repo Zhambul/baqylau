@@ -79,7 +79,7 @@ def test_extension_jobs_read_the_exact_scope() -> None:
     assert (job.job_id, job.state, job.revision) == (JOB_ID, "accepted", FIRST_REVISION)
 
 
-def test_extension_job_cancel_posts_the_exact_revision() -> None:
+def test_job_cancel_posts_the_exact_revision() -> None:
     """The SDK posts the expected revision to the cancel route."""
     transport = JobsTransport()
     request = ExtensionJobCancelRequest(
@@ -94,7 +94,7 @@ def test_extension_job_cancel_posts_the_exact_revision() -> None:
     assert (response.status, response.revision) == ("canceled", SECOND_REVISION)
 
 
-def test_extension_job_reconcile_posts_the_exact_revision() -> None:
+def test_job_reconcile_posts_the_exact_revision() -> None:
     """The SDK posts the expected revision to the reconcile route."""
     transport = JobsTransport()
     request = ExtensionJobReconcileRequest(

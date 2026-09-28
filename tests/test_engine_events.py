@@ -101,7 +101,7 @@ def test_engine_drains_then_waits(
         assert not stop.wait(IDLE_CHECK_SECONDS)
         assert interpreter.read_sources.call_count == 1
         assert interpreter.translation.translate.call_count == len(TRANSLATION_BATCHES)
-        reactions.drain.assert_called_once_with(stop.is_set)
+        reactions.drain.assert_called_once_with(stop.is_set, None)
     assert not worker.is_alive()
 
 

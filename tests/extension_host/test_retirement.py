@@ -5,7 +5,8 @@ from typing import Final
 
 from baqylau_extension_api.models.lifecycle import DeactivationResult
 
-from extensions.manager_retirement import retirement_owner
+from extensions.manager_retirement import RetirementOwner, retirement_owner
+from extensions.models.cleanup import RetirementIssue
 from tests.extension_api import samples, service_samples
 from tests.extension_host import registry_fixture, retirement_fixture
 
@@ -13,11 +14,21 @@ REPLACE: Final = "replace"
 RETRIED_CALLS = 2
 
 
+def replaced(owner: RetirementOwner) -> tuple[RetirementIssue, ...]:
+    """Retire one owner for a runtime replacement.
+
+    Returns:
+        The remaining issues.
+
+    """
+    return owner.retire(REPLACE)
+
+
 def test_acknowledged_runtime_closes_only_once() -> None:
     """Repeated collection cannot deactivate or close a released runtime again."""
     probe = retirement_fixture.RetirementProbe(registry_fixture.peer(service_samples.ALPHA))
     owner = retirement_owner(probe)
-    assert not owner.retire(REPLACE)
+    assert not replaced(owner)
     assert not owner.retire("shutdown")
     assert probe.stop_count == 1 and probe.close_count == 1
 
@@ -45,6 +56,16 @@ def test_failed_deactivation_can_be_retried() -> None:
     probe.fail_stop = False
     assert not owner.retire(REPLACE)
     assert probe.stop_count == RETRIED_CALLS and probe.close_count == 1
+
+
+def test_lost_worker_closes_with_its_issue() -> None:
+    """A worker whose transport is gone cannot answer; its issue stays, and its resources close."""
+    probe = retirement_fixture.RetirementProbe(registry_fixture.peer(service_samples.ALPHA), lost_transport=True)
+    owner = retirement_owner(probe)
+    assert replaced(owner)[0].reason == "deactivation_failed"
+    assert owner.closed and probe.close_count == 1
+    replaced(owner)
+    assert probe.stop_count == 1 and probe.close_count == 1
 
 
 def test_wrong_revision_cannot_release_worker() -> None:

@@ -5,7 +5,9 @@ from pathlib import Path
 
 from baqylau_dev.class_declarations import CodeLocation
 from baqylau_dev.import_checks import check_imports
+from baqylau_dev.io_checks import check_io
 from baqylau_dev.manifest_checks import BackendDeclaration, checked_backend
+from baqylau_dev.model_fields import model_field_entries
 from baqylau_dev.models import ProjectProfile
 from baqylau_dev.protocol_checks import verified_protocol_entries
 from baqylau_dev.source_inventory import source_inventory
@@ -23,7 +25,8 @@ def check_extension(root: Path, profile: ProjectProfile) -> frozenset[CodeLocati
     modules = source_inventory(root, profile)
     backend = checked_backend(root, profile, modules)
     check_imports(root, modules)
-    entries = verified_protocol_entries(backend, modules)
+    check_io(modules)
+    entries = verified_protocol_entries(backend, modules) | model_field_entries(modules)
     _write_factory_probe(root, backend)
     return entries
 

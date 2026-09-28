@@ -8,6 +8,7 @@ from baqylau_extension_api.models import transforms
 
 from extensions.models import interpretations
 from repository.impl.sqlite import interpretation_journal_writes
+from tests import storage_reads
 from tests.extension_host import (
     interpretation_fixture as fixtures,
     interpretation_normalization_fixture as evidence,
@@ -22,7 +23,7 @@ def test_large_reply_publishes_shared_bodies(tmp_path: Path) -> None:
     case.probes.canonical.transform.side_effect = evidence.large_reply
     commit = case.run()
 
-    stored = case.original.store.find_interpretation(
+    stored = storage_reads.find_interpretation(case.original.store,
         evidence.DEFAULT_HISTORY, commit.proposal.binding.raw_event_id,
     )
     assert len(commit.proposal.facts) == evidence.FACT_COUNT
@@ -51,7 +52,9 @@ def test_repeated_fact_uses_one_body_version(tmp_path: Path) -> None:
     case.store.record_interpretation(request)
 
     counts = evidence.body_counts(case)
-    stored = case.store.find_interpretation(evidence.DEFAULT_HISTORY, request.proposal.binding.raw_event_id)
+    stored = storage_reads.find_interpretation(
+        case.store, evidence.DEFAULT_HISTORY, request.proposal.binding.raw_event_id,
+    )
     assert counts[:2] == (1, 1)
     assert counts[2] == counts[3]
     assert stored == request
@@ -82,6 +85,6 @@ def test_new_journal_uses_normalized_read_path(tmp_path: Path) -> None:
     assert codec == evidence.NORMALIZED_CODEC_VERSION
     assert view_count == 0
     assert stages == ("extension_translation",)
-    assert case.store.find_interpretation(
+    assert storage_reads.find_interpretation(case.store,
         evidence.DEFAULT_HISTORY, request.proposal.binding.raw_event_id,
     ) == request

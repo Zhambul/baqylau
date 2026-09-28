@@ -59,7 +59,7 @@ def test_missing_path_rejected_before_admission(tmp_path: Path, runtime_wheels: 
         _remove_settings_path(source)
         case.rescan()
         request = case.request(RELOAD, "missing-path", fixture.OWNER)
-        with pytest.raises(LifecycleRequestError, match="incompatible"):
+        with pytest.raises(LifecycleRequestError, match="settings migration path is not declared"):
             case.control.change_lifecycle(fixture.OWNER, request)
         assert not (tmp_path / fixture.MIGRATING).exists()
         assert fixture.read(case).effective.json_text == OLD_VALUE

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from repository.impl.sqlite.connection import SqliteDatabase
+from tests import storage_reads
 from tests.extension_host import (
     lifecycle_fixture as lifecycle,
     migration_result_fixture,
@@ -27,7 +28,9 @@ def test_migration_commit_failure_rolls_back(tmp_path: Path, monkeypatch: pytest
         with pytest.raises(sqlite3.OperationalError, match="injected COMMIT"):
             case.store.finish_extension_operation(completion)
         assert case.store.read_extension_lifecycle() == before
-        assert case.store.read_extension_runtime(case.proposal.candidate.runtime_revision) == case.proposal.candidate
+        assert storage_reads.read_extension_runtime(
+            case.store, case.proposal.candidate.runtime_revision,
+        ) == case.proposal.candidate
         assert case.store.finish_extension_operation(completion).accepted
         assert case.store.read_extension_lifecycle().committed_runtime == case.resolution.runtime
 

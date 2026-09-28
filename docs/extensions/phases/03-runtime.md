@@ -24,7 +24,7 @@ Read [architecture](../architecture.md), [protocols](../protocols.md), current `
 
 ### P03-T01 — Discover and validate external packages
 
-Status: in_progress
+Status: done
 
 Owner: Codex
 
@@ -42,11 +42,11 @@ Verification: C01 finds a valid external package. Invalid manifests, duplicates,
 
 Evidence: Explicit roots, startup discovery, revision-checked rescan, fixed package capture, private environments, catalog storage, and lifecycle storage now have application callers. The daemon keeps discovery separate from activation. Public catalog reads and rescans do not import feature code. Populated schema-26 and schema-27 migration tests retain existing data. See the discovery, capture, environment, manager, and user-control records below.
 
-Remaining: Complete related-scope settings resolution, secret references, and retention policy. Schema 29 retains candidate settings conversion results separately from their source plans. Enable, disable, reload, and ordinary settings changes use the manager. Exact scope overrides and declared settings conversion are supported; related-scope inheritance is not.
+Retention (2026-09-24): each daemon start runs `StartupRetention` after the manager holds the exclusive lease and its ownership claim, and before any restore or preparation. It keeps every package copy whose digest a catalog row, a request, or a retained runtime revision refers to (a runtime revision keeps each candidate an operation reserved, so a copy that was once selected is never removed). It removes other copies, interrupted `.capture-*` staging copies, and `environment-*` directories left by a stopped daemon; normal environments were already removed when their preparation closed. `tests/extension_host/test_extension_retention.py` enables one copy, captures a second, replaces it with a third, and checks that only the enabled and the current copies stay. Done on 2026-09-24. Related-scope settings and secret references are done in P05-T05. Schema 29 retains candidate settings conversion results separately from their source plans. Enable, disable, reload, and ordinary settings changes use the manager.
 
 ### P03-T02 — Implement worker transport and protocol proxies
 
-Status: in_progress
+Status: done
 
 Owner: Codex
 
@@ -66,9 +66,11 @@ Evidence: `ProcessExtensionPlugin` exposes all 12 typed capability adapters thro
 
 Remaining: Persist diagnostics and health, connect application query/command admission and job ownership, and complete C10/C11 at the application level. Source calls now use actual host root grants under the engine's retained registry read. Current SDK, worker, and source tests are not the full release gate.
 
+Status result (2026-09-25): The remaining items are closed by later work. Health and diagnostics are durable (`extensions/interpretation_health.py` counts every transform and translation step; projection and source health were already stored). Query and command admission and job ownership are the P05-T03 job executor and the P08-T03 root query grant. C10 at the application level: `tests/extension_host/test_transform_health_daemon.py` (a hung transform worker is ended by its deadline, counted, and disabled at the failure limit); malformed, oversized, and stale replies keep their transport tests. C11 at the application level: `tests/extension_host/test_slow_command_daemon.py`.
+
 ### P03-T03 — Implement dependency and service registries
 
-Status: in_progress
+Status: done
 
 Owner: Codex
 
@@ -86,11 +88,15 @@ Verification: C15 tests each package alone and both activation orders. C16 tests
 
 Evidence: `ActiveExtensionRegistry` supplies fixed provider snapshots and a read boundary held through complete peer queries. SDK ordering and `HostCallLedger` check dependencies, scope, runtime, deadlines, and call cycles. Private worker tests cover both preparation orders and optional absence. The lifecycle planner uses retained active manifests. HTTP tests require exact confirmation for transitive required removal and keep optional consumers selected.
 
-Remaining: Add service-removal notices, root application query admission, durable peer commands, and complete application C15–C17. Required removal now works through the daemon; metadata-only tests do not prove that a live optional consumer handles a removal notice.
+Remaining: Complete application C15 and C17 through root query admission under event input. Service-removal notices are done: a runtime change tells each optional consumer which consumed services it removed, in `ActivationRequest.removed_services`, and `tests/extension_host/test_removal_notice.py` proves it with two real workers. Durable peer commands are done in P05-T03.
+
+Root query admission (2026-09-25): an HTTP query now opens a root call grant for the query's package and scope (`api/extensions/query_authority.py`), so a declared peer read works through the public query route. `tests/extension_host/test_peer_cooperation_daemon.py` covers C15 and C16 with real workers in both activation orders under source input (P08-T03).
+
+Status result (2026-09-25): C15 and C16 run through root query admission under source input with real peer workers in both activation orders (`tests/extension_host/test_peer_cooperation_daemon.py`), and C17 refuses a load-order cycle under source input while the other packages keep processing (`tests/extension_host/test_cycle_daemon.py`).
 
 ### P03-T04 — Implement atomic lifecycle changes
 
-Status: in_progress
+Status: done
 
 Owner: Codex
 
@@ -108,11 +114,13 @@ Verification: C02–C04 cover enable, disable, restart, and reload under input. 
 
 Evidence: Schema 28 stores requests, complete candidates, raw settings, manager generations, and operation results. `StoredRegistryCommit` joins durable completion to registry publication. `ExtensionManager` prepares complete replacements and switches at the engine boundary. `ExtensionLifecycleControl` plans user enable, disable, and reload requests. `ExtensionSettingsControl` supplies ordinary reads and scope changes through the same manager. Public routes are tested with private daemons. Exact retries survive restart; failed reload or settings activation retains the old active worker. See the lifecycle, joined-commit, manager, user-control, and settings records below.
 
-Remaining: Add related-scope settings, secret references, candidate record migrations, durable job draining before replacement, removal notices, and complete C02–C04 under event input. Settings migration now runs on a candidate and publishes atomically. A stored operation result is not proof that every feature resource has drained.
+Remaining: Complete C02–C04 under event input. Job draining is done: the job executor holds a registry read for the whole job, so publication reports `busy` and the replacement waits (`tests/test_job_executor.py`); a lost reply becomes `outcome_unknown` and is not repeated. Removal notices are done (see P03-T03). Related-scope settings, secret references, and candidate record migrations are done in P05-T05.
+
+Status result (2026-09-25): C02–C04 run under event input: `tests/extension_host/test_reload_under_input_daemon.py` (C03: a reload while input arrives every 0.1 seconds; each input is processed once with one runtime revision) and `tests/extension_host/test_reenable_daemon.py` (C02 and C04: disable, input, and re-enable read the input once; a failed reload keeps the old worker).
 
 ### P03-T05 — Add failure control and application cleanup
 
-Status: in_progress
+Status: done
 
 Owner: Codex
 
@@ -128,7 +136,13 @@ Code areas: Proposed runtime health and shutdown services; current `api/workers.
 
 Verification: C10 floods and hangs a worker. Confirm the core queue still progresses and originals remain recorded. Stop the private daemon during work and check child-process cleanup. Repeated failures disable the extension and required dependents through a recorded revision change.
 
-Evidence: The manager records preparation failures, retains busy candidates, and closes registry admission before shutdown. The approved cleanup change separates resource closure from unresolved-job evidence. Schema 34 stores immutable observations before physical close and before lease release. The public runtime report includes the last shutdown observation across restart. See the [cleanup implementation and checks](../worker-cleanup.md). The full Python suite passes 3,259 cases. Consecutive-failure policy, durable health, job reconciliation, and full C10 remain open.
+Evidence: The manager records preparation failures, retains busy candidates, and closes registry admission before shutdown. The approved cleanup change separates resource closure from unresolved-job evidence. Schema 34 stores immutable observations before physical close and before lease release. The public runtime report includes the last shutdown observation across restart. See the [cleanup implementation and checks](../worker-cleanup.md). The full Python suite passes 3,259 cases. Consecutive failures and health (2026-09-24): schema 41 adds `extension_health`, one row for each extension with failures: state (`healthy`, `failing`, `failed`), consecutive failed calls, the last failure stage and time, and the last success. `HealthTracker` counts through `SqliteExtensionHealth` in one upsert, and a success writes only for an owner that has failures, so healthy passes add no writes. Projection, projection rebuild, core transform, observer, and source-read failures report the owner through `PassHealth`, and each failure also goes to the coalesced audit with the owner as context. At `HealthPolicy.failure_limit` (5), `FailureDisable` calls `LifecycleControl.disable_failed` once: the normal planner selects the extension and its required dependents, the host confirms them, and the manager records a `failure` operation. A refused disable goes to the audit and never stops the engine. `GET /api/extensions/health` returns the rows and the limit, and each Settings → Extensions card shows a failing or failed extension. Tests: `tests/test_extension_health.py` (counting, limit of one, success reset, one callback at the limit, restart), `tests/extension_host/test_lifecycle_control.py` (host failure operation disables the package), and `tests/extension_host/test_health_daemon.py`: a real source package whose read always raises becomes failed and disabled through a recorded failure operation, and the daemon keeps running. Host limits and C10 (2026-09-24): `app/provider_extension_policy.py` freezes every host limit of one application: `BAQYLAU_EXTENSION_FAILURE_LIMIT` (default 5) and `BAQYLAU_EXTENSION_CALL_SECONDS` (default 30, used by the worker bridge and as the source call deadline). A value that is not positive stops startup with a clear message (`tests/test_extension_health_policy.py`). `tests/extension_host/test_health_daemon.py` runs a real source package whose read raises, hangs past the call time, or writes 2 MiB to stderr (past the 1 MiB output limit). In each case the extension becomes failed and is disabled through a recorded failure operation, and the daemon stays running.
+
+Defect found and corrected: a worker that the monitor killed (the flood case) could never acknowledge deactivation. Its retired runtime stayed open for retries, `cleanup_pending` stayed true, and the lifecycle planner then refused every later change until a restart. Now a deactivation that fails with `ExtensionTransportError` keeps its `deactivation_failed` issue as evidence but is not retried, the resources close, and `collect_cleanup` removes a closed owner while its issues stay in the report. A live worker with unresolved jobs, or a failed call that it answered, is still kept and retried (`tests/extension_host/test_retirement.py`).
+
+Bounded queue: an observer owner may have at most `MAX_OPEN_JOBS` (1000) accepted or running jobs. Before each scope the pass counts them through the job state index (`ExtensionJobRepository.open_jobs`), reads at most the free places, and stops for that owner when it is full; the unread facts stay durable after the cursor (`tests/test_observer_backpressure.py`). Job reconciliation for an unknown outcome exists since P05 (`job_control.reconcile`, `command_recovery`, `observer_recovery`). A failure disable of a provider removes its transitive required dependents and keeps an optional consumer (`tests/extension_host/test_lifecycle_dependencies.py`).
+
+C10 core progress: while the source raises, hangs, or floods, the test posts a native `SessionStart` hook, and the core consumer's durable progress moves before the extension is disabled. The full selection passed twice in a row (3,483 cases). Done on 2026-09-24.
 
 ## Work record — Application discovery and catalog
 
@@ -548,3 +562,19 @@ Verification:
 Limits: This is ordinary settings migration, not record migration or a complete data rollback system. Secret references, related-scope inheritance, health policy, removal notices, and write-job draining remain open. Conversion uses the normal per-call deadline and checks stop between calls. Total migration time, large-output performance, disk power loss, and live feature release behavior are not proven. No phase or additional subtask is complete. P05-T05 is now in progress because its settings implementation has started.
 
 Next action: Begin P04-T01 scoped raw and canonical storage using the verified runtime publication boundary. Preserve original bytes, core identities, and existing visible order. P03 health, removal, related-scope settings, and credential work remain required; job draining and record migration must join P05 storage and execution. Do not report those dependencies as complete. Continue the full P01–P10 scope, including adapters and Git. No live daemon, user database, external service, or Git remote was changed in this work.
+
+## Work record — service-removal notices
+
+Date: 2026-09-24
+
+Owner: Claude Code
+
+Status: done
+
+Context: A runtime change that disables a provider keeps its optional consumers. They must learn that a consumed service is gone and use their base behavior.
+
+Decisions: Every runtime change starts fresh workers, so the notice is part of activation. Preparation compares the services of the published runtime with the planned runtime (`extensions/service_removal.py`). Each package's `ActivationRequest.removed_services` names the removed services that the package consumes. The field has a default, so older workers ignore it.
+
+Verification: `tests/extension_host/test_removal_notice.py` enables a provider and an optional consumer as real workers, disables the provider, and checks that the consumer stays enabled and that its new activation names the removed service. The first activation has no notice.
+
+Status result: Service-removal notices are done.

@@ -1,18 +1,15 @@
 # Copyright (c) 2026 Zhambyl Yermagambet
-"""Build one projector's captured binding and keep its processing identity."""
+"""Name the fact and generation reads of a projection, and build its captured binding."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
-from baqylau_extension_api.contracts import projection
-from baqylau_extension_api.manifest.package import ExtensionManifest
 from baqylau_extension_api.models import events, projections, scopes
-from baqylau_extension_api.schemas import SchemaSet
 
 if TYPE_CHECKING:
     from extensions.models.interpretation_reads import CanonicalPage
+    from extensions.models.scope_relations import ScopedSettings
 
 
 class ProjectionFacts(Protocol):
@@ -22,6 +19,14 @@ class ProjectionFacts(Protocol):
         self, history_revision: str, scope: scopes.ExtensionScope, after_cursor: int, limit: int,
     ) -> CanonicalPage:
         """Read an indexed scope page in accepted order."""
+        ...
+
+
+class GenerationHeads(Protocol):
+    """Read each owner's live projection generation."""
+
+    def active_generation(self, owner: str) -> str:
+        """Read one owner's active projection generation."""
         ...
 
 
@@ -39,33 +44,9 @@ class ProcessingPackageIdentity(Protocol):
         ...
 
     @property
-    def settings_revision(self) -> int:
-        """The selected settings revision."""
+    def settings(self) -> ScopedSettings:
+        """The captured settings selection."""
         ...
-
-
-@dataclass(frozen=True)
-class ProjectorPackage:
-    """Keep one enabled package's projector and processing identity."""
-
-    extension_id: str
-    runtime_revision: str
-    settings_revision: int
-    manifest: ExtensionManifest
-    schemas: SchemaSet
-    projector: projection.ExtensionProjector
-
-
-@dataclass(frozen=True)
-class ProjectionTransformerPackage:
-    """Keep one enabled package's projection transform and its declarations."""
-
-    extension_id: str
-    runtime_revision: str
-    settings_revision: int
-    manifest: ExtensionManifest
-    schemas: SchemaSet
-    transformer: projection.ExtensionProjectionTransformer
 
 
 def projection_snapshot(
@@ -103,7 +84,8 @@ def projection_binding(
             history_revision=snapshot.history_revision,
             scope=snapshot.scope,
             input_cursor=input_cursor,
-            settings_revision=package.settings_revision,
+            settings_revision=package.settings.revision,
+            settings=package.settings.for_scope(snapshot.scope),
         ),
         snapshot=snapshot,
         after_input_cursor=snapshot.commit_cursor,

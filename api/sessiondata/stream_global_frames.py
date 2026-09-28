@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from repository.contract.session_data import AggregateDelta
 
 APPLICATION_EVENT = "application"
+RESET_EVENT = "reset"
 
 
 async def global_frames(sources: global_models.GlobalFrameSources, cursor: int) -> AsyncGenerator[str]:
@@ -50,7 +51,7 @@ async def global_frame_loop(
     application_preferences: global_models.ApplicationSnapshotReader,
     application_updates: global_models.RevisionReader,
 ) -> AsyncGenerator[str]:
-    """Read changed data after a notice, with idle connection heartbeats.
+    """Read changed data after a notice, with idle connection heartbeats; end with a reset after a view switch.
 
     The caller must close this generator to release the subscription.
 
@@ -70,6 +71,8 @@ async def global_frame_loop(
                 state,
             ):
                 yield frame  # noqa: ASYNC119 -- The caller closes this stream generator.
+            if state.reset:
+                return
             while not changed.is_set():
                 try:
                     await asyncio.wait_for(changed.wait(), sse.STREAM_HEARTBEAT_SECONDS)
@@ -91,6 +94,11 @@ async def global_iteration(
 
     """
     delta = await sse.off_loop(session_data_repository.changed_after, state.cursor)
+    if state.view_revision is None:
+        state.view_revision = delta.view_revision
+    elif delta.view_revision != state.view_revision:
+        state.reset = True
+        return (sse.sse_frame(RESET_EVENT, stream_global_contract.ViewReset(view_revision=delta.view_revision)),)
     now = asyncio.get_running_loop().time()
     application = await global_application_frame(application_preferences, application_updates, state, now)
     return present_frames(

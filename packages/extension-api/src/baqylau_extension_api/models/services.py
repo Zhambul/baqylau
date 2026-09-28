@@ -1,11 +1,11 @@
 # Copyright (c) 2026 Zhambyl Yermagambet
-"""Describe versioned peer reads without exposing host settings or job authority."""
+"""Describe versioned peer reads without exposing host settings."""
 
 from typing import Annotated, Literal
 
 from pydantic import Field
 
-from baqylau_extension_api.manifest.operations import QueryDefinition
+from baqylau_extension_api.manifest.operations import CommandDefinition, QueryDefinition
 from baqylau_extension_api.models.base import ExtensionId, Identifier, Revision, WireModel
 from baqylau_extension_api.models.documents import EncodedDocument
 from baqylau_extension_api.models.operations import QueryPageCursor, QuerySnapshot
@@ -44,6 +44,7 @@ class ServiceResolved(WireModel):
     binding: ServiceBinding
     service_revision: ServiceRevision
     queries: Annotated[tuple[QueryDefinition, ...], Field(max_length=100)]
+    commands: Annotated[tuple[CommandDefinition, ...], Field(max_length=100)] = ()
 
 
 class ServiceUnavailable(WireModel):

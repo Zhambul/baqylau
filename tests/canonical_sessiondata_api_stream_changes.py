@@ -61,7 +61,9 @@ async def read_failed_session_frame(audit: stream_models.SilentAudit) -> str:
     """
     reader = stream_models.FrameReader(
         streams.session_frames(
-            streams.SessionStreamServices(stream_models.BrokenReadModel(), audit), api_values.SESSION, 0,
+            streams.SessionStreamServices(stream_models.BrokenReadModel(), audit),
+            api_values.SESSION,
+            streams.SessionStreamPosition(0),
         ),
     )
     frame = await reader.next()

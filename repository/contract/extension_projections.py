@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from baqylau_extension_api.models.scopes import ExtensionScope
 
 from domain.ids import SessionId
 from repository.contract.session_data import SessionDataChanges
+
+if TYPE_CHECKING:
+    from repository.contract.pending_scope_query import PendingScopeQuery
 
 
 @dataclass(frozen=True)
@@ -32,10 +35,12 @@ class ExtensionProjectionRepository(Protocol):
         """Return the last committed projection cursor, or zero."""
         ...
 
-    def scopes_after(
-        self, history_revision: str, after_cursor: int, limit: int,
-    ) -> tuple[ExtensionScope, ...]:
-        """Read the distinct scopes with accepted facts after a cursor."""
+    def ensure_floor(self, owner: str, history_revision: str, generation: str) -> None:
+        """Start the owner at the canonical head on its first live pass; keep an existing floor."""
+        ...
+
+    def pending_scopes(self, pending_scope_query: PendingScopeQuery) -> tuple[ExtensionScope, ...]:
+        """Read the declared scopes with facts after this owner's cursor, oldest head first."""
         ...
 
     def apply_projection(self, projection_commit: ProjectionCommit) -> None:

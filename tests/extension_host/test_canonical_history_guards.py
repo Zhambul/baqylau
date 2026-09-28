@@ -8,7 +8,7 @@ import pytest
 
 from repository.impl.sqlite.connection import SqliteDatabase
 from repository.impl.sqlite.raw_events import SqliteRawEventRepository
-from tests import sqlite_migration_fixture as snapshots, sqlite_test_fixtures as core
+from tests import sqlite_migration_fixture as snapshots, sqlite_test_fixtures as core, storage_reads
 from tests.extension_host import (
     canonical_history_fixture as fixtures,
     observation_fixture,
@@ -78,5 +78,5 @@ def test_live_cause_excludes_candidate(tmp_path: Path) -> None:
     fixtures.insert_core(case.store.database, core.a_started_event("candidate-only"))
     request = observation_requests.causes(case.request, ("candidate-only",))
     with pytest.raises(ValueError, match="cause is not recorded"):
-        case.store.append_observations(request)
+        storage_reads.append_observations(case.store, request)
     assert case.store.pending_observations(10) == ()

@@ -9,7 +9,12 @@ from domain.records import RecordedTranslationDecision
 from harness.models.raw_events import TranslationResult
 from repository.impl.sqlite import canonical_events, diagnostics, raw_event_audits, raw_events, sessions
 from repository.impl.sqlite.connection import READ_ONLY_PRAGMAS, SqliteDatabase
-from tests import sqlite_migration_events as events, sqlite_migration_fixture as snapshots, sqlite_test_fixtures as core
+from tests import (
+    sqlite_migration_events as events,
+    sqlite_migration_fixture as snapshots,
+    sqlite_test_fixtures as core,
+    storage_reads,
+)
 from tests.extension_host import canonical_history_fixture as fixtures
 
 EARLIER_TIME = 500.0
@@ -22,7 +27,7 @@ def test_candidate_has_no_current_core_read(main: SqliteDatabase) -> None:
     canonical = canonical_events.SqliteCanonicalEventRepository(main)
     assert canonical.find(event.event_id) is None
     assert canonical.session_ids() == ()
-    assert canonical.page_from(0, 10) == ()
+    assert storage_reads.page_from(canonical, 0, 10) == ()
 
 
 def test_candidate_cannot_claim_live_identity(main: SqliteDatabase) -> None:
@@ -36,7 +41,7 @@ def test_candidate_cannot_claim_live_identity(main: SqliteDatabase) -> None:
         raw, "1", TranslationResult((event,), RecordedTranslationDecision.TRANSLATED), fixtures.COMPLETED_AT,
     )
     assert result.accepted == (event,) and not result.deduplicated
-    assert canonical.page_from(0, 10)[0].occurred_at == event.occurred_at
+    assert storage_reads.page_from(canonical, 0, 10)[0].occurred_at == event.occurred_at
 
 
 def test_candidate_verdict_is_not_a_live_audit(main: SqliteDatabase) -> None:
@@ -94,6 +99,6 @@ def test_extension_rows_do_not_enter_core_reads(main: SqliteDatabase) -> None:
     events.populate(main)
     fixtures.insert_extension(main, "extension-one")
     canonical = canonical_events.SqliteCanonicalEventRepository(main)
-    assert len(canonical.page_from(0, 10)) == 1
+    assert len(storage_reads.page_from(canonical, 0, 10)) == 1
     assert canonical.session_ids() == (core.SESSION,)
     assert canonical.find(core.a_started_event("extension-one").event_id) is None

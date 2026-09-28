@@ -65,6 +65,8 @@ export type PendingLaunch = {
 
 export class AppState {
   private globalStream: GlobalStream | null = null;
+  // The history view that the loaded list belongs to; null until a reset names one.
+  private viewRevision: number | null = null;
   private globalRecovery: Promise<void> | null = null;
   private readonly streamRecovery = new StreamRecovery(() => {
     const signal = this.lifecycleSignal;
@@ -307,50 +309,60 @@ export class AppState {
     }
     this.globalStream?.close();
     this.connection = 'connecting';
-    this.globalStream = new GlobalStream(cursor, {
-      opened: () => {
-        this.streamRecovery.opened();
-        this.connection = 'connected';
-        this.audit.markStream('global', true);
-      },
-      disconnected: () => {
-        this.connection = 'disconnected';
-        this.audit.markStream('global', false);
-        this.streamRecovery.disconnected();
-      },
-      delta: (frame) => {
-        this.applyGlobalDelta(frame);
-      },
-      application: (application) => {
-        this.applicationStreamSequence += 1;
-        this.applyApplication(application);
-        this.applicationState = 'ready';
-      },
-      ready: (bootId) => {
-        if (this.bootId === null) {
-          this.bootId = bootId;
-          this.audit.record(null, 'hello', { boot: bootId });
-        } else if (this.bootId !== bootId) {
-          this.audit.record(null, 'stale', {
-            previous_boot: this.bootId,
-            next_boot: bootId,
-          });
-          void this.audit.flush();
-          this.bootId = bootId;
-          this.globalStream?.close();
+    this.globalStream = new GlobalStream(
+      { cursor, viewRevision: this.viewRevision },
+      {
+        opened: () => {
+          this.streamRecovery.opened();
+          this.connection = 'connected';
+          this.audit.markStream('global', true);
+        },
+        disconnected: () => {
+          this.connection = 'disconnected';
+          this.audit.markStream('global', false);
+          this.streamRecovery.disconnected();
+        },
+        delta: (frame) => {
+          this.applyGlobalDelta(frame);
+        },
+        application: (application) => {
+          this.applicationStreamSequence += 1;
+          this.applyApplication(application);
+          this.applicationState = 'ready';
+        },
+        ready: (bootId) => {
+          if (this.bootId === null) {
+            this.bootId = bootId;
+            this.audit.record(null, 'hello', { boot: bootId });
+          } else if (this.bootId !== bootId) {
+            this.audit.record(null, 'stale', {
+              previous_boot: this.bootId,
+              next_boot: bootId,
+            });
+            void this.audit.flush();
+            this.bootId = bootId;
+            this.globalStream?.close();
+            this.globalStream = null;
+            this.connection = 'connecting';
+            void this.reloadAndReconnect(signal);
+          }
+        },
+        reset: (viewRevision) => {
+          // A history switch rewrote rows that the list has.
+          this.viewRevision = viewRevision;
           this.globalStream = null;
           this.connection = 'connecting';
-          void this.recoverAfterRestart(signal);
-        }
+          void this.reloadAndReconnect(signal);
+        },
+        invalid: (error) => {
+          this.connection = 'disconnected';
+          this.audit.record(null, 'sse.invalid', {
+            stream: 'global',
+            error: error.message,
+          });
+        },
       },
-      invalid: (error) => {
-        this.connection = 'disconnected';
-        this.audit.record(null, 'sse.invalid', {
-          stream: 'global',
-          error: error.message,
-        });
-      },
-    });
+    );
     signal.addEventListener(
       'abort',
       () => {
@@ -361,7 +373,8 @@ export class AppState {
     );
   }
 
-  private async recoverAfterRestart(signal: AbortSignal): Promise<void> {
+  /** Read a new list and application, then reopen the stream from them. */
+  private async reloadAndReconnect(signal: AbortSignal): Promise<void> {
     await Promise.all([
       this.loadSessions(signal),
       this.loadApplication(signal),

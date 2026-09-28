@@ -3,7 +3,8 @@
 
 from harness.impl.codex.controls.dialog import OptionRow, rows
 
-FOOT = "enter to confirm"
+# codex-cli 0.144 wrote "Press enter to confirm"; 0.156 writes "enter select · esc back".
+FOOTS = ("enter to confirm", "enter select")
 HEAD = "Implement this plan?"
 
 
@@ -15,7 +16,7 @@ def picker_open(screen: str) -> bool:
 
     """
     visible_screen = screen or ""
-    return HEAD in visible_screen and FOOT in visible_screen
+    return HEAD in visible_screen and any(foot in visible_screen for foot in FOOTS)
 
 
 def _picker_region(screen: str) -> str:

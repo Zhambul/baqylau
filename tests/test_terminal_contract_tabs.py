@@ -45,7 +45,7 @@ def test_tab_launch_focus() -> None:
         assert ("--keep-focus" in launch) is expected
 
 
-def test_tab_launch_without_a_focus_answer_does_not_keep_focus() -> None:
+def test_tab_without_focus_answer_keeps_no_focus() -> None:
     """Verify an unreadable focus state degrades to not stealing focus."""
     remote = FakeRemote(tree=None, printed="7")
     kitty_plugin(remote).tabs.open_tab(TabOpenRequest("/work", ("claude",), ""))

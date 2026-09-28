@@ -12,6 +12,7 @@ export type {
   ContentReference,
   DirectoryRequest,
   DirectorySnapshot,
+  Diagnostic,
   EncodedDocument,
   EntryPageCursor,
   ExtensionScope,
@@ -36,9 +37,14 @@ export type {
   WorkspaceScope,
 } from './wire.js';
 export type {
+  CommandJob,
+  CommandJobState,
   ExtensionClient,
   ExtensionViewContext,
   ExtensionViewSnapshot,
+  FeedEntrySubject,
+  SettingsSaveResult,
+  ViewSettingsState,
   ExtensionWebModule,
   MountedExtensionView,
   ThemeValues,

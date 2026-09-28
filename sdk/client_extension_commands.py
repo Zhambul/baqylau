@@ -35,6 +35,6 @@ class ExtensionCommandsResource:
             f"/api/extensions/{extension_id}/commands/{command_id}",
             request,
             JOB_RESPONSE,
-            {HTTPStatus.OK},
+            {HTTPStatus.ACCEPTED},
         )
         return response

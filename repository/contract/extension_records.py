@@ -30,12 +30,16 @@ class ExtensionRecordChanges:
     next_cursor: int
 
 
-class ExtensionRecordRepository(Protocol):
-    """Capture feature-owned record keys, including explicit absent rows."""
+class RecordStateReader(Protocol):
+    """Capture feature-owned record keys of one generation, including explicit absent rows."""
 
     def record_states(self, keys: Sequence[records.RecordKey]) -> tuple[records.RecordState, ...]:
         """Return the captured states in the supplied key order."""
         ...
+
+
+class ExtensionRecordRepository(RecordStateReader, Protocol):
+    """Read the live generation's feature-owned records."""
 
     def record_page(
         self, owner: str, collection: str, scope: scopes.ExtensionScope, after_key: str, limit: int,

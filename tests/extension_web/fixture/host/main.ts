@@ -1,5 +1,6 @@
 import type { ExtensionViewSnapshot } from '@baqylau/extension-api';
 import { ExtensionViewHost } from '@baqylau/extension-api/host';
+import { offlineClient } from '../src/offline-client';
 
 function element(id: string): HTMLElement {
   const found = document.getElementById(id);
@@ -30,14 +31,7 @@ const host = new ExtensionViewHost({
   reportFailure: () => {
     element('failure').textContent = 'View failed.';
   },
-  createClient: (current) => ({
-    listExtensions: () =>
-      Promise.resolve({
-        catalog_revision: 1,
-        runtime_revision: current.runtimeRevision,
-        entries: [],
-      }),
-  }),
+  createClient: (current) => offlineClient(current.runtimeRevision),
 });
 const revisions = new URLSearchParams(location.search);
 

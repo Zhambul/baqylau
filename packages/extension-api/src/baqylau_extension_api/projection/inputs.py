@@ -4,7 +4,7 @@
 from baqylau_extension_api.errors import ExtensionContractError
 from baqylau_extension_api.manifest.data import ProcessingSelection
 from baqylau_extension_api.manifest.package import ExtensionManifest
-from baqylau_extension_api.models.canonical import CanonicalFact, CoreFact
+from baqylau_extension_api.models.canonical import fact_type
 from baqylau_extension_api.models.events import ExtensionFact
 from baqylau_extension_api.models.projections import ProjectionRequest, ProjectionSelectionRequest
 from baqylau_extension_api.operations import documents
@@ -48,7 +48,7 @@ def _validate_selection(
     selection = _selection(manifest, request)
     documents.validate_settings(manifest, request.binding.context.settings, schemas)
     for stored in request.events:
-        if _fact_type(stored.fact) not in selection.input_types:
+        if fact_type(stored.fact) not in selection.input_types:
             message = "projection fact type is not selected by this projector"
             raise ExtensionContractError(message)
         if isinstance(stored.fact, ExtensionFact):
@@ -65,7 +65,3 @@ def _selection(manifest: ExtensionManifest, request: ProjectionSelectionRequest)
             return selection
     message = "projector scope is not declared"
     raise ExtensionContractError(message)
-
-
-def _fact_type(fact: CanonicalFact) -> str:
-    return fact.payload.kind if isinstance(fact, CoreFact) else fact.event_type

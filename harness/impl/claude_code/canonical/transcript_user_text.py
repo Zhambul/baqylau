@@ -12,6 +12,8 @@ TEAM_MESSAGE = re.compile(r"^\s*<teammate-message\b([^>]*)>\s*(.*?)\s*</teammate
 TEAM_MESSAGE_BLOCK = re.compile(r"<teammate-message\b([^>]*)>\s*(.*?)\s*</teammate-message>", re.DOTALL)
 TEAMMATE_ID = re.compile(r'teammate_id="([^"]*)"')
 RECAP_HINT = re.compile(r"\s*\(disable recaps in /config\)\s*$")
+# Claude Code 2.1.x writes pasted text inside a tag that it adds itself.
+PASTED_CONTENT = re.compile(r'<pasted_content id="([^"]*)">\n?(.*?)\n?</pasted_content id="\1">', re.DOTALL)
 TEAM_WRAPPER = re.compile(r"^\s*Another Claude session sent a message:\s*<teammate-message\b")
 RESUMES_TURN = (re.compile(r"^\s*Stop hook feedback:"),)
 LEAD_TEAMMATE_ID = "team-lead"
@@ -58,6 +60,16 @@ def teammate_idle_notifications(text: str) -> tuple[records.TeammateIdleNotifica
         if header.type == "idle_notification":
             found.append(records.TeammateIdleNotificationDocument.model_validate_json(body))
     return tuple(found)
+
+
+def pasted_text(text: str) -> str:
+    """Replace each pasted block with the text that was pasted.
+
+    Returns:
+        The prompt as the person typed and pasted it.
+
+    """
+    return PASTED_CONTENT.sub(lambda match: match.group(2), text)
 
 
 def strip_recap_hint(text: str) -> str:

@@ -1,17 +1,28 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { expect, test as base } from '@playwright/test';
 
 type TestFixtures = {
+  /** Where an extension fixture server keeps its packages; a test may change them. */
+  packageRoot: string;
   fixtureBaseURL: string;
   fixtureModule: string;
   extensionReadOnly: boolean;
 };
 
 const repositoryRoot = fileURLToPath(new URL('../../../', import.meta.url));
+
+/**
+ * The fixture sessions' working directory: the checkout that runs the tests.
+ * In a linked worktree, the page shows the main checkout as the project
+ * directory, so a test that needs the session's own directory uses this.
+ */
+export const fixtureWorkingDirectory = repositoryRoot.replace(/\/$/, '');
 
 async function waitUntilHealthy(
   child: ChildProcess,
@@ -65,8 +76,17 @@ async function stop(child: ChildProcess, timeoutMs: number): Promise<boolean> {
 export const test = base.extend<TestFixtures>({
   fixtureModule: ['tests.frontend_fixture_server', { option: true }],
   extensionReadOnly: [false, { option: true }],
+  // eslint-disable-next-line no-empty-pattern -- Playwright requires the fixture argument.
+  packageRoot: async ({}, use) => {
+    const root = await mkdtemp(join(tmpdir(), 'baqylau-e2e-packages-'));
+    try {
+      await use(root);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
   fixtureBaseURL: async (
-    { browserName, fixtureModule, extensionReadOnly },
+    { browserName, fixtureModule, extensionReadOnly, packageRoot },
     use,
     testInfo,
   ) => {
@@ -88,6 +108,7 @@ export const test = base.extend<TestFixtures>({
         ...process.env,
         BAQYLAU_E2E_PORT: '0',
         BAQYLAU_E2E_EXTENSION_READ_ONLY: extensionReadOnly ? '1' : '0',
+        BAQYLAU_E2E_PACKAGES: packageRoot,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });

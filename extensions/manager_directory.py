@@ -25,6 +25,7 @@ def include_inactive(snapshot: RuntimeSnapshot, catalog: ExtensionCatalogSnapsho
     )
     return prepare_snapshot(
         snapshot.directory.catalog_revision, snapshot.directory.runtime_revision, (*snapshot.packages, *inactive),
+        snapshot.relations,
     )
 
 

@@ -71,8 +71,10 @@ async def _load_plugin(
 ) -> plugin.ProcessExtensionPlugin:
     ready = await rpc.call(methods.LOAD, request, TypeAdapter(worker_models.WorkerReady))
     _check_ready(request, ready)
-    caller = bridge.RpcBridge(rpc, asyncio.get_running_loop(), policy.request_seconds)
-    selected = capabilities.process_capabilities(selection.ProxySelection(ready.capabilities, caller))
+    loop = asyncio.get_running_loop()
+    caller = bridge.RpcBridge(rpc, loop, policy.request_seconds)
+    pure_caller = bridge.RpcBridge(rpc, loop, policy.pure_seconds)
+    selected = capabilities.process_capabilities(selection.ProxySelection(ready.capabilities, caller, pure_caller))
     return plugin.ProcessExtensionPlugin(ready.extension_info, selected)
 
 

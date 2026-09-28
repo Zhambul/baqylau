@@ -22,6 +22,8 @@ class GlobalFrameState:
     application: ApplicationPreferenceSnapshot
     application_revision: int
     heartbeat_at: float
+    view_revision: int | None = None
+    reset: bool = False
 
 
 @dataclass(frozen=True)

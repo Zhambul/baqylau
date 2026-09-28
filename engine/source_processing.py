@@ -2,40 +2,18 @@
 """Connect extension source work to native watches and its own deadline notice."""
 
 from collections.abc import Callable
-from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
 from core.input_events import InputEvents
 from core.input_paths import InputGroup, resolved_inputs
 from core.work_queue import WorkKind, WorkQueue
-from extensions.manager_contract import ExtensionRuntimeBoundary
-from extensions.processing_contract import ExtensionProcessing, ExtensionProcessingBatch
-from extensions.projection_pass import ProjectionPass
 from extensions.source_processing_contract import (
     ExtensionSourceBatch,
     ExtensionSourceWatches,
 )
 
 SOURCE_DEADLINE_KEY = "extension source deadline"
-
-
-@dataclass(frozen=True)
-class EngineExtensionServices(ExtensionProcessing):
-    """Group optional runtime publication and source processing for standalone engine consumers."""
-
-    runtime: ExtensionRuntimeBoundary | None = None
-    processing: ExtensionProcessing | None = None
-    projections: ProjectionPass | None = None
-
-    def capture_batch(self) -> AbstractContextManager[ExtensionProcessingBatch | None]:
-        """Keep the normal core-only engine path free from dummy extension services.
-
-        Returns:
-            The real retained runtime context, or an explicit absent source batch.
-
-        """
-        return nullcontext(None) if self.processing is None else self.processing.capture_batch()
 
 
 @dataclass(frozen=True)

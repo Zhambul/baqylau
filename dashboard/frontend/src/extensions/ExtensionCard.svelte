@@ -1,13 +1,22 @@
 <script lang="ts">
-  import type { ExtensionAction } from '../api/extensions';
+  import type {
+    ExtensionAction,
+    ExtensionHealth,
+    ExtensionOperation,
+  } from '../api/extensions';
+  import { formatRoute } from '../app/route';
   import type { ExtensionRow } from './catalog';
 
   let {
     row,
+    operations,
+    health,
     blocked,
     onpreview,
   }: {
     row: ExtensionRow;
+    operations: readonly ExtensionOperation[];
+    health: ExtensionHealth | null;
     blocked: boolean;
     onpreview: (
       owner: string,
@@ -84,6 +93,37 @@
       The source package is not in the current catalog. Saved state is retained.
     </p>
   {/if}
+  {#if health !== null && health.state !== 'healthy'}
+    <p class="failure" role="status">
+      {health.state === 'failed'
+        ? 'Disabled after repeated failures'
+        : 'Failing'}: {health.consecutive_failures} consecutive failed calls, last
+      in {health.last_failure_where ?? 'an unknown stage'}.
+    </p>
+  {/if}
+  {#if operations.length > 0}
+    <details>
+      <summary>Recent operations</summary>
+      <ol class="operations">
+        {#each operations as operation (operation.operation_id)}
+          <li>
+            <span>{operation.kind}</span>
+            <span class:failed={operation.status !== 'succeeded'}
+              >{operation.status}</span
+            >
+            <time datetime={new Date(operation.updated_at * 1000).toISOString()}
+              >{new Date(operation.updated_at * 1000).toLocaleString()}</time
+            >
+            {#if operation.failure !== null}
+              <p class="failure">
+                {operation.failure.code}: {operation.failure.detail}
+              </p>
+            {/if}
+          </li>
+        {/each}
+      </ol>
+    </details>
+  {/if}
   {#if row.owner !== null}
     <div class="actions">
       {#if row.activeVersion === null}
@@ -115,11 +155,30 @@
           }}>Disable</button
         >
       {/if}
+      <a
+        href={formatRoute({
+          kind: 'extension-settings',
+          extensionId: row.owner,
+        })}>Settings</a
+      >
     </div>
   {/if}
 </article>
 
 <style>
+  .operations {
+    margin: 6px 0 0;
+    padding-left: 18px;
+  }
+  .operations li {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .operations .failed {
+    color: var(--err, #e06c75);
+  }
+
   article {
     padding: 20px;
     border-radius: var(--r);

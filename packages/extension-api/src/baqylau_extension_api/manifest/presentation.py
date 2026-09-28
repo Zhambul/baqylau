@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Zhambyl Yermagambet
 """Validate view slots and immutable asset references."""
 
+from baqylau_extension_api.core.entry_registry import CORE_ENTRY_MODELS
 from baqylau_extension_api.errors import ExtensionContractError
 from baqylau_extension_api.manifest import rules
 from baqylau_extension_api.manifest.metadata import PackageAsset
@@ -17,6 +18,19 @@ def validate_views(manifest: ExtensionManifest) -> None:
         rules.require_unique(view.scopes, "view scopes")
     for web_view in manifest.contributions.web:
         _validate_web_view(web_view, manifest)
+    for terminal_view in manifest.contributions.terminal:
+        _validate_view_query(terminal_view, manifest)
+
+
+def _validate_view_query(view: TerminalView, manifest: ExtensionManifest) -> None:
+    if view.query is None:
+        return
+    view_scopes = frozenset(view.scopes)
+    for query in manifest.contributions.queries:
+        if query.name == view.query and view_scopes <= frozenset(query.scopes):
+            return
+    message = "a terminal view query must be a declared query for every view scope"
+    raise ExtensionContractError(message)
 
 
 def _validate_web_view(view: WebView, manifest: ExtensionManifest) -> None:
@@ -27,6 +41,10 @@ def _validate_web_view(view: WebView, manifest: ExtensionManifest) -> None:
     valid_target = view.slot == "feed" and view.target is not None
     if view.mode == "replace" and not valid_target:
         message = "replacement views require a named feed target"
+        raise ExtensionContractError(message)
+    own_entries = {definition.name for definition in manifest.contributions.entry_types}
+    if view.mode == "replace" and view.target not in CORE_ENTRY_MODELS.keys() | own_entries:
+        message = "a feed replacement target must be a core entry kind or an entry type of the package"
         raise ExtensionContractError(message)
     if view.slot == "settings" and manifest.settings is None:
         message = "settings views require a settings definition"

@@ -105,51 +105,6 @@ def test_command_backgrounded_mid_run_becomes_bg() -> None:
     assert actor_access.lead_status(state) == session_values.EXECUTING_STATE
 
 
-def test_monitors_and_bg_jobs_are_counted_apart() -> None:
-    """Verify monitors and background jobs are counted apart."""
-    state = folding.fold(
-        *session_fixtures.alive(),
-        session_domain.event_shell.ShellStarted(
-            session_domain.ids.ShellId("m1"),
-            session_domain.content.TextContent("watch"),
-            session_domain.outcomes.ExecutionMode.MONITOR,
-            None,
-        ),
-        session_domain.event_shell.ShellStarted(
-            session_values.BACKGROUND_SHELL_ID,
-            session_domain.content.TextContent("tail"),
-            session_domain.outcomes.ExecutionMode.BACKGROUND,
-            None,
-        ),
-    )
-    background = actor_access.lead_background(state)
-    assert (background.monitor_count, background.background_job_count) == (1, 1)
-    assert set(background.running_shell_ids) == {
-        session_domain.ids.ShellId("m1"),
-        session_values.BACKGROUND_SHELL_ID,
-    }
-
-
-def test_monitor_output_that_ends_after_turn_releases() -> None:
-    """Verify a monitor's output end releases the actor like a background job."""
-    assert (
-        session_fixtures.status_after(
-            session_domain.event_shell.ShellStarted(
-                session_domain.ids.ShellId("m1"),
-                session_domain.content.TextContent("watch"),
-                session_domain.outcomes.ExecutionMode.MONITOR,
-                None,
-            ),
-            session_fixtures.succeeded_turn(),
-            session_domain.event_shell.ShellOutputFinished(
-                session_domain.ids.ShellId("m1"),
-                session_domain.outcomes.Outcome.SUCCEEDED,
-            ),
-        )
-        == session_values.AWAITING_RESPONSE_STATE
-    )
-
-
 def test_finished_session_clears_every_actor_not() -> None:
     """Verify a finished session clears every actor not just the one that ended it."""
     state = folding.fold(

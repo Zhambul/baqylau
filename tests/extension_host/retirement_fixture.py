@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 from baqylau_extension_api.contracts.lifecycle import ExtensionLifecycle
 from baqylau_extension_api.contracts.plugin import ExtensionCapabilities, ExtensionPlugin
 from baqylau_extension_api.models import lifecycle
+from baqylau_extension_api.runtime.models import ExtensionTransportError
 
 from extensions.registry_package import RegistryPackage
 from extensions.registry_snapshot import RuntimeSnapshot
@@ -20,6 +21,7 @@ class RetirementProbe(ExtensionPlugin, ExtensionLifecycle, PreparedExtensionRunt
     package: RegistryPackage
     stop_reply: lifecycle.DeactivationResult | None = None
     fail_stop: bool = False
+    lost_transport: bool = False
     fail_close: bool = False
     close_count: int = 0
     stop_count: int = 0
@@ -57,10 +59,14 @@ class RetirementProbe(ExtensionPlugin, ExtensionLifecycle, PreparedExtensionRunt
             The configured reply or normal acknowledgement.
 
         Raises:
+            ExtensionTransportError: If the test selects a lost worker transport.
             RuntimeError: If the test selects a failed lifecycle call.
 
         """
         self.stop_count += 1
+        if self.lost_transport:
+            message = "test worker transport is closed"
+            raise ExtensionTransportError(message)
         if self.fail_stop:
             message = "test deactivation failed"
             raise RuntimeError(message)

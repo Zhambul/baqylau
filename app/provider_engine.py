@@ -6,18 +6,20 @@ from typing import Annotated
 from fastapi import Depends
 
 from app import (
+    provider_extension_executor,
+    provider_extension_health,
+    provider_extension_passes,
     provider_extension_runtime,
     provider_extension_sources,
     provider_interpreter,
-    provider_projections,
     provider_reaction_loop,
     provider_runtime,
 )
 from app.injection import singleton
 from app.provider_work_queue import EngineWork
+from engine.extension_services import EngineExtensionServices
 from engine.interpret.loop import Interpreter
 from engine.react.loop import ReactionLoop
-from engine.source_processing import EngineExtensionServices
 from engine.worker import EngineWorker
 
 
@@ -25,15 +27,20 @@ from engine.worker import EngineWorker
 def engine_extensions(
     runtime: provider_extension_runtime.Runtime,
     sources: provider_extension_sources.Processing,
-    projections: provider_projections.Projections,
+    passes: provider_extension_passes.Passes,
+    jobs: provider_extension_executor.JobSchedulerDep,
+    health: provider_extension_health.Health,
 ) -> EngineExtensionServices:
     """Group the daemon's optional extension boundaries.
 
     Returns:
-        Runtime publication, source processing, and projection owned by this application.
+        Runtime publication, source processing, projection, observation, and job scheduling.
 
     """
-    return EngineExtensionServices(runtime.manager, sources, projections)
+    return EngineExtensionServices(
+        runtime.manager, sources, passes.projections, passes.observers, jobs, passes.rebuilds, passes.histories,
+        health,
+    )
 
 
 ExtensionServices = Annotated[EngineExtensionServices, Depends(engine_extensions)]

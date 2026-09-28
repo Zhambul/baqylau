@@ -8,6 +8,7 @@ from tests.extension_host import (
     lifecycle_daemon_checks as checks,
     lifecycle_daemon_fixture as fixture,
     process_fixture,
+    public_audit_checks as audit,
 )
 
 DROP_BEHAVIOR = "drop"
@@ -105,6 +106,8 @@ def test_invalid_reply_keeps_required_facts(tmp_path: Path, runtime_wheels: Path
         commit = checks.only_journal(case)
         assert checks.fact_kinds(commit) == UNCHANGED_KINDS
         assert checks.failed_step(commit).reply is not None
+        failure = audit.public_step(client, case, "canonical")
+        assert (failure.outcome, failure.diagnostic_code) == ("failed", "processing_call_failed")
 
 
 def test_restart_keeps_stored_journal(tmp_path: Path, runtime_wheels: Path) -> None:

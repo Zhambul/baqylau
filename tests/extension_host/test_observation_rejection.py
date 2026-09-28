@@ -8,7 +8,7 @@ from baqylau_extension_api.errors import ExtensionContractError
 
 from extensions.models.lifecycle_state import ManagerClaim
 from repository.errors import EventIdentityConflictError
-from tests import sqlite_migration_fixture as snapshots
+from tests import sqlite_migration_fixture as snapshots, storage_reads
 from tests.extension_api import source_samples
 from tests.extension_host import observation_fixture as fixtures, observation_requests as requests
 
@@ -21,7 +21,7 @@ def test_wrong_runtime_identity_is_rejected(tmp_path: Path, field: str) -> None:
     case = fixtures.installed(tmp_path)
     before = snapshots.snapshot(case.store.database)
     with pytest.raises(ValueError, match=r"committed runtime|not enabled"):
-        case.store.append_observations(case.request.model_copy(update={field: "wrong"}))
+        storage_reads.append_observations(case.store, case.request.model_copy(update={field: "wrong"}))
     assert snapshots.snapshot(case.store.database) == before
 
 
@@ -33,7 +33,7 @@ def test_old_manager_cannot_append_after_claim(tmp_path: Path) -> None:
         expected_revision=state.revision, manager_id="new-manager", claimed_at=LATER_TIME,
     )).accepted
     with pytest.raises(ValueError, match="committed runtime"):
-        case.store.append_observations(case.request)
+        storage_reads.append_observations(case.store, case.request)
     assert not case.store.pending_observations(10)
 
 
@@ -42,31 +42,31 @@ def test_undeclared_document_shape_is_rejected(tmp_path: Path, encoded: str) -> 
     """The retained source schema checks content before any raw row is written."""
     case = fixtures.installed(tmp_path)
     with pytest.raises(ExtensionContractError):
-        case.store.append_observations(requests.document(case.request, encoded))
+        storage_reads.append_observations(case.store, requests.document(case.request, encoded))
     assert not case.store.pending_observations(10)
 
 
 def test_changed_original_bytes_are_rejected(tmp_path: Path) -> None:
     """Even a whitespace-only document change cannot replace the original bytes."""
     case = fixtures.installed(tmp_path)
-    accepted = case.store.append_observations(case.request).accepted
+    accepted = storage_reads.append_observations(case.store, case.request).accepted
     encoded = f"{source_samples.first_document(source_samples.batch())}\n"
     with pytest.raises(EventIdentityConflictError):
-        case.store.append_observations(requests.document(case.request, encoded))
+        storage_reads.append_observations(case.store, requests.document(case.request, encoded))
     assert case.store.pending_observations(10) == accepted
 
 
 def test_late_conflict_rolls_back_earlier_input(tmp_path: Path) -> None:
     """A conflict in the second input cannot retain the first input or its cursor."""
     case = fixtures.installed(tmp_path)
-    case.store.append_observations(case.request)
+    storage_reads.append_observations(case.store, case.request)
     before = snapshots.snapshot(case.store.database)
     changed = requests.document(case.request, '"changed"')
     request = case.request.model_copy(update={"observations": (
         *requests.new_key(case.request, "new").observations, *changed.observations,
     )})
     with pytest.raises(EventIdentityConflictError):
-        case.store.append_observations(request)
+        storage_reads.append_observations(case.store, request)
     assert snapshots.snapshot(case.store.database) == before
 
 
@@ -77,5 +77,5 @@ def test_unknown_parent_rolls_back_whole_append(tmp_path: Path) -> None:
     observations = (*case.request.observations, *invalid.observations)
     request = case.request.model_copy(update={"observations": observations})
     with pytest.raises(ValueError, match="cause is not recorded"):
-        case.store.append_observations(request)
+        storage_reads.append_observations(case.store, request)
     assert not case.store.pending_observations(10)

@@ -99,6 +99,15 @@ class _SessionSnapshotIdentity(_SessionSnapshotData):
 class _SessionSnapshotEntries(_SessionSnapshotData):
     """Provide snapshot entry queries."""
 
+    @property
+    def entry_cursor(self) -> int:
+        """The newest entry cursor, or 0.
+
+        Entry cursors are their own counter, so a mark that is later compared
+        with an entry cursor must come from here and not from `cursor`.
+        """
+        return max((entry.cursor for entry in self.entries), default=0)
+
     def messages(
         self,
         *,

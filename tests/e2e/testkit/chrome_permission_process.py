@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -17,7 +18,6 @@ from tests.harness_names import CLAUDE_CODE_HARNESS
 if TYPE_CHECKING:
     import pytest
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 FAKE_CLAUDE = Path(__file__).resolve().parents[1] / "fixtures" / "fake_claude_chrome.py"
 EXECUTABLE_FILE_MODE = 0o755
 
@@ -43,7 +43,8 @@ class ChromeApplicationFactory:
 
     def _write_claude_wrapper(self) -> Path:
         wrapper = self.temporary_path / "claude"
-        python_executable = REPOSITORY_ROOT / ".venv" / "bin" / "python"
+        # The test interpreter, as a checkout can use a venv outside itself.
+        python_executable = sys.executable
         wrapper.write_text(
             f'#!/bin/zsh\nexec -a claude {shlex.quote(str(python_executable))} '
             f'{shlex.quote(str(FAKE_CLAUDE))} "$@"\n',

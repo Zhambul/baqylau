@@ -22,7 +22,7 @@ Read [quality](../quality.md), [protocols](../protocols.md), current `Makefile`,
 
 ### P02-T01 — Build installable API artifacts
 
-Status: in_progress
+Status: done
 
 Owner: Codex
 
@@ -39,6 +39,8 @@ Code areas: Proposed `packages/extension-api/`, `packages/extension-api-web/`, h
 Verification: Install artifacts in clean environments. Import every public symbol and type-check a small extension. List artifact contents and reject private host packages. Check package metadata and dependency consistency.
 
 Evidence: The Python SDK wheel and its isolated worker checks are recorded in P01. The web SDK artifact contains generated wire declarations, the view contract, and the generic view loader. A clean external package imports only the installed SDK and tools. Artifact contents, hashes, and tests are recorded below. The API is still a draft; complete capability exports and release metadata remain open.
+
+Status result (2026-09-25): Capability exports are complete: all 12 capability protocols are public modules under `baqylau_extension_api.contracts`, and `tests/extension_api/test_public_roots.py` checks the public roots that external packages use. Release metadata: the three Python packages declare authors and classifiers (alpha, Python 3.12, typed), and the two npm packages declare their author. `tests/extension_api/test_release_artifacts.py` builds the SDK, test kit, and policy wheels and requires that each one contains only its own package, its `py.typed` marker, and its metadata, with no host module. License, decided when the user said to resolve it (2026-09-25): proprietary, all rights reserved (`LICENSE`). The three Python packages declare `license = "LicenseRef-Proprietary"` (PEP 639), and the two npm packages declare `"license": "UNLICENSED"`. This states the terms that were already true without a license, and it gives no new permission. An open-source license can replace it later.
 
 ### P02-T02 — Extract the Python quality policy
 
@@ -62,7 +64,7 @@ Evidence: `packages/dev-tools/` builds `baqylau-dev` with the common rule resour
 
 ### P02-T03 — Extract the frontend quality policy
 
-Status: in_progress
+Status: done
 
 Owner: Codex
 
@@ -80,9 +82,11 @@ Verification: Compare effective rule and compiler settings. Run the existing fro
 
 Evidence: `packages/dev-tools-web/` owns the shared ESLint, TypeScript, Prettier, and coverage rules. The dashboard and web SDK use them. Effective dashboard ESLint rules, globals, parser options, and both TypeScript compiler configurations match the pre-extraction values. Host and SDK gates pass. The external Svelte package uses the installed shared exports. Knip and test profile factories, complete tool pin policy, deliberate violation tests, and the parity runner remain open.
 
+Status result (2026-09-25): The remaining items are done. Factories: `@baqylau/dev-tools/knip` (`knipConfig`) and `@baqylau/dev-tools/vitest` (`testProfile`, with the shared provider, reporters, and thresholds); the dashboard and the web SDK use them (`knip.config.ts`, `vite.config.ts`), and their own lists stay local. Tool pins: `@baqylau/dev-tools/pins` names the exact version of each quality tool, and `baqylau-dev-tools-pins` in each `lint` script (dashboard, web SDK, and the external fixture package) refuses another version. npm peer dependencies were tried first; npm 10.9 fails with an internal resolver error (`#loadPeerSet`) for a linked or local install of any package with peers, so they are not used. Violation tests and parity: `packages/dev-tools-web/test/` is a private consumer package; `make test-dev-tools-web` (part of `make test-frontend`) runs 13 checks: a clean sample passes ESLint, svelte-check, Knip, Prettier, and coverage; an explicit `any`, a Svelte prop of the wrong type, an unused export, bad formatting, and coverage below the thresholds each fail; the dashboard keeps every shared ESLint rule (it adds only its import boundary) and every shared TypeScript option; and the pin check names another version. C26: the external view package, installed from the built tarballs, passes format, types, lint with the pin check, unit, and browser checks (`npm run test:external`). That run also found that the fixture's two client stubs had only `listExtensions`; they now use one offline client with every method.
+
 ### P02-T04 — Reuse architecture and dynamic-entry checks
 
-Status: in_progress
+Status: done
 
 Owner: Codex
 
@@ -100,9 +104,20 @@ Verification: C27 rejects wrong protocol signatures, undeclared implementations,
 
 Evidence: The first Python subset is implemented. Host and external checks share protocol parameter rules. The external runner validates backend manifests, source roots, imports, factory types, and SDK protocol implementations before it filters exact Vulture locations. The fixture owns a worker E2E case. See the 2026-09-15 work record below. Complete local protocol rules, schema and I/O boundaries, peer public contracts, test coverage declarations, and frontend dynamic entries remain open.
 
+Status result (2026-09-25): The remaining items, one by one:
+
+- Source and command I/O placement (new): `baqylau_dev/io_checks.py` refuses a process module (`subprocess`, `multiprocessing`, `pty`) anywhere in extension source, because programs run through the host process service with declared bounds, and refuses a network module in a module that declares a pure capability (transforms, translation, projection, presentation, migration), which runs on the engine thread. `tests/dev_tools/test_io_placement.py`.
+- Nested configuration (new): the extension profile refused rule files only at the package root; a tool reads the nearest configuration, so a nested `ruff.toml` or `setup.cfg`, or a nested `pyproject.toml` with tool rules, changed the rules of its folder. `parity.py` now searches the package tree and skips installed, built, and hidden folders. `tests/dev_tools/test_nested_rules.py`.
+- Default methods (new): a protocol method with a body is a default method, which an implementation inherits, so it is not a required member (`protocol_catalog.required_methods`); the SDK's protocols have none today. `tests/dev_tools/test_protocol_defaults.py`.
+- Frontend manifest entries and Knip (new): `knipConfig({ root, manifest })` adds the web view modules that `extension.json` declares as source; a module in `dist/` is a build output. Two checks in `make test-dev-tools-web`.
+- Test surface and harness coverage: the kit runner refuses a package whose E2E cases do not cover its declared surfaces and harnesses (P08-T02, `baqylau_extension_testkit.coverage`).
+- Peer public contracts: the manifest refuses a peer schema reference or a consumed service without a declared dependency (SDK manifest validation).
+- Typed documents and schema boundaries: every document is checked against its declared schema before it crosses a boundary (SDK validators), and pydantic document fields are dead-code entries (`model_fields.py`).
+- Package-defined protocols: a package's own `Protocol` is structural typing inside the package, and the dead-code gate follows its methods by name; requiring explicit bases for it, as for the SDK protocols, would refuse valid local typing, so it is not added.
+
 ### P02-T05 — Provide the extension template and gate runner
 
-Status: in_progress
+Status: done
 
 Owner: Codex
 
@@ -119,6 +134,12 @@ Code areas: Proposed SDK template assets and shared gate runners; extension-loca
 Verification: Build a fresh package in a temporary repository. Remove host import paths and aliases. Run available quality and unit gates. Test browser and E2E dispatch with controlled fixture commands; do not report those as integration results. Change a pinned tool or lower a rule and require the parity gate to fail. Backend-only and web-only profiles still check all source that is present.
 
 Evidence: The installed Python runner now provides parity, type, dead-code, WPS, Ruff, and unit commands. An external Python quality fixture proves success and deliberate failure through those commands. It is not the full extension template. Verified dynamic entries, backend and view templates, frontend dispatch, E2E dispatch, and full source-inventory checks remain open.
+
+Evidence added (2026-09-25): `python -m baqylau_dev new` writes a package from template files in the `baqylau-dev` wheel (`templates.py`, `template_manifest.py`, `template_declarations.py`, `template_parts.py`, `template/`). The manifest is built and checked with the SDK's own models. The package has a backend with a greeting query, optional web and terminal views, a unit test, one kit E2E case whose surfaces follow the chosen parts, and thin `make lint`, `make test`, and `make e2e` wrappers. The web profile adds npm wrappers (`make lint-web`): a JSDoc type check against `@baqylau/extension-api`, ESLint with the shared rules, the tool pin check, and Prettier. There is no bundler, so the committed module is the digested module. Verification:
+- `tests/dev_tools/test_template.py`: the backend-only package and the package with both views pass the shared Python gates and their unit tests. There is no host path. A package that adds a Ruff ignore, or names another policy release, fails the parity gate. The command refuses a directory that has files.
+- `tests/extension_testkit/test_template_package.py`: a package with both views passes its own case through the installed kit runner, with an isolated interpreter and only `BAQYLAU_HOST_EXECUTABLE` and `BAQYLAU_SDK_WHEEL` from the host. The coverage check finds the worker, API, web, and terminal surfaces.
+- `make release-artifacts && make test-template-web`: the web profile installs the two npm release tarballs offline and passes `lint-web`. A changed ESLint pin fails the pin check, and a wrong context field fails the type check (manual runs in a generated package). Each consumer target runs in a new temporary directory outside the checkout.
+The browser and terminal checks of the E2E case run through the kit. `-m kitty` real-window runs still need approval, so the terminal surface here uses the kit's terminal view read, not a real Kitty window. The extension CI template is in P02-T06.
 
 ### P02-T06 — Prove host parity and package release metadata
 
@@ -141,6 +162,14 @@ Verification: Run `make lint` and the current host `make test` path on a support
 Evidence: The root frontend gates now include the web SDK checks, generated-type drift check, and shared coverage thresholds. CI installs and builds the shared tooling package before the dashboard and caches all three lockfiles. Local gates pass. No remote CI result, policy digest report, external artifact CI job, or complete P02 release proof is recorded yet.
 
 Evidence added: The Python runner reports the policy version, digest, and all eight installed tool pins. CI now invokes `make policy-check` after dependency installation. Local host and clean-wheel reports have the same digest. No remote CI result or full extension release report is claimed.
+
+Evidence added (2026-09-25): The external artifact CI job is in `.github/workflows/test.yml` (`release`). It runs after the `test` job on Linux, so the host gates and their order in `test` do not change. It builds `dist/release`, runs `make test-release-consumers`, and keeps `dist/release` as an artifact of the run for 14 days. This is not a publication. `make test-release-consumers` does these steps:
+- It installs only the three wheels in a clean environment.
+- It writes a new package there, and requires that its `baqylau_dev report` is the same as the host's `policy-report.txt` (policy SHA-256 and all eight tool pins).
+- It runs the package's Python gates and unit test.
+- It runs `make test-template-web` (a new web package installs the two tarballs and passes `lint-web`) and C26 (`npm run test:external`, including Chromium and WebKit).
+Each step is a separate Make command, so any failed gate fails the job. The local run passes. The Python and JS Playwright pins are recorded separately in `release.md`, and `release.md` also defines how maintained packages move to a new policy release. Live tests that need a separate runner: real Kitty E2E (`pytest -m kitty`, a macOS runner with Kitty and remote control) and the live harness and adapters checks (a configured live environment). Neither runs in CI.
+Open: a remote CI result. It needs a push, which is the user's decision. The workflow was checked only as parsed YAML and by running its Make targets locally.
 
 ## Work record — independent web package
 

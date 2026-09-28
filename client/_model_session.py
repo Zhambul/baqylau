@@ -28,6 +28,8 @@ class SessionModel(_SessionModelIngress, _SessionModelActors, _SessionModelFeed)
 
     def __init__(self) -> None:
         self.cursor = 0
+        # The highest entry row: a projection commits some entries after their fact's cursor.
+        self.entry_cursor = 0
         self.session = SessionRecord()
         self.actors: dict[str, ActorRecord] = {}
         self.live = False

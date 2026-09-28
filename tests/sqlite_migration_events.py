@@ -7,7 +7,11 @@ from domain.records import RecordedTranslationDecision
 from harness.models.raw_events import TranslationResult
 from repository.impl.sqlite import canonical_events, raw_event_audits, raw_events, sessions, shell_output
 from repository.impl.sqlite.connection import SqliteDatabase
-from tests import sqlite_migration_fixture as fixtures, sqlite_test_fixtures as events, sqlite_test_migrations
+from tests import (
+    sqlite_migration_fixture as fixtures,
+    sqlite_test_fixtures as events,
+    sqlite_test_migrations,
+)
 
 RAW_BYTES = fixtures.SOURCE_BYTES * 1000
 
@@ -40,7 +44,13 @@ def require_original(database: SqliteDatabase) -> None:
     assert raw.find(original.raw_event_id) == replace(original, payload=RAW_BYTES)
     assert raw.unverdicted(10) == (events.a_raw_event("pending", "4"),)
     assert raw.latest_positions((original.source_identity,)) == {original.source_identity: "4"}
-    accepted = canonical_events.SqliteCanonicalEventRepository(database).page_from(0, 10)
-    assert len(accepted) == 1 and accepted[0].cursor == 1
+    _require_accepted(database)
     audit = raw_event_audits.SqliteRawEventAuditRepository(database).audit(original.raw_event_id)
     assert audit is not None and audit.interpretation is not None
+
+
+def _require_accepted(database: SqliteDatabase) -> None:
+    canonical = canonical_events.SqliteCanonicalEventRepository(database)
+    accepted = canonical.find(events.a_started_event().event_id)
+    assert canonical.session_ids() == (events.SESSION,)
+    assert accepted is not None and accepted.cursor == 1

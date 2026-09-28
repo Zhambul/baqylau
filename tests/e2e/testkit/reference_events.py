@@ -40,6 +40,8 @@ class StreamCheckpointRef:
     session: SessionRef
     session_cursor: int
     global_cursor: int
+    # Entries have their own cursor, so a newer entry is compared with this one.
+    entry_cursor: int = 0
 
 
 @dataclass(frozen=True)

@@ -1,0 +1,16 @@
+# Thin wrappers around the installed shared tools; the rules come from baqylau-dev.
+PY ?= python
+
+.PHONY: lint test e2e${web_phony}
+
+lint:${web_lint}
+	$$(PY) -m baqylau_dev check --gate lint
+
+test:
+	$$(PY) -m pytest --ignore=tests/e2e
+
+# The kit runner checks that the declared cases cover the package, then runs them.
+# It needs BAQYLAU_HOST_EXECUTABLE (the installed host) and BAQYLAU_SDK_WHEEL (the built SDK wheel).
+e2e:
+	$$(PY) -m baqylau_extension_testkit.runner .
+${web_targets}

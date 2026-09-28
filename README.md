@@ -88,6 +88,9 @@ Everything activates automatically per session — the mirror opens on
 # Mirror pane
 .venv/bin/python client/terminal_keys.py toggle|grow|shrink|reset|setpct <N>
 
+# Extension views: choose one for this window and open it in a pane (kitty overlay)
+# map ctrl+shift+e launch --type=overlay .venv/bin/python client/terminal_extension_selector.py 127.0.0.1 8377
+
 # Smoke-test the tab colors (~3s each)
 for s in idle thinking working executing awaiting-bg awaiting-command awaiting-response; do
   ./bin/claude-tab-status.py "$s"; ping -c 4 127.0.0.1 >/dev/null

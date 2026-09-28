@@ -3,21 +3,21 @@
 
 import sqlite3
 import time
-from typing import cast
 
 from baqylau_extension_api.models.scopes import ExtensionScope
 from pydantic import TypeAdapter
 
+from domain.extension_jobs import JobKind, JobState
+from domain.ids import CanonicalEventId, ExtensionJobId
 from repository.contract.extension_jobs import (
     CommandJobRequest,
     ExtensionJob,
-    JobKind,
-    JobState,
     JobStateChange,
     ObserverJobRequest,
 )
 from repository.impl.sqlite import connection
 
+_OPEN_JOBS_SQL = "SELECT COUNT(*) FROM extension_jobs WHERE state IN ('accepted', 'running') AND owner=?"
 _SCOPE_ADAPTER: TypeAdapter[ExtensionScope] = TypeAdapter(ExtensionScope)
 _SELECT_JOB_SQL = "SELECT * FROM extension_jobs WHERE owner=? AND scope=? AND job_id=?"
 _SELECT_COMMAND_SQL = (
@@ -32,9 +32,11 @@ _INSERT_SQL = (
     "VALUES(?, ?, ?, ?, ?, ?, 'accepted', 1, ?, ?, ?, ?, ?)"
 )
 _UPDATE_SQL = (
-    "UPDATE extension_jobs SET state=?, revision=revision+1, result=?, diagnostic=?, updated_at=? "
+    "UPDATE extension_jobs SET state=?, revision=revision+1, result=?, diagnostic=?, updated_at=?, "
+    "binding=COALESCE(?, binding), request=COALESCE(?, request) "
     "WHERE owner=? AND scope=? AND job_id=? AND revision=?"
 )
+_STATE_SQL = "SELECT * FROM extension_jobs WHERE state=? ORDER BY updated_at, job_id LIMIT ?"
 STALE_MESSAGE = "extension job changed since it was read"
 
 
@@ -45,25 +47,27 @@ class SqliteExtensionJobRepository:
         """Store the database handle."""
         self.database = database
 
-    def accept_command(self, job: CommandJobRequest) -> ExtensionJob:
+    def accept_command(self, command_job_request: CommandJobRequest) -> ExtensionJob:
         """Store one command, returning the existing job for a repeated request key.
 
         Returns:
             The accepted or already accepted command job.
 
         """
-        return self._accept(job, "command")
+        with self.database.write() as connection_handle:
+            return accept_command(connection_handle, command_job_request)
 
-    def accept_observer(self, job: ObserverJobRequest) -> ExtensionJob:
+    def accept_observer(self, observer_job_request: ObserverJobRequest) -> ExtensionJob:
         """Store one observer job with its cause and consumer cursor.
 
         Returns:
             The accepted or already accepted observer job.
 
         """
-        return self._accept(job, "observer")
+        with self.database.write() as connection_handle:
+            return accept_observer(connection_handle, observer_job_request)
 
-    def read(self, owner: str, scope: ExtensionScope, job_id: str) -> ExtensionJob | None:
+    def read(self, owner: str, scope: ExtensionScope, job_id: ExtensionJobId) -> ExtensionJob | None:
         """Return one stored job, or None when it does not exist.
 
         Returns:
@@ -76,79 +80,131 @@ class SqliteExtensionJobRepository:
             ).fetchone()
         return None if row is None else _job(row)
 
-    def update_state(self, change: JobStateChange) -> ExtensionJob:
+    def jobs_in_state(self, job_state: JobState, limit: int) -> tuple[ExtensionJob, ...]:
+        """Return the oldest jobs in one state, for recovery and scheduling.
+
+        Returns:
+            At most the limit, oldest update first.
+
+        """
+        with self.database.read() as connection_handle:
+            rows = connection_handle.execute(_STATE_SQL, (job_state, limit)).fetchall()
+        return tuple(_job(row) for row in rows)
+
+    def open_jobs(self, owner: str) -> int:
+        """Count the owner's open jobs through the state index.
+
+        Returns:
+            The accepted and running jobs of the owner.
+
+        """
+        with self.database.read() as connection_handle:
+            return int(connection_handle.execute(_OPEN_JOBS_SQL, (owner,)).fetchone()[0])
+
+    def update_state(self, job_state_change: JobStateChange) -> ExtensionJob:
         """Advance one job when its revision still matches.
 
         Returns:
             The stored job after the change.
 
-        Raises:
-            ValueError: If the stored revision no longer matches.
-
         """
-        scope_text = change.scope.model_dump_json()
         with self.database.write() as connection_handle:
-            cursor = connection_handle.execute(_UPDATE_SQL, (
-                change.state,
-                change.result,
-                change.diagnostic,
-                time.time(),
-                change.owner,
-                scope_text,
-                change.job_id,
-                change.expected_revision,
-            ))
-            if cursor.rowcount != 1:
-                raise ValueError(STALE_MESSAGE)
-            row = connection_handle.execute(
-                _SELECT_JOB_SQL, (change.owner, scope_text, change.job_id),
-            ).fetchone()
-        assert row is not None  # noqa: S101 -- The update just matched the primary key.
-        return _job(row)
-
-    def _accept(self, job: CommandJobRequest | ObserverJobRequest, kind: JobKind) -> ExtensionJob:
-        request_key = job.request_key if isinstance(job, CommandJobRequest) else None
-        cause_event_id = job.cause_event_id if isinstance(job, ObserverJobRequest) else None
-        consumer_cursor = job.consumer_cursor if isinstance(job, ObserverJobRequest) else None
-        scope_text = job.scope.model_dump_json()
-        with self.database.write() as connection_handle:
-            identity = (kind, request_key, cause_event_id)
-            existing = _existing(connection_handle, job.owner, scope_text, identity)
-            if existing is not None:
-                return _job(existing)
-            now = time.time()
-            connection_handle.execute(_INSERT_SQL, (
-                job.owner, scope_text, job.job_id, kind, request_key, cause_event_id,
-                job.binding, job.request, consumer_cursor, now, now,
-            ))
-            row = connection_handle.execute(_SELECT_JOB_SQL, (job.owner, scope_text, job.job_id)).fetchone()
-        assert row is not None  # noqa: S101 -- The insert just stored this job.
-        return _job(row)
+            return update_state(connection_handle, job_state_change)
 
 
-def _existing(
-    connection_handle: sqlite3.Connection,
-    owner: str,
-    scope_text: str,
-    identity: tuple[JobKind, str | None, str | None],
-) -> sqlite3.Row | None:
-    kind, request_key, cause_event_id = identity
-    if kind == "command":
-        row = connection_handle.execute(_SELECT_COMMAND_SQL, (owner, scope_text, request_key)).fetchone()
-    else:
-        row = connection_handle.execute(_SELECT_OBSERVER_SQL, (owner, scope_text, cause_event_id)).fetchone()
-    return cast("sqlite3.Row | None", row)
+def accept_command(connection_handle: sqlite3.Connection, command_job_request: CommandJobRequest) -> ExtensionJob:
+    """Store one command, returning the existing job for a repeated request key.
+
+    Returns:
+        The accepted or already accepted command job.
+
+    """
+    scope_text = command_job_request.scope.model_dump_json()
+    existing = connection_handle.execute(
+        _SELECT_COMMAND_SQL, (command_job_request.owner, scope_text, command_job_request.request_key),
+    ).fetchone()
+    if existing is not None:
+        return _job(existing)
+    now = time.time()
+    connection_handle.execute(_INSERT_SQL, (
+        command_job_request.owner, scope_text, command_job_request.job_id, JobKind.COMMAND,
+        command_job_request.request_key, None, command_job_request.binding, command_job_request.request,
+        None, now, now,
+    ))
+    row = connection_handle.execute(
+        _SELECT_JOB_SQL, (command_job_request.owner, scope_text, command_job_request.job_id),
+    ).fetchone()
+    assert row is not None  # noqa: S101 -- The insert just stored this job.
+    return _job(row)
+
+
+def accept_observer(connection_handle: sqlite3.Connection, observer_job_request: ObserverJobRequest) -> ExtensionJob:
+    """Store one observer job, returning the existing job for a repeated cause.
+
+    Returns:
+        The accepted or already accepted observer job.
+
+    """
+    scope_text = observer_job_request.scope.model_dump_json()
+    existing = connection_handle.execute(
+        _SELECT_OBSERVER_SQL, (observer_job_request.owner, scope_text, observer_job_request.cause_event_id),
+    ).fetchone()
+    if existing is not None:
+        return _job(existing)
+    now = time.time()
+    connection_handle.execute(_INSERT_SQL, (
+        observer_job_request.owner, scope_text, observer_job_request.job_id, JobKind.OBSERVER,
+        None, observer_job_request.cause_event_id, observer_job_request.binding, observer_job_request.request,
+        observer_job_request.consumer_cursor, now, now,
+    ))
+    row = connection_handle.execute(
+        _SELECT_JOB_SQL, (observer_job_request.owner, scope_text, observer_job_request.job_id),
+    ).fetchone()
+    assert row is not None  # noqa: S101 -- The insert just stored this job.
+    return _job(row)
+
+
+def update_state(connection_handle: sqlite3.Connection, job_state_change: JobStateChange) -> ExtensionJob:
+    """Advance one job when its revision still matches.
+
+    Returns:
+        The stored job after the change.
+
+    Raises:
+        ValueError: If the stored revision no longer matches.
+
+    """
+    scope_text = job_state_change.scope.model_dump_json()
+    cursor = connection_handle.execute(_UPDATE_SQL, (
+        job_state_change.state,
+        job_state_change.result,
+        job_state_change.diagnostic,
+        time.time(),
+        job_state_change.binding,
+        job_state_change.request,
+        job_state_change.owner,
+        scope_text,
+        job_state_change.job_id,
+        job_state_change.expected_revision,
+    ))
+    if cursor.rowcount != 1:
+        raise ValueError(STALE_MESSAGE)
+    row = connection_handle.execute(
+        _SELECT_JOB_SQL, (job_state_change.owner, scope_text, job_state_change.job_id),
+    ).fetchone()
+    assert row is not None  # noqa: S101 -- The update just matched the primary key.
+    return _job(row)
 
 
 def _job(row: sqlite3.Row) -> ExtensionJob:
     return ExtensionJob(
         owner=row["owner"],
         scope=_SCOPE_ADAPTER.validate_json(row["scope"]),
-        job_id=row["job_id"],
-        kind=cast("JobKind", row["kind"]),
+        job_id=ExtensionJobId(row["job_id"]),
+        kind=JobKind(row["kind"]),
         request_key=row["request_key"],
-        cause_event_id=row["cause_event_id"],
-        state=cast("JobState", row["state"]),
+        cause_event_id=None if row["cause_event_id"] is None else CanonicalEventId(row["cause_event_id"]),
+        state=JobState(row["state"]),
         revision=int(row["revision"]),
         binding=row["binding"],
         request=row["request"],

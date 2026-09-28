@@ -9,7 +9,7 @@ from baqylau_extension_api.schemas import SchemaSet
 from extensions.lifecycle_control_contract import LifecycleRequestError
 from extensions.lifecycle_plan_reads import discovered_package
 from extensions.lifecycle_plan_resources import CheckedLifecyclePlan, LifecyclePlanningState, SelectedPackage
-from extensions.models import settings, settings_migration
+from extensions.models import record_migration, settings, settings_migration
 from extensions.models.lifecycle_requests import LifecyclePlan, LifecyclePlanRequest
 from extensions.models.lifecycle_selection import ExtensionIntent
 from extensions.models.runtime_candidates import MigratingRuntimePackage, RuntimePackageCandidate
@@ -74,7 +74,11 @@ def _checked_order(
 ) -> tuple[RuntimePackageCandidate, ...]:
     try:
         return _validate_packages(state, selected)
-    except (ExtensionContractError, ValueError) as error:
+    except ExtensionContractError as error:
+        # SDK contract checks run in the host and name the rule, for example a dependency cycle.
+        message = f"the selected extension set is not valid: {error}"
+        raise LifecycleRequestError(message) from error
+    except ValueError as error:
         message = "the selected extension set has incompatible dependencies, contributions, or settings"
         raise LifecycleRequestError(message) from error
 
@@ -95,7 +99,10 @@ def _package_candidate(
     source = next((entry.settings for entry in state.manager.lifecycle.settings
                    if entry.extension_id == package.manifest.extension_id), settings.SettingsOverrides())
     candidate: RuntimePackageCandidate = package.selection
-    if settings_migration.needs_settings_migration(package.manifest, source):
-        candidate = MigratingRuntimePackage(extension_info=package.selection.extension_info, source=source)
+    records = record_migration.record_sources(package.manifest, state.record_schemas)
+    if records or settings_migration.needs_settings_migration(package.manifest, source):
+        candidate = MigratingRuntimePackage(
+            extension_info=package.selection.extension_info, source=source, records=records,
+        )
     candidate.validate_manifest(package.manifest, schemas)
     return candidate

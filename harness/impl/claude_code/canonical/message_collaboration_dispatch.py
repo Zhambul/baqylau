@@ -5,7 +5,7 @@ from domain import event_base
 from harness.impl.claude_code.canonical import message_models, transcript
 from harness.impl.claude_code.canonical.message_collaboration_events import (
     assignment_finished_event,
-    monitor_ended_event,
+    monitor_ended_events,
 )
 from harness.impl.claude_code.canonical.message_idle_events import team_message_events, teammate_idle_events
 
@@ -22,8 +22,7 @@ def translate_collaboration_record(
 
     """
     if isinstance(record, transcript.MonitorEndedTranscriptRecord):
-        ended = monitor_ended_event(source, record, semantics.tool_calls)
-        return [] if ended is None else [ended]
+        return monitor_ended_events(source, record, semantics.tool_calls)
     if isinstance(record, transcript.ActorAssignmentFinishedTranscriptRecord):
         return [assignment_finished_event(source, record, semantics.tool_calls)]
     if isinstance(record, transcript.TeammateIdleTranscriptRecord):

@@ -59,6 +59,8 @@ class InputEvents(FileSystemEventHandler):
             )
         roots = self._paths.roots(self._profiles)
         roots = {existing_parent(root) for root in roots}
+        # A missing input at the top of the file system must not watch the whole disk.
+        roots = {root for root in roots if root != root.parent}
         roots = {
             root for root in roots
             if not any(parent in roots for parent in root.parents)

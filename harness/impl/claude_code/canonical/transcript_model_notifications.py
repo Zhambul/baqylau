@@ -12,13 +12,15 @@ from harness.impl.claude_code.canonical.transcript_model_activity import (
     TeammateIdleTranscriptRecord,
     TeamMessageTranscriptRecord,
 )
+from harness.impl.claude_code.canonical.transcript_model_commands import (
+    CommandOutputTranscriptRecord,
+    SlashCommandTranscriptRecord,
+)
 from harness.impl.claude_code.canonical.transcript_model_core import (
     BadTranscriptRecord,
-    CommandOutputTranscriptRecord,
     CompactSummaryTranscriptRecord,
     CompactTranscriptRecord,
     PromptTranscriptRecord,
-    SlashCommandTranscriptRecord,
     TextTranscriptRecord,
     TranscriptKind,
 )
@@ -42,6 +44,8 @@ class MonitorEndedTranscriptRecord:
     task: ClaudeCodeShellId
     operation_id: ClaudeCodeCallId
     status: str
+    # A stream-ended notice can carry the monitor's last event; an expiry notice carries none.
+    last_event: str | None = None
     kind: TranscriptKind = TranscriptKind.MONITOR_ENDED
 
 

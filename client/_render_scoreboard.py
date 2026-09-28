@@ -84,7 +84,7 @@ def _score_spans(visible: list[_ScorePart]) -> list[Span]:
     return content
 
 
-def scoreboard(model: SessionModel, width: int) -> str:
+def scoreboard(model: SessionModel, width: int, chips: tuple[_ScorePart, ...] = ()) -> str:
     """Return the scoreboard.
 
     The five status rows: who, how much said, what was done, what it cost.
@@ -100,7 +100,7 @@ def scoreboard(model: SessionModel, width: int) -> str:
         *_row("✉", [_ScorePart(f"{int(statistics.actor_message_count)} msgs", MUTED)], width),
         *_row("▪", _score_activity(statistics), width),
         *_row("Σ", _score_usage(tokens, cost), width),
-        *_row(" ", _score_detail(statistics), width),
+        *_row(" ", [*_score_detail(statistics), *chips], width),
     ]
     return screen(painted)
 

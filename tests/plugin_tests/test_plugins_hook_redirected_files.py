@@ -13,7 +13,7 @@ from harness.impl.claude_code.hooks import gateway as claude_hooks
 from harness.models.session import (
     Session,
 )
-from tests.canonical_runtime import CanonicalRuntime
+from tests import canonical_runtime, storage_reads
 from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import support_hooks, support_runtime, support_storage, vocabulary as fixture
 from tests.plugin_tests.hook_common_support import PRIMARY_SESSION, decoded_output_content
@@ -97,7 +97,7 @@ def _deliver_redirected_files_hook(tmp_path: Path, first: Path, second: Path) ->
 
 @dataclass(frozen=True)
 class _RedirectedFilesFixture:
-    runtime: CanonicalRuntime
+    runtime: canonical_runtime.CanonicalRuntime
     interpreter: Interpreter
     first: Path
     second: Path
@@ -152,7 +152,7 @@ def test_claude_several_redirected_files_flow(
     assert "pipe-output\n" in output
     progressed = [
         event
-        for event in redirected_fixture.runtime.store.page_from(0, 100)
+        for event in storage_reads.page_from(redirected_fixture.runtime.store, 0, 100)
         if isinstance(event.payload, event_shell.ShellProgressed)
         and event.payload.shell_id == domain_ids.ShellId(fixture.BACKGROUND_ONE)
     ]

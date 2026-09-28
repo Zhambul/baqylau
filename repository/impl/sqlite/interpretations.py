@@ -9,7 +9,7 @@ from baqylau_extension_api.models.translation_inputs import TranslationState
 from pydantic import TypeAdapter
 
 from core.work_queue import WorkKind
-from domain.ids import CanonicalEventId, RawEventId
+from domain.ids import CanonicalEventId
 from extensions.models import interpretation_reads, interpretation_snapshot as snapshots
 from extensions.models.interpretations import InterpretationCommit, InterpretationOutcome, StoredCanonicalFact
 from repository.contract.interpretations import InterpretationRepository
@@ -38,17 +38,6 @@ class SqliteInterpretationRepository(InterpretationRepository):
         checked = InterpretationCommit.model_validate(request)
         with self.database.write(*_work_notices(checked), notify_readers=False) as connection:
             return interpretation_writes.commit_interpretation(connection, checked)
-
-    def find_interpretation(self, history_revision: str, raw_event_id: RawEventId) -> InterpretationCommit | None:
-        """Read complete processing records independently of current activation.
-
-        Returns:
-            The original journal and completion time, or no journal.
-
-        """
-        reads.validate_page(history_revision, 0, 1)
-        with self.database.read() as connection:
-            return reads.read_journal(connection, history_revision, raw_event_id)
 
     def find_fact(self, history_revision: str, event_id: CanonicalEventId) -> StoredCanonicalFact | None:
         """Read one accepted core or extension fact from an exact history.

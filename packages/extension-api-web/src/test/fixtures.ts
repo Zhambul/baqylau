@@ -63,6 +63,12 @@ export function fixture(module: ExtensionWebModule) {
             runtime_revision: snapshot.runtimeRevision,
             entries: [],
           }),
+        readSettings: () => Promise.reject(new Error('No settings.')),
+        saveSettings: () => Promise.reject(new Error('No settings.')),
+        query: () => Promise.reject(new Error('No queries.')),
+        watchChanges: () => () => undefined,
+        runCommand: () => Promise.reject(new Error('No commands.')),
+        readJob: () => Promise.reject(new Error('No jobs.')),
       };
     },
   });

@@ -8,7 +8,7 @@ from baqylau_extension_api.models import documents, events, transforms
 
 from domain.records import RecordedTranslationDecision
 from extensions.models.interpretation_steps import CanonicalTransformStep, FailedStep
-from tests import sqlite_migration_fixture as snapshots
+from tests import sqlite_migration_fixture as snapshots, storage_reads
 from tests.extension_host import interpretation_fixture as fixtures, interpretation_transforms as operations
 
 DEFAULT_HISTORY = "default"
@@ -28,7 +28,9 @@ def test_canonical_replacement_keeps_trace(tmp_path: Path) -> None:
     )))
     assert case.store.record_interpretation(request).accepted[0].fact == fact
     assert request.proposal.steps[0] == original.proposal.steps[0]
-    assert case.store.find_interpretation(DEFAULT_HISTORY, request.proposal.binding.raw_event_id) == request
+    assert storage_reads.find_interpretation(
+        case.store, DEFAULT_HISTORY, request.proposal.binding.raw_event_id,
+    ) == request
 
 
 def test_all_dropped_commits_complete_verdict(tmp_path: Path) -> None:
@@ -42,7 +44,9 @@ def test_all_dropped_commits_complete_verdict(tmp_path: Path) -> None:
     assert not case.original.store.pending_observations(10)
     assert case.store.translator_state(fixtures.state_key(case)).revision == 1
     assert request.proposal.decision == RecordedTranslationDecision.SUPPRESSED
-    assert case.store.find_interpretation(DEFAULT_HISTORY, request.proposal.binding.raw_event_id) == request
+    assert storage_reads.find_interpretation(
+        case.store, DEFAULT_HISTORY, request.proposal.binding.raw_event_id,
+    ) == request
 
 
 def test_addition_can_keep_a_dropped_cause(tmp_path: Path) -> None:
@@ -54,7 +58,7 @@ def test_addition_can_keep_a_dropped_cause(tmp_path: Path) -> None:
         addition, transforms.Drop(input_id=addition.input_id, reason="Use the added fact"),
     )))
     assert case.store.record_interpretation(request).accepted[0].fact == addition.document
-    stored = case.store.find_interpretation(DEFAULT_HISTORY, request.proposal.binding.raw_event_id)
+    stored = storage_reads.find_interpretation(case.store, DEFAULT_HISTORY, request.proposal.binding.raw_event_id)
     assert stored is not None
     assert tuple(step.stage for step in stored.proposal.steps) == ("extension_translation", "canonical")
 
@@ -74,7 +78,9 @@ def test_failed_transform_preserves_candidates(tmp_path: Path) -> None:
     })})
     accepted = case.store.record_interpretation(request).accepted
     assert accepted[0].fact == request.proposal.facts[0]
-    assert case.store.find_interpretation(DEFAULT_HISTORY, request.proposal.binding.raw_event_id) == request
+    assert storage_reads.find_interpretation(
+        case.store, DEFAULT_HISTORY, request.proposal.binding.raw_event_id,
+    ) == request
 
 
 def test_owner_cannot_run_twice_in_one_stage(tmp_path: Path) -> None:

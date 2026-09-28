@@ -25,12 +25,13 @@ if TYPE_CHECKING:
     from repository.contract.session_data import SessionDelta
 
 APPLICATION_EVENT = "application"
+RESET_EVENT = "reset"
 
 
 async def session_frames(
     services: session_models.SessionStreamServices,
     session_id: SessionId,
-    cursor: int,
+    position: session_models.SessionStreamPosition,
     *,
     include_application: bool = True,
 ) -> AsyncGenerator[str]:
@@ -45,7 +46,7 @@ async def session_frames(
             session_frame_loop(
                 services.read_model,
                 session_id,
-                cursor,
+                position,
                 services.session_application if include_application else None,
                 change_signal=services.changes,
             ),
@@ -64,20 +65,24 @@ async def session_frames(
 async def session_frame_loop(
     session_data_repository: session_models.SessionDeltaReader,
     session_id: SessionId,
-    cursor: int,
+    position: session_models.SessionStreamPosition,
     session_application_service: session_models.SessionSnapshotReader | None,
     *,
     change_signal: ChangeSignal | None = None,
 ) -> AsyncGenerator[str]:
-    """Read session data only after a change notice.
+    """Read session data only after a change notice; end with a reset after a view switch.
 
     Yields:
-        Encoded application, session-data, or heartbeat frames.
+        Encoded application, session-data, heartbeat, or reset frames.
 
     """
     signal = ChangeSignal() if change_signal is None else change_signal
     with signal.subscribe() as changed:
-        state = await application_updates.initial_session_state(session_application_service, session_id, cursor)
+        state = await application_updates.initial_session_state(
+            session_application_service, session_id, position.cursor,
+        )
+        state.view_revision = position.view_revision
+        state.entry_cursor = position.entry_cursor
         if state.application is not None:
             yield sse.sse_frame(APPLICATION_EVENT, application_mapper.session_application(state.application))  # noqa: ASYNC119 -- The caller closes this stream generator.
         while True:
@@ -86,6 +91,8 @@ async def session_frame_loop(
                 session_data_repository, session_application_service, session_id, state,
             ):
                 yield frame  # noqa: ASYNC119 -- The caller closes this stream generator.
+            if state.reset:
+                return
             while not changed.is_set():
                 idle_frame = await application_updates.wait_frame(
                     changed, session_application_service, session_id, state,
@@ -106,7 +113,14 @@ async def session_iteration(
         The encoded frames produced by the change batch.
 
     """
-    delta = await sse.off_loop(session_data_repository.delta, session_id, state.cursor)
+    delta = await sse.off_loop(session_data_repository.delta, session_id, state.cursor, state.entry_cursor)
+    state.entry_cursor = delta.entry_cursor
+    if state.view_revision is None:
+        state.view_revision = delta.view_revision
+    elif delta.view_revision != state.view_revision:
+        state.reset = True
+        reset = stream_session_contract.ViewReset(view_revision=delta.view_revision)
+        return (sse.sse_frame(RESET_EVENT, reset),)
     now = asyncio.get_running_loop().time()
     application = await application_updates.session_application_frame(
         session_application_service, session_id, state, now,

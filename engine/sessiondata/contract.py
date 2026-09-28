@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from domain.entries import SessionEntry
     from domain.event_base import CanonicalEvent, EventPayload
     from domain.ids import SessionId
+    from repository.contract.session_data import SessionDataChanges
 
 
 @dataclass(frozen=True)
@@ -114,4 +115,22 @@ class AppliedActorListener(Protocol):
 
     def applied(self, session_id: SessionId, actors: Sequence[ActorFacts]) -> None:
         """Return the applied."""
+        ...
+
+
+class CoreChangeTransform(Protocol):
+    """Let enabled extensions change one event's proposed core rows before they commit.
+
+    The proposal and the result go into the same single transaction, so no
+    reader can see a core row that a transform then changes. A transform that
+    fails or is rejected leaves the proposal from before it.
+    """
+
+    def transform(
+        self,
+        canonical_event: CanonicalEvent[EventPayload],
+        before_aggregate_state: AggregateState,
+        proposed_session_data_changes: SessionDataChanges,
+    ) -> SessionDataChanges:
+        """Return the changes to commit for this event."""
         ...

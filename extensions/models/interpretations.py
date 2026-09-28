@@ -69,6 +69,15 @@ class StoredCanonicalFact(canonical.CommittedFact):
 
     history_revision: base.Identifier
 
+    def committed(self) -> canonical.CommittedFact:
+        """Drop the history revision, which an extension request does not carry.
+
+        Returns:
+            The committed fact.
+
+        """
+        return canonical.CommittedFact(fact=self.fact, cursor=self.cursor, accepted_at=self.accepted_at)
+
 
 class ExtensionFactMetadata(base.WireModel):
     """Store the extension scope and schema once, separate from its exact document text."""

@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from baqylau_extension_api.models.events import ExtensionFact
 
-from tests import sqlite_migration_fixture as snapshots
+from tests import sqlite_migration_fixture as snapshots, storage_reads
 from tests.extension_host import (
     interpretation_fixture as fixtures,
     interpretation_prior as prior,
@@ -21,7 +21,7 @@ def test_actual_prior_fact_is_accepted(tmp_path: Path) -> None:
     outcome = case.store.record_interpretation(request)
     assert not outcome.accepted
     assert outcome.deduplicated[0].fact == prior.prior_fact(request).fact
-    assert case.store.find_interpretation("default", request.proposal.binding.raw_event_id) == request
+    assert storage_reads.find_interpretation(case.store, "default", request.proposal.binding.raw_event_id) == request
 
 
 def test_changed_prior_time_is_rejected(tmp_path: Path) -> None:

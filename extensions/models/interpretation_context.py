@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from baqylau_extension_api.manifest.package import ExtensionManifest
 from baqylau_extension_api.models.events import ProcessingContext
+from baqylau_extension_api.models.scopes import ExtensionScope
 
 from extensions.models.interpretations import InterpretationBinding
 from extensions.models.observations import StoredObservation
@@ -19,6 +20,7 @@ class InterpretationContext:
     binding: InterpretationBinding
     original: StoredObservation
     packages: Mapping[str, ProcessingPackage]
+    related_scopes: tuple[ExtensionScope, ...] = ()
 
     def require_package(self, owner: str) -> ProcessingPackage:
         """Reject a fact or step whose owner is not in the selected active set.
@@ -52,7 +54,7 @@ class InterpretationContext:
             history_revision=self.binding.history_revision, scope=self.binding.scope,
             input_cursor=self.binding.input_cursor, mode=self.binding.mode,
             settings_revision=package.selection.settings.revision,
-            settings=package.selection.settings.for_scope(self.binding.scope),
+            settings=package.selection.settings.for_scope(self.binding.scope, self.related_scopes),
         )
         if step != expected or capability not in package.manifest.capabilities:
             message = "interpretation step does not match its selected context or capability"

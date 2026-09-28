@@ -9,7 +9,11 @@ from domain.records import RecordedTranslationDecision
 from extensions.models import interpretation_steps as steps
 from tests.extension_host import ordered_processing_fixture as fixture, process_fixture, source_daemon_fixture as source
 
+# Two daemon starts with two workers take about 20 seconds without load; parallel runs need more.
+TEST_TIMEOUT_SECONDS = 90
 
+
+@pytest.mark.timeout(TEST_TIMEOUT_SECONDS)
 @pytest.mark.parametrize("owners", [fixture.OWNERS, tuple(reversed(fixture.OWNERS))])
 def test_workers_follow_declared_order(tmp_path: Path, runtime_wheels: Path, owners: tuple[str, ...]) -> None:
     """Activation order cannot change the processing of earlier generated data."""

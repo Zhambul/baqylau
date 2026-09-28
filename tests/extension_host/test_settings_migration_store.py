@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from extensions.models.lifecycle_state import ManagerClaim
+from tests import storage_reads
 from tests.extension_host import lifecycle_fixture as lifecycle, migration_store_fixture as fixture
 
 RESOLUTION = "resolution"
@@ -15,7 +16,9 @@ def test_resolution_preserves_reserved_request(tmp_path: Path) -> None:
     """Success adds a resolution while the accepted candidate bytes stay unchanged."""
     case = fixture.migration_store(tmp_path)
     admitted = case.admit()
-    assert case.store.read_extension_runtime(case.proposal.candidate.runtime_revision) == case.proposal.candidate
+    assert storage_reads.read_extension_runtime(
+        case.store, case.proposal.candidate.runtime_revision,
+    ) == case.proposal.candidate
     finished = case.store.finish_extension_operation(lifecycle.completion(admitted).model_copy(update={
         RESOLUTION: case.resolution,
     }))

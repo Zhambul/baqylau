@@ -71,6 +71,13 @@ Prefer the existing worker and prepared-runtime contracts. If a contract must ch
 
 Status result: P03-T05 and P04-T04 remain in progress. The cleanup change is implemented. Health policy, complete job recovery, total shutdown bounds, and full C10 remain open.
 
+Decision (2026-09-25), taken as recommended under the user's standing "do the recommended" instruction: the total shutdown bound is the sum of the existing policy bounds.
+- The registry drain waits up to `drain_seconds` (30 seconds, the host call deadline), so an admitted call finishes or reaches its own deadline.
+- Deactivation has `deactivation_seconds` (2 seconds).
+- Each worker has `stop_seconds` (2 seconds) to exit, and then the host kills its process group.
+
+A stop therefore takes at most about 32 seconds plus 2 seconds for each worker. Shutdown does not stop a running write before its deadline, because a stopped push or commit can leave work that nobody can recover. If admitted calls remain after the drain, the host keeps the runtime ownership and records the reason. It never records an invented job outcome.
+
 ## Implementation — 2026-09-15
 
 Status: in_progress

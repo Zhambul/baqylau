@@ -2,6 +2,7 @@
 """Reject changed tools and unmanaged local rule overrides."""
 
 import tomllib
+from collections.abc import Iterator
 from pathlib import Path
 
 from baqylau_dev.configuration import HOST_RUFF_RESOURCE, expected_files
@@ -9,6 +10,9 @@ from baqylau_dev.models import ProjectProfile
 from baqylau_dev.resources import policy_text, require_tool_versions
 
 ENCODING = "utf-8"
+LOCAL_RULE_FILES = ("ruff.toml", ".ruff.toml", "mypy.ini", ".mypy.ini", ".flake8", "setup.cfg")
+# Installed, built, and generated folders are not package source.
+SKIPPED_FOLDERS = frozenset(("node_modules", "build", "dist", "wheels", "venv"))
 
 
 def check_parity(root: Path, profile: ProjectProfile) -> None:
@@ -46,13 +50,25 @@ def _check_host_files(root: Path, profile: ProjectProfile) -> None:
 
 
 def _reject_local_rules(root: Path) -> None:
-    for name in ("ruff.toml", ".ruff.toml", "mypy.ini", ".mypy.ini", ".flake8", "setup.cfg"):
-        if (root / name).exists():
-            message = f"local quality configuration is not permitted: {name}"
+    # The tools read the nearest configuration file, so a nested file would change the rules of its folder.
+    for name in LOCAL_RULE_FILES:
+        found = next(_package_files(root, name), None)
+        if found is not None:
+            message = f"local quality configuration is not permitted: {found.relative_to(root)}"
             raise ValueError(message)
-    project = root / "pyproject.toml"
-    if project.is_file():
+    for project in _package_files(root, "pyproject.toml"):
         _check_project_tools(project)
+
+
+def _package_files(root: Path, name: str) -> Iterator[Path]:
+    for path in sorted(root.rglob(name)):
+        folders = path.relative_to(root).parts[:-1]
+        if not any(map(_skipped, folders)):
+            yield path
+
+
+def _skipped(folder: str) -> bool:
+    return folder.startswith(".") or folder in SKIPPED_FOLDERS
 
 
 def _check_project_tools(project: Path) -> None:

@@ -108,10 +108,12 @@ def monitor_ended_notification(document: str) -> MonitorEndedTranscriptRecord:
         The parsed monitor completion.
 
     """
+    expired = (note_tag(document, "summary") or "").startswith(MONITOR_EVENT_SUMMARY_PREFIX)
     return MonitorEndedTranscriptRecord(
         ClaudeCodeShellId(note_tag(document, "task-id") or ""),
         ClaudeCodeCallId(note_tag(document, "tool-use-id") or ""),
         note_tag(document, "status") or COMPLETED_STATUS,
+        None if expired else note_tag(document, "event"),
     )
 
 

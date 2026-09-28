@@ -5,6 +5,7 @@ from pathlib import Path
 
 from extensions.models.source_reads import source_key
 from repository.impl.sqlite.source_reads import SqliteExtensionSourceRepository
+from tests import storage_reads
 from tests.extension_host import (
     lifecycle_fixture as lifecycle,
     observation_fixture as originals,
@@ -21,7 +22,9 @@ def test_complete_source_commit(tmp_path: Path) -> None:
     assert case.original.store.pending_observations(10) == outcome.observations.accepted
     expected = request.proposal.response.observations[0]
     assert originals.original(outcome.observations.accepted[0]).candidate == expected.observation
-    assert case.store.find_source_read(case.request.context.binding.runtime_revision, "read-1") == request
+    assert storage_reads.find_source_read(
+        case.store, case.request.context.binding.runtime_revision, "read-1",
+    ) == request
     assert case.store.source_checkpoint(source_key(case.request)) == outcome.checkpoint
     assert outcome.checkpoint.revision == 1 and outcome.checkpoint.position == "position-1"
     originals.require_no_fake_session(case.store.database)
@@ -41,7 +44,9 @@ def test_exact_retry_does_not_requeue(tmp_path: Path) -> None:
     assert repeated.observations.repeated == first.observations.accepted
     assert repeated.checkpoint == first.checkpoint
     assert not case.original.store.pending_observations(10)
-    assert case.store.find_source_read(case.request.context.binding.runtime_revision, "read-1") == request
+    assert storage_reads.find_source_read(
+        case.store, case.request.context.binding.runtime_revision, "read-1",
+    ) == request
 
 
 def test_old_retry_does_not_rewind(tmp_path: Path) -> None:
@@ -67,7 +72,9 @@ def test_empty_read_progress(tmp_path: Path) -> None:
     assert initial.checkpoint.revision == 0
     assert advanced.checkpoint.revision == 1 and advanced.checkpoint == unchanged.checkpoint
     assert not case.original.store.pending_observations(10)
-    assert case.store.find_source_read(case.request.context.binding.runtime_revision, "read-3") is not None
+    assert storage_reads.find_source_read(
+        case.store, case.request.context.binding.runtime_revision, "read-3",
+    ) is not None
 
 
 def test_restart_after_owner_removal(tmp_path: Path) -> None:
@@ -80,5 +87,5 @@ def test_restart_after_owner_removal(tmp_path: Path) -> None:
     ))
     restarted = SqliteExtensionSourceRepository(upgrades.upgraded(case.store.database))
     assert restarted.source_checkpoint(source_key(case.request)) == outcome.checkpoint
-    assert restarted.find_source_read(case.request.context.binding.runtime_revision, "read-1") == request
-    assert restarted.find_source_read(case.request.context.binding.runtime_revision, "unknown") is None
+    assert storage_reads.find_source_read(restarted, case.request.context.binding.runtime_revision, "read-1") == request
+    assert storage_reads.find_source_read(restarted, case.request.context.binding.runtime_revision, "unknown") is None

@@ -22,6 +22,8 @@ class TaskStartedPayload(BaseModel):
     turn_id: CodexTurnId | None = None
     collaboration_mode_kind: str | None = None
     model_context_window: int | None = None
+    # Codex 0.156.x names the first turn of a turn chain (measured: a turn id).
+    root_turn_id: CodexTurnId | None = None
 
 
 class TaskCompleteError(BaseModel):
@@ -81,6 +83,10 @@ class ThreadSettingsBlock(BaseModel):
     # treatment as TurnContextPayload's sandbox/permission fields below.
     active_permission_profile: ForeignMetadata | None = None
     permission_profile: ForeignMetadata | None = None
+    # Codex 0.156.x repeats the header's workspace roots and the turn context's
+    # disabled plugins here (measured: the launch directory, and []).
+    runtime_workspace_roots: list[str] | None = None
+    disabled_plugin_ids: list[str] | None = None
 
 
 class ThreadSettingsAppliedPayload(BaseModel):

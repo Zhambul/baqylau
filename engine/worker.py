@@ -9,7 +9,16 @@ from threading import Event
 from audit.failures import FailureContext
 from core.input_events import InputEvents
 from core.work_queue import WorkKind, WorkQueue
-from engine import extensions_boundary, mixed_processing, projection_stage, source_processing, work_batch
+from engine import (
+    extension_services,
+    extensions_boundary,
+    history_stage,
+    mixed_processing,
+    observer_stage,
+    projection_stage,
+    source_processing,
+    work_batch,
+)
 from engine.interpret.loop import Interpreter
 from engine.interpret.output_source import MAXIMUM_LIFETIME_SECONDS
 from engine.react.loop import ReactionLoop
@@ -25,14 +34,14 @@ class EngineWorker:
         reaction_loop: ReactionLoop,
         work_queue: WorkQueue,
         profiles: tuple[Path, ...],
-        extensions: source_processing.EngineExtensionServices | None = None,
+        extensions: extension_services.EngineExtensionServices | None = None,
     ) -> None:
         """Connect input notices to one ordered worker."""
         self.interpreter = interpreter
         self.reaction_loop = reaction_loop
         self.work_queue = work_queue
 
-        self.extension_services = extensions or source_processing.EngineExtensionServices()
+        self.extension_services = extensions or extension_services.EngineExtensionServices()
         self._batch = work_batch.EngineWorkBatch(work_queue, interpreter.failures)
         self.extensions = extensions_boundary.EngineExtensionBoundary(
             self.extension_services.runtime, work_queue,
@@ -85,8 +94,7 @@ class EngineWorker:
             ).read(sources, stop_event.is_set, refresh_plans=work_kind is WorkKind.SOURCES)
             return
         if work_kind is WorkKind.CANONICAL:
-            self.reaction_loop.drain(stop_event.is_set)
-            projection_stage.project(self, sources)
+            _react(self, stop_event, sources)
             return
         if sources is not None:
             mixed_processing.read_mixed(sources, self.interpreter.translation, self.work_queue, stop_event.is_set)
@@ -117,3 +125,12 @@ class EngineWorker:
         if oldest is not None:
             delay = oldest + MAXIMUM_LIFETIME_SECONDS - dependencies.runtime.clock()
             self.work_queue.schedule(WorkKind.SOURCES, delay, key="output expiry")
+
+
+def _react(engine_worker: EngineWorker, stop_event: Event, sources: ExtensionProcessingBatch | None) -> None:
+    """Fold the new facts, then run the extension stages after the drain, in their fixed order."""
+    engine_worker.reaction_loop.drain(stop_event.is_set, projection_stage.core_transform(engine_worker, sources))
+    projection_stage.project(engine_worker, sources)
+    projection_stage.rebuild(engine_worker, sources)
+    history_stage.reprocess(engine_worker, sources)
+    observer_stage.observe(engine_worker, sources)

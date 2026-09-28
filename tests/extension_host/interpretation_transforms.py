@@ -18,9 +18,10 @@ RAW_SELECTION = ProcessingSelection(
     capability="raw_transformer", scopes=source_samples.SCOPES,
     input_types=(operation_samples.SOURCE_TYPE, "hook"),
 )
+# The fixture's canonical transformer reads earlier facts, so it declares prior state.
 CANONICAL_SELECTION = ProcessingSelection(
     capability="canonical_transformer", scopes=source_samples.SCOPES,
-    input_types=(source_samples.EVENT_TYPE, "session.title_changed", "session.finished"),
+    input_types=(source_samples.EVENT_TYPE, "session.title_changed", "session.finished"), prior_state=True,
 )
 
 
@@ -44,14 +45,15 @@ def raw_manifest() -> ExtensionManifest:
     return _selected_manifest((RAW_SELECTION,))
 
 
-def combined_manifest() -> ExtensionManifest:
+def combined_manifest(*, prior_state: bool = True) -> ExtensionManifest:
     """Select both stages for complete pipeline coverage tests.
 
     Returns:
         One package with eligible raw and canonical processing steps.
 
     """
-    return _selected_manifest((RAW_SELECTION, CANONICAL_SELECTION))
+    canonical = CANONICAL_SELECTION.model_copy(update={"prior_state": prior_state})
+    return _selected_manifest((RAW_SELECTION, canonical))
 
 
 def _selected_manifest(processing: tuple[ProcessingSelection, ...]) -> ExtensionManifest:

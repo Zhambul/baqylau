@@ -7,6 +7,7 @@ from unittest.mock import Mock
 
 from baqylau_extension_api.models.scopes import RepositoryScope
 
+from tests import storage_reads
 from tests.extension_host import source_processing_fixture as fixtures
 
 REPOSITORY = RepositoryScope(repository_id="project", worktree="/project", git_directory="/project/.git")
@@ -19,7 +20,7 @@ def test_repository_scope_reads_without_session(tmp_path: Path) -> None:
         assert case.run() is None
         contexts = tuple(request.context.binding.scope for request in case.probe.trace.reads)
         assert REPOSITORY in contexts
-        rows = case.original.original.store.observations_for_scope(REPOSITORY, 0, 10)
+        rows = storage_reads.observations_for_scope(case.original.original.store, REPOSITORY, 0, 10)
         assert len(rows) == 1
     case.run()
     release = case.probe.trace.releases[0]

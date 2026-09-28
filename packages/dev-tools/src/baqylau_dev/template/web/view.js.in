@@ -1,0 +1,17 @@
+// ${header}
+// The host loads this module by its digest and mounts it in a workspace page.
+
+/** @type {import('@baqylau/extension-api').ExtensionWebModule['mount']} */
+export const mount = (target, context) => {
+  const line = target.ownerDocument.createElement('p');
+  line.textContent = `Hello from $${context.extensionId}`;
+  target.append(line);
+  return {
+    update(next) {
+      line.textContent = `Hello from $${next.extensionId}`;
+    },
+    dispose() {
+      line.remove();
+    },
+  };
+};

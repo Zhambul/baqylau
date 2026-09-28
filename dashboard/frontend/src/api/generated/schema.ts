@@ -735,6 +735,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/diagnostics/raw-events/{raw_event_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Raw Event Audit
+         * @description Return the bounded audit of one raw event.
+         *
+         *     Returns:
+         *         The bounded raw-event audit.
+         *
+         *     Raises:
+         *         HTTPException: If no raw event has the selected identity.
+         */
+        get: operations["raw_event_audit_api_diagnostics_raw_events__raw_event_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/diagnostics/terminal": {
         parameters: {
             query?: never;
@@ -750,6 +776,31 @@ export interface paths {
          *         Bounded visible terminal state for failure diagnosis.
          */
         get: operations["terminal_diagnostics_api_diagnostics_terminal_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/diagnostics/extension-work": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Extension Work
+         * @description Read pending projections, pending observers, and open jobs of the active packages.
+         *
+         *     A test signoff waits until this is empty and the raw checkpoint has no pending events.
+         *
+         *     Returns:
+         *         The backlog of the active packages.
+         */
+        get: operations["extension_work_api_diagnostics_extension_work_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1388,6 +1439,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/extensions/operations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Recent Extension Operations
+         * @description Read the newest retained operations, including failures and interrupted work.
+         *
+         *     Returns:
+         *         At most `limit` operations, newest first.
+         */
+        get: operations["recent_extension_operations_api_extensions_operations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extensions/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Extension Health
+         * @description Read each extension's consecutive worker failures; an extension without a row has none.
+         *
+         *     Returns:
+         *         The failure limit and the stored health rows in extension order.
+         */
+        get: operations["extension_health_api_extensions_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/extensions/state": {
         parameters: {
             query?: never;
@@ -1483,6 +1580,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/extensions/cleanup/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry Extension Cleanup
+         * @description Retry retained worker cleanup; no command or preparation runs again.
+         *
+         *     Returns:
+         *         The runtime state after the retry is scheduled.
+         */
+        post: operations["retry_extension_cleanup_api_extensions_cleanup_retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/extensions/{extension_id}/settings": {
         parameters: {
             query?: never;
@@ -1506,6 +1626,658 @@ export interface paths {
          *         The accepted or replayed operation; it must finish before values change.
          */
         put: operations["change_extension_settings_api_extensions__extension_id__settings_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extensions/{extension_id}/secrets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Extension Secrets
+         * @description Report each declared secret reference and whether it has a value.
+         *
+         *     Returns:
+         *         The reference states; no value.
+         */
+        get: operations["extension_secrets_api_extensions__extension_id__secrets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extensions/{extension_id}/secrets/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Store Extension Secret
+         * @description Store or replace one declared secret value.
+         *
+         *     Returns:
+         *         The reference states after the change; no value.
+         *
+         *     Raises:
+         *         HTTPException: If the package does not declare the name.
+         */
+        put: operations["store_extension_secret_api_extensions__extension_id__secrets__name__put"];
+        post?: never;
+        /**
+         * Clear Extension Secret
+         * @description Clear one declared secret value.
+         *
+         *     Returns:
+         *         The reference states after the change.
+         *
+         *     Raises:
+         *         HTTPException: If the package does not declare the name.
+         */
+        delete: operations["clear_extension_secret_api_extensions__extension_id__secrets__name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extensions/{extension_id}/records/{collection}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Extension Records
+         * @description Read one ordered record page in its exact scope.
+         *
+         *     Returns:
+         *         The typed record page.
+         *
+         *     Raises:
+         *         HTTPException: If the scope document is invalid.
+         */
+        get: operations["extension_records_api_extensions__extension_id__records__collection__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extensions/{extension_id}/changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Extension Changes
+         * @description Stream typed records changed at each committed boundary.
+         *
+         *     Returns:
+         *         The server-sent change stream.
+         */
+        get: operations["extension_changes_api_extensions__extension_id__changes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extensions/{extension_id}/jobs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Extension Job
+         * @description Read one stored durable job.
+         *
+         *     Returns:
+         *         The typed job response.
+         *
+         *     Raises:
+         *         HTTPException: If the scope is invalid or the job is absent.
+         */
+        get: operations["extension_job_api_extensions__extension_id__jobs__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extensions/{extension_id}/jobs/{job_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel Extension Job
+         * @description Request cancellation of one stored command or observer attempt.
+         *
+         *     Returns:
+         *         The checked cancellation request state.
+         */
+        post: operations["cancel_extension_job_api_extensions__extension_id__jobs__job_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extensions/{extension_id}/jobs/{job_id}/reconcile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reconcile Extension Job
+         * @description Inspect an uncertain attempt without repeating its original call.
+         *
+         *     Returns:
+         *         The stored job after the reconciled outcome.
+         */
+        post: operations["reconcile_extension_job_api_extensions__extension_id__jobs__job_id__reconcile_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extensions/{extension_id}/commands/{command_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Extension Command
+         * @description Accept one declared command and schedule it on the background executor.
+         *
+         *     Returns:
+         *         The accepted job before its final state.
+         *
+         *     Raises:
+         *         HTTPException: If the scope, package, or declaration is invalid.
+         */
+        post: operations["extension_command_api_extensions__extension_id__commands__command_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extensions/{extension_id}/queries/{query_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Extension Query
+         * @description Run one declared read against the active package.
+         *
+         *     Returns:
+         *         The typed query result.
+         *
+         *     Raises:
+         *         HTTPException: If the scope, package, query, or arguments are invalid.
+         */
+        post: operations["extension_query_api_extensions__extension_id__queries__query_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extensions/{extension_id}/projections/rebuild": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rebuild Projection
+         * @description Start one candidate generation; the engine builds it from stored facts.
+         *
+         *     Returns:
+         *         The new building generation.
+         *
+         *     Raises:
+         *         HTTPException: If the extension has no active projector.
+         */
+        post: operations["rebuild_projection_api_extensions__extension_id__projections_rebuild_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extensions/{extension_id}/projections/generations/{generation}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Projection Generation
+         * @description Read one generation of an extension.
+         *
+         *     Returns:
+         *         The generation and its comparison with the live generation.
+         */
+        get: operations["projection_generation_api_extensions__extension_id__projections_generations__generation__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extensions/{extension_id}/projections/generations/{generation}/activate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Activate Projection Generation
+         * @description Make a ready or retired generation live, and keep the previous one for recovery.
+         *
+         *     Returns:
+         *         The generation after the switch.
+         *
+         *     Raises:
+         *         HTTPException: If the generation is not ready or is behind the live generation.
+         */
+        post: operations["activate_projection_generation_api_extensions__extension_id__projections_generations__generation__activate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extensions/{extension_id}/projections/generations/{generation}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resume Projection Generation
+         * @description Let a retired generation catch up before a switch back to it.
+         *
+         *     Returns:
+         *         The generation, building again.
+         *
+         *     Raises:
+         *         HTTPException: If the generation is not retired.
+         */
+        post: operations["resume_projection_generation_api_extensions__extension_id__projections_generations__generation__resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/history/sessions/{session_id}/reprocess": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reprocess Session
+         * @description Start replaying one finished session into a candidate history; the engine builds it.
+         *
+         *     Returns:
+         *         The new building candidate.
+         *
+         *     Raises:
+         *         HTTPException: If the session is outside the safe V1 boundary.
+         */
+        post: operations["reprocess_session_api_history_sessions__session_id__reprocess_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/history/candidates/{history_revision}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Candidate History
+         * @description Read one candidate history.
+         *
+         *     Returns:
+         *         The candidate, its state, and its comparison.
+         */
+        get: operations["candidate_history_api_history_candidates__history_revision__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/history/candidates/{history_revision}/activate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Activate Candidate History
+         * @description Request the switch of a ready or retired history; the engine switches it after its next drain.
+         *
+         *     Returns:
+         *         The candidate with the switch requested.
+         *
+         *     Raises:
+         *         HTTPException: If the candidate is not ready or retired.
+         */
+        post: operations["activate_candidate_history_api_history_candidates__history_revision__activate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extension-web/views": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Extension Web Views
+         * @description List the web views of the enabled packages in the published runtime.
+         *
+         *     Returns:
+         *         The views in slot, order, owner, and view order.
+         */
+        get: operations["extension_web_views_api_extension_web_views_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extension-web/views/{extension_id}/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Extension View Settings
+         * @description Read the settings that the published runtime resolves for one package and scope.
+         *
+         *     Returns:
+         *         The owner settings revision and the effective document, if any.
+         *
+         *     Raises:
+         *         HTTPException: If the package is not enabled in the published runtime.
+         */
+        get: operations["extension_view_settings_api_extension_web_views__extension_id__settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extension-web/related-scopes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Extension Related Scopes
+         * @description Name the scopes that one scope relates to, such as the workspace of a session.
+         *
+         *     Returns:
+         *         The related scopes, most specific first.
+         */
+        get: operations["extension_related_scopes_api_extension_web_related_scopes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/extensions/{extension_id}/{package_digest}/{asset_path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Extension Web Asset
+         * @description Serve one declared asset of one exact package; the digest URL never changes content.
+         *
+         *     Returns:
+         *         The asset bytes with their declared media type.
+         *
+         *     Raises:
+         *         HTTPException: If the package does not declare the asset or its bytes do not match.
+         */
+        get: operations["extension_web_asset_extensions__extension_id___package_digest___asset_path__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extension-terminal/views/{extension_id}/{view_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Extension Terminal View
+         * @description Present one active view at the pane size.
+         *
+         *     Returns:
+         *         The checked view.
+         *
+         *     Raises:
+         *         HTTPException: If no active package declares the view; the pane then ends.
+         */
+        get: operations["extension_terminal_view_api_extension_terminal_views__extension_id___view_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extension-terminal/panes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Open Extension Pane
+         * @description Open the view in a pane beside the window, or focus its pane when one is already open.
+         *
+         *     Returns:
+         *         Whether a pane opened or took focus.
+         */
+        post: operations["open_extension_pane_api_extension_terminal_panes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extension-terminal/views": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Extension Terminal Views
+         * @description Offer each active view for the installation, and for the window's session and its repository.
+         *
+         *     Without a window, only installation views are offered.
+         *
+         *     Returns:
+         *         The views in package and view order, each with the scope it opens in.
+         */
+        get: operations["extension_terminal_views_api_extension_terminal_views_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extension-terminal/sessions/{session_id}/{pane}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Extension Pane Sections
+         * @description Present the active session views that name this core pane.
+         *
+         *     Returns:
+         *         The sections for the session's lead actor, or none for an unknown session.
+         */
+        get: operations["extension_pane_sections_api_extension_terminal_sessions__session_id___pane__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extension-terminal/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Terminal Action
+         * @description Present the view again at the same focus and size, then accept the command of the chosen action.
+         *
+         *     The client sends only the action ID; the command, its arguments, and its
+         *     expected state revision come from the view that the host presents.
+         *
+         *     Returns:
+         *         The accepted job before its final state.
+         */
+        post: operations["run_terminal_action_api_extension_terminal_actions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/extension-web/repository-scope": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Extension Repository Scope
+         * @description Resolve the directory with Git.
+         *
+         *     Returns:
+         *         The scope; none for a missing directory or a directory with no repository.
+         */
+        get: operations["extension_repository_scope_api_extension_web_repository_scope_get"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -1905,6 +2677,28 @@ export interface components {
             request_id: string;
         };
         /**
+         * AvailableViewResponse
+         * @description Name one view that the pane selector can open, with the scope it opens in.
+         */
+        AvailableViewResponse: {
+            /** Extension Id */
+            extension_id: string;
+            /** View Id */
+            view_id: string;
+            /** Title */
+            title: string;
+            /** Scope */
+            scope: string;
+        };
+        /**
+         * AvailableViewsResponse
+         * @description List the views that the pane selector offers for one window.
+         */
+        AvailableViewsResponse: {
+            /** Views */
+            views: components["schemas"]["AvailableViewResponse"][];
+        };
+        /**
          * BackgroundRequest
          * @description Represent background request.
          */
@@ -2010,6 +2804,75 @@ export interface components {
             request_id: string;
         };
         /**
+         * CommandBinding
+         * @description Identify one dispatch attempt of an accepted durable job.
+         *
+         *     The call ID changes for a new dispatch or reconciliation attempt. The job
+         *     ID and request key remain fixed. A reply must repeat the complete binding.
+         */
+        CommandBinding: {
+            /** Extension Id */
+            extension_id: string;
+            /** Operation Id */
+            operation_id: string;
+            /** Scope */
+            scope: components["schemas"]["SessionScope"] | components["schemas"]["WorkspaceScope"] | components["schemas"]["RepositoryScope"] | components["schemas"]["InstallationScope"];
+            /** Runtime Revision */
+            runtime_revision: string;
+            /** Call Id */
+            call_id: string;
+            /** Job Id */
+            job_id: string;
+            /** Request Key */
+            request_key: string;
+        };
+        /**
+         * CommandCanceled
+         * @description Confirm stopped work after checking any possible external effect.
+         */
+        CommandCanceled: {
+            binding: components["schemas"]["CommandBinding"];
+            /**
+             * Observations
+             * @default []
+             */
+            observations: components["schemas"]["ObservationCandidate"][];
+            /**
+             * Content
+             * @default []
+             */
+            content: components["schemas"]["ContentReference"][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "canceled";
+            diagnostic?: components["schemas"]["Diagnostic"] | null;
+        };
+        /**
+         * CommandFailed
+         * @description Report a known failed operation, not an uncertain write outcome.
+         */
+        CommandFailed: {
+            binding: components["schemas"]["CommandBinding"];
+            /**
+             * Observations
+             * @default []
+             */
+            observations: components["schemas"]["ObservationCandidate"][];
+            /**
+             * Content
+             * @default []
+             */
+            content: components["schemas"]["ContentReference"][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "failed";
+            diagnostic: components["schemas"]["Diagnostic"];
+        };
+        /**
          * CommandOptionResponse
          * @description Represent command option response.
          */
@@ -2022,6 +2885,30 @@ export interface components {
             minimum_prompt_count: number;
         };
         /**
+         * CommandOutcomeUnknown
+         * @description Keep an uncertain external result explicit until it can be reconciled.
+         */
+        CommandOutcomeUnknown: {
+            binding: components["schemas"]["CommandBinding"];
+            /**
+             * Observations
+             * @default []
+             */
+            observations: components["schemas"]["ObservationCandidate"][];
+            /**
+             * Content
+             * @default []
+             */
+            content: components["schemas"]["ContentReference"][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "outcome_unknown";
+            diagnostic: components["schemas"]["Diagnostic"];
+            receipt?: components["schemas"]["EncodedDocument"] | null;
+        };
+        /**
          * CommandResultResponse
          * @description Represent command result response.
          */
@@ -2032,6 +2919,29 @@ export interface components {
             /** Reason */
             reason: string | null;
             confirmation: components["schemas"]["ConfirmationOutcome"] | null;
+        };
+        /**
+         * CommandSucceeded
+         * @description Report a proven result whose document matches the command declaration.
+         */
+        CommandSucceeded: {
+            binding: components["schemas"]["CommandBinding"];
+            /**
+             * Observations
+             * @default []
+             */
+            observations: components["schemas"]["ObservationCandidate"][];
+            /**
+             * Content
+             * @default []
+             */
+            content: components["schemas"]["ContentReference"][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "succeeded";
+            document: components["schemas"]["EncodedDocument"];
         };
         /**
          * CompactRequest
@@ -2109,6 +3019,20 @@ export interface components {
          */
         ConfirmationOutcome: "confirmed" | "not_needed" | "failed";
         /**
+         * ContentReference
+         * @description Refer to stored output without transferring its bytes in each call.
+         */
+        ContentReference: {
+            /** Content Id */
+            content_id: string;
+            /** Media Type */
+            media_type: string;
+            /** Byte Length */
+            byte_length: number;
+            /** Digest */
+            digest: string;
+        };
+        /**
          * ContentResponse
          * @description Represent content response.
          */
@@ -2134,6 +3058,12 @@ export interface components {
             /** Reason */
             reason: string | null;
         };
+        /**
+         * CorePane
+         * @description Name a core pane that shows extension sections.
+         * @enum {string}
+         */
+        CorePane: "mirror" | "scoreboard";
         /**
          * DailySessionCountResponse
          * @description Represent daily session count response.
@@ -2172,6 +3102,33 @@ export interface components {
             decision: string;
             /** Feedback */
             feedback?: string | null;
+        };
+        /**
+         * DeletedRecord
+         * @description Keep the last schema and revision after a record is deleted.
+         */
+        DeletedRecord: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            state: "deleted";
+            key: components["schemas"]["RecordKey"];
+            /** Revision */
+            revision: number;
+            schema_ref: components["schemas"]["SchemaRef"];
+        };
+        /**
+         * Diagnostic
+         * @description Describe an extension result without an untyped context object.
+         */
+        Diagnostic: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+            /** Input Id */
+            input_id?: string | null;
         };
         /**
          * DiagnosticsCheckpointResponse
@@ -2259,6 +3216,25 @@ export interface components {
             working_directory?: string | null;
         };
         /**
+         * DiffBlock
+         * @description Supply unified diff text for the client's existing diff renderer.
+         */
+        DiffBlock: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "diff";
+            /** Block Id */
+            block_id: string;
+            /** Old Path */
+            old_path?: string | null;
+            /** New Path */
+            new_path?: string | null;
+            /** Unified Diff */
+            unified_diff: string;
+        };
+        /**
          * DirectoryEntry
          * @description Describe the observed state of one installed package.
          */
@@ -2332,7 +3308,7 @@ export interface components {
             /** Json Text */
             json_text: string;
         };
-        EntryBodyResponse: components["schemas"]["TurnStartedBodyResponse"] | components["schemas"]["TurnFinishedBodyResponse"] | components["schemas"]["MessageBodyResponse"] | components["schemas"]["ReasoningBodyResponse"] | components["schemas"]["ShellStartedBodyResponse"] | components["schemas"]["ShellOutputBodyResponse"] | components["schemas"]["ShellBackgroundedBodyResponse"] | components["schemas"]["ShellFinishedBodyResponse"] | components["schemas"]["FileBodyResponse"] | components["schemas"]["SearchBodyResponse"] | components["schemas"]["WebBodyResponse"] | components["schemas"]["BrowserBodyResponse"] | components["schemas"]["WorktreeBodyResponse"] | components["schemas"]["SkillStartedBodyResponse"] | components["schemas"]["SkillFinishedBodyResponse"] | components["schemas"]["QuestionAskedBodyResponse"] | components["schemas"]["QuestionAnsweredBodyResponse"] | components["schemas"]["PlanProposedBodyResponse"] | components["schemas"]["PlanResolvedBodyResponse"] | components["schemas"]["CompactionStartedBodyResponse"] | components["schemas"]["CompactionFinishedBodyResponse"] | components["schemas"]["AssignmentStartedBodyResponse"] | components["schemas"]["AssignmentFinishedBodyResponse"] | components["schemas"]["ModelChangeBodyResponse"] | components["schemas"]["EffortChangeBodyResponse"];
+        EntryBodyResponse: components["schemas"]["TurnStartedBodyResponse"] | components["schemas"]["TurnFinishedBodyResponse"] | components["schemas"]["MessageBodyResponse"] | components["schemas"]["ReasoningBodyResponse"] | components["schemas"]["ShellStartedBodyResponse"] | components["schemas"]["ShellOutputBodyResponse"] | components["schemas"]["ShellBackgroundedBodyResponse"] | components["schemas"]["ShellFinishedBodyResponse"] | components["schemas"]["FileBodyResponse"] | components["schemas"]["SearchBodyResponse"] | components["schemas"]["WebBodyResponse"] | components["schemas"]["BrowserBodyResponse"] | components["schemas"]["WorktreeBodyResponse"] | components["schemas"]["SkillStartedBodyResponse"] | components["schemas"]["SkillFinishedBodyResponse"] | components["schemas"]["QuestionAskedBodyResponse"] | components["schemas"]["QuestionAnsweredBodyResponse"] | components["schemas"]["PlanProposedBodyResponse"] | components["schemas"]["PlanResolvedBodyResponse"] | components["schemas"]["CompactionStartedBodyResponse"] | components["schemas"]["CompactionFinishedBodyResponse"] | components["schemas"]["AssignmentStartedBodyResponse"] | components["schemas"]["AssignmentFinishedBodyResponse"] | components["schemas"]["ModelChangeBodyResponse"] | components["schemas"]["EffortChangeBodyResponse"] | components["schemas"]["ExtensionBodyResponse"];
         /**
          * EntryPageResponse
          * @description Represent entry page response.
@@ -2380,7 +3356,7 @@ export interface components {
          * @description Name each body type that can occur in a stored session feed.
          * @enum {string}
          */
-        EntryType: "turn_started" | "turn_finished" | "message" | "reasoning" | "shell_started" | "shell_output" | "shell_backgrounded" | "shell_finished" | "file" | "search" | "web" | "browser" | "worktree" | "skill_started" | "skill_finished" | "question_asked" | "question_answered" | "plan_proposed" | "plan_resolved" | "compaction_started" | "compaction_finished" | "assignment_started" | "assignment_finished" | "model_change" | "effort_change";
+        EntryType: "turn_started" | "turn_finished" | "message" | "reasoning" | "shell_started" | "shell_output" | "shell_backgrounded" | "shell_finished" | "file" | "search" | "web" | "browser" | "worktree" | "skill_started" | "skill_finished" | "question_asked" | "question_answered" | "plan_proposed" | "plan_resolved" | "compaction_started" | "compaction_finished" | "assignment_started" | "assignment_finished" | "model_change" | "effort_change" | "extension";
         /**
          * ErrorResponse
          * @description Represent error response.
@@ -2396,6 +3372,48 @@ export interface components {
          */
         ExecutionMode: "foreground" | "background" | "monitor";
         /**
+         * ExtensionActionRequest
+         * @description Run one action of a presented view; the host finds the registered command itself.
+         */
+        ExtensionActionRequest: {
+            /** Extension Id */
+            extension_id: string;
+            /** View Id */
+            view_id: string;
+            /** Action Id */
+            action_id: string;
+            /**
+             * Scope
+             * @description JSON-encoded ExtensionScope
+             */
+            scope: string;
+            /** Columns */
+            columns: number;
+            /** Rows */
+            rows: number;
+            /** Block Id */
+            block_id?: string | null;
+            /** Item Id */
+            item_id?: string | null;
+            /** Request Key */
+            request_key: string;
+        };
+        /**
+         * ExtensionBodyResponse
+         * @description Record one feature-owned derived entry without its stored fact.
+         */
+        ExtensionBodyResponse: {
+            /** Owner */
+            owner: string;
+            /** Entry Type */
+            entry_type: string;
+            /** Source Event Id */
+            source_event_id: string;
+            schema_ref: components["schemas"]["ExtensionSchemaRefResponse"];
+            /** Document */
+            document: string;
+        };
+        /**
          * ExtensionCatalogResponse
          * @description Read a durable catalog revision and any failed root scans.
          */
@@ -2406,6 +3424,47 @@ export interface components {
             entries: components["schemas"]["ExtensionPackageResponse"][];
             /** Root Issues */
             root_issues: components["schemas"]["RootDiscoveryIssue"][];
+        };
+        /**
+         * ExtensionCommandRequest
+         * @description Submit one command with its stable request key.
+         */
+        ExtensionCommandRequest: {
+            /** Scope */
+            scope: string;
+            /** Request Key */
+            request_key: string;
+            /** Arguments */
+            arguments: string;
+            /** Expected State Revision */
+            expected_state_revision?: string | null;
+        };
+        /**
+         * ExtensionHealth
+         * @description Keep the durable health of one extension; a successful call resets it.
+         */
+        ExtensionHealth: {
+            /** Extension Id */
+            extension_id: string;
+            state: components["schemas"]["HealthState"];
+            /** Consecutive Failures */
+            consecutive_failures: number;
+            /** Last Failure Where */
+            last_failure_where?: string | null;
+            /** Last Failure At */
+            last_failure_at?: number | null;
+            /** Last Success At */
+            last_success_at?: number | null;
+        };
+        /**
+         * ExtensionHealthResponse
+         * @description Report the durable health of every extension that has failed at least once.
+         */
+        ExtensionHealthResponse: {
+            /** Failure Limit */
+            failure_limit: number;
+            /** Extensions */
+            extensions: components["schemas"]["ExtensionHealth"][];
         };
         /**
          * ExtensionInfo
@@ -2434,6 +3493,56 @@ export interface components {
             package_digest?: string | null;
         };
         /**
+         * ExtensionJobCancelRequest
+         * @description Request cancellation of one stored job attempt.
+         */
+        ExtensionJobCancelRequest: {
+            /** Scope */
+            scope: string;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Reason */
+            reason: string;
+        };
+        /**
+         * ExtensionJobCancelResponse
+         * @description Report a cancellation request without claiming a proven stop.
+         */
+        ExtensionJobCancelResponse: {
+            status: components["schemas"]["JobCancelStatus"];
+            /** Revision */
+            revision: number;
+            diagnostic?: components["schemas"]["Diagnostic"] | null;
+        };
+        /**
+         * ExtensionJobReconcileRequest
+         * @description Inspect an uncertain result without repeating the original command.
+         */
+        ExtensionJobReconcileRequest: {
+            /** Scope */
+            scope: string;
+            /** Expected Revision */
+            expected_revision?: number | null;
+            receipt?: components["schemas"]["EncodedDocument"] | null;
+        };
+        /**
+         * ExtensionJobResponse
+         * @description Describe one stored job and its last result.
+         */
+        ExtensionJobResponse: {
+            /** Job Id */
+            job_id: string;
+            kind: components["schemas"]["JobKind"];
+            state: components["schemas"]["JobState"];
+            /** Revision */
+            revision: number;
+            /** Consumer Cursor */
+            consumer_cursor?: number | null;
+            /** Result */
+            result?: (components["schemas"]["CommandSucceeded"] | components["schemas"]["CommandFailed"] | components["schemas"]["CommandCanceled"] | components["schemas"]["CommandOutcomeUnknown"]) | components["schemas"]["ObservationJobResult"] | null;
+            diagnostic?: components["schemas"]["Diagnostic"] | null;
+        };
+        /**
          * ExtensionOperationResponse
          * @description Return an operation outcome without exposing the complete accepted proposal.
          */
@@ -2457,6 +3566,14 @@ export interface components {
             failure: components["schemas"]["LifecycleFailure"] | null;
         };
         /**
+         * ExtensionOperationsResponse
+         * @description Return the newest lifecycle operations, newest first.
+         */
+        ExtensionOperationsResponse: {
+            /** Operations */
+            operations: components["schemas"]["ExtensionOperationResponse"][];
+        };
+        /**
          * ExtensionPackageResponse
          * @description Show one valid or invalid package source, not its runtime activation state.
          */
@@ -2476,6 +3593,102 @@ export interface components {
             /** Capabilities */
             capabilities: components["schemas"]["CapabilityName"][];
             issue: components["schemas"]["DiscoveryIssue"] | null;
+        };
+        /**
+         * ExtensionPaneRequest
+         * @description Open one extension view in a pane beside a terminal window.
+         */
+        ExtensionPaneRequest: {
+            /** Extension Id */
+            extension_id: string;
+            /** View Id */
+            view_id: string;
+            /**
+             * Scope
+             * @description JSON-encoded ExtensionScope
+             */
+            scope: string;
+            /** Window Id */
+            window_id: string;
+            /**
+             * Working Directory
+             * @default
+             */
+            working_directory: string;
+        };
+        /**
+         * ExtensionPaneResponse
+         * @description Tell whether a new pane opened, or an existing pane took focus.
+         */
+        ExtensionPaneResponse: {
+            /** Opened */
+            opened: boolean;
+            /** Focused */
+            focused: boolean;
+            /** Window Id */
+            window_id?: string | null;
+            /** Reason */
+            reason?: string | null;
+        };
+        /**
+         * ExtensionQueryFailedResponse
+         * @description Publish one failed query result through the api layer.
+         */
+        ExtensionQueryFailedResponse: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "failed";
+            binding: components["schemas"]["OperationBinding"];
+            diagnostic: components["schemas"]["Diagnostic"];
+        };
+        /**
+         * ExtensionQueryReadyResponse
+         * @description Publish one ready query result through the api layer.
+         */
+        ExtensionQueryReadyResponse: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "ready";
+            binding: components["schemas"]["OperationBinding"];
+            document: components["schemas"]["EncodedDocument"];
+            snapshot: components["schemas"]["QuerySnapshot"];
+            next_page?: components["schemas"]["QueryPageCursor"] | null;
+            /**
+             * Content
+             * @default []
+             */
+            content: components["schemas"]["ContentReference"][];
+        };
+        /**
+         * ExtensionQueryRequest
+         * @description Select one declared read with its exact scope, arguments, and page.
+         */
+        ExtensionQueryRequest: {
+            /** Scope */
+            scope: string;
+            /** Arguments */
+            arguments: string;
+            page?: components["schemas"]["QueryPageCursor"] | null;
+            /**
+             * Limit
+             * @default 100
+             */
+            limit: number;
+        };
+        ExtensionQueryResult: components["schemas"]["ExtensionQueryReadyResponse"] | components["schemas"]["ExtensionQueryFailedResponse"];
+        /**
+         * ExtensionRecordPageResponse
+         * @description Describe one ordered record page and its exact continuation key.
+         */
+        ExtensionRecordPageResponse: {
+            /** Records */
+            records: components["schemas"]["RecordState"][];
+            /** Next Key */
+            next_key: string | null;
         };
         /**
          * ExtensionRuntimeResponse
@@ -2507,6 +3720,30 @@ export interface components {
             last_shutdown?: components["schemas"]["ShutdownRecord"] | null;
         };
         /**
+         * ExtensionSchemaRefResponse
+         * @description Identify the feature-owned schema of one derived document.
+         */
+        ExtensionSchemaRefResponse: {
+            /** Owner */
+            owner: string;
+            /** Name */
+            name: string;
+            /** Version */
+            version: number;
+            /** Digest */
+            digest: string;
+        };
+        /**
+         * ExtensionSecretsResponse
+         * @description Return every declared reference state and the current write policy.
+         */
+        ExtensionSecretsResponse: {
+            /** Secrets */
+            secrets: components["schemas"]["SecretStatusResponse"][];
+            /** Read Only */
+            read_only: boolean;
+        };
+        /**
          * ExtensionSettingsResponse
          * @description Return accepted settings for one scope and the current write policy.
          */
@@ -2514,6 +3751,20 @@ export interface components {
             settings: components["schemas"]["SettingsSnapshot"];
             /** Read Only */
             read_only: boolean;
+        };
+        /**
+         * ExtensionWorkResponse
+         * @description Name the active owners with facts after their cursors, and count the open jobs.
+         */
+        ExtensionWorkResponse: {
+            /** Projection Owners */
+            projection_owners: string[];
+            /** Observer Owners */
+            observer_owners: string[];
+            /** Open Jobs */
+            open_jobs: number;
+            /** Empty */
+            empty: boolean;
         };
         /**
          * FileAction
@@ -2548,6 +3799,74 @@ export interface components {
          * @enum {string}
          */
         FileState: "succeeded" | "failed";
+        /**
+         * FileTreeBlock
+         * @description Show visible tree rows while the extension owns expansion state.
+         */
+        FileTreeBlock: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "file_tree";
+            /** Block Id */
+            block_id: string;
+            /** Nodes */
+            nodes: components["schemas"]["FileTreeItem"][];
+        };
+        /**
+         * FileTreeItem
+         * @description Describe one visible row in a preorder file tree.
+         */
+        FileTreeItem: {
+            /** Item Id */
+            item_id: string;
+            /** Label */
+            label: string;
+            /**
+             * Depth
+             * @default 0
+             */
+            depth: number;
+            /**
+             * Node Kind
+             * @default file
+             * @enum {string}
+             */
+            node_kind: "file" | "directory";
+            /**
+             * Tone
+             * @default text
+             * @enum {string}
+             */
+            tone: "text" | "muted" | "accent" | "success" | "warning" | "error";
+            /** Action Id */
+            action_id?: string | null;
+        };
+        /**
+         * GenerationComparison
+         * @description Count the live and candidate rows of one owner and the rows with equal content.
+         */
+        GenerationComparison: {
+            /** Live Records */
+            live_records: number;
+            /** Candidate Records */
+            candidate_records: number;
+            /** Equal Records */
+            equal_records: number;
+            /** Live Entries */
+            live_entries: number;
+            /** Candidate Entries */
+            candidate_entries: number;
+            /** Equal Entries */
+            equal_entries: number;
+        };
+        /**
+         * GenerationState
+         * @description Show where one projection generation is in its rebuild and switch.
+         * @enum {string}
+         */
+        GenerationState: "building" | "migrating" | "ready" | "active" | "retired" | "failed";
         /**
          * GlobalApplicationResponse
          * @description Represent global application response.
@@ -2667,6 +3986,12 @@ export interface components {
             process_id: number;
         };
         /**
+         * HealthState
+         * @description Name the health of one extension's worker calls.
+         * @enum {string}
+         */
+        HealthState: "healthy" | "failing" | "failed";
+        /**
          * HiddenDirectoriesResponse
          * @description Represent hidden directories response.
          */
@@ -2683,6 +4008,36 @@ export interface components {
         HideDirectoryRequest: {
             /** Working Directory */
             working_directory: string;
+        };
+        /**
+         * HistoryComparison
+         * @description Count the live and candidate facts and feed rows of one session and the equal feed rows.
+         */
+        HistoryComparison: {
+            /** Live Facts */
+            live_facts: number;
+            /** Candidate Facts */
+            candidate_facts: number;
+            /** Live Entries */
+            live_entries: number;
+            /** Candidate Entries */
+            candidate_entries: number;
+            /** Equal Entries */
+            equal_entries: number;
+        };
+        /**
+         * HistoryReprocessingResponse
+         * @description Describe one candidate history of a closed session, its state, and its comparison.
+         */
+        HistoryReprocessingResponse: {
+            /** History Revision */
+            history_revision: string;
+            /** Session Id */
+            session_id: string;
+            state: components["schemas"]["ReprocessingState"];
+            comparison?: components["schemas"]["HistoryComparison"] | null;
+            /** Diagnostic */
+            diagnostic?: string | null;
         };
         /**
          * HourlySessionCountResponse
@@ -2780,6 +4135,24 @@ export interface components {
             /** Corroborated */
             corroborated: boolean;
         };
+        /**
+         * JobCancelStatus
+         * @description Report a stop request without claiming a proven final state.
+         * @enum {string}
+         */
+        JobCancelStatus: "requested" | "canceled" | "not_running" | "outcome_unknown";
+        /**
+         * JobKind
+         * @description Name the work that one durable extension job holds.
+         * @enum {string}
+         */
+        JobKind: "command" | "observer";
+        /**
+         * JobState
+         * @description Show the stored state of one durable extension job.
+         * @enum {string}
+         */
+        JobState: "accepted" | "running" | "succeeded" | "failed" | "canceled" | "outcome_unknown";
         /**
          * LaunchResponse
          * @description Represent launch response.
@@ -2912,6 +4285,35 @@ export interface components {
          */
         LifecycleState: "running" | "finished";
         /**
+         * ListBlock
+         * @description Show a selectable list, such as recorded thread messages.
+         */
+        ListBlock: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "list";
+            /** Block Id */
+            block_id: string;
+            /** Entries */
+            entries: components["schemas"]["ListItem"][];
+            /** Selected Id */
+            selected_id?: string | null;
+        };
+        /**
+         * ListItem
+         * @description Describe an item that can be selected without running a shell.
+         */
+        ListItem: {
+            /** Item Id */
+            item_id: string;
+            label: components["schemas"]["TextLine"];
+            detail?: components["schemas"]["TextLine"] | null;
+            /** Action Id */
+            action_id?: string | null;
+        };
+        /**
          * MediaType
          * @description Identify how a client must render text content.
          * @enum {string}
@@ -2959,6 +4361,23 @@ export interface components {
          * @enum {string}
          */
         MessageRole: "user" | "assistant" | "system" | "peer" | "parent";
+        /**
+         * MissingRecord
+         * @description Prove that a selected key has no row at the supplied snapshot.
+         */
+        MissingRecord: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            state: "missing";
+            key: components["schemas"]["RecordKey"];
+            /**
+             * Revision
+             * @default 0
+             */
+            revision: number;
+        };
         /**
          * ModelChangeBodyResponse
          * @description Represent a model-change entry body.
@@ -3075,12 +4494,163 @@ export interface components {
             muted: boolean;
         };
         /**
+         * ObservationCanceled
+         * @description Report stopped work after checking possible external effects.
+         */
+        ObservationCanceled: {
+            binding: components["schemas"]["ObservationJobBinding"];
+            /**
+             * Observations
+             * @default []
+             */
+            observations: components["schemas"]["ObservationCandidate"][];
+            /**
+             * Content
+             * @default []
+             */
+            content: components["schemas"]["ContentReference"][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "canceled";
+            diagnostic?: components["schemas"]["Diagnostic"] | null;
+        };
+        /**
+         * ObservationCandidate
+         * @description Supply a stable source key and original document, not a committed event.
+         */
+        ObservationCandidate: {
+            /** Observation Key */
+            observation_key: string;
+            /** Source Identity */
+            source_identity: string;
+            /** Source Type */
+            source_type: string;
+            /** Scope */
+            scope: components["schemas"]["SessionScope"] | components["schemas"]["WorkspaceScope"] | components["schemas"]["RepositoryScope"] | components["schemas"]["InstallationScope"];
+            document: components["schemas"]["EncodedDocument"];
+            /** Occurred At */
+            occurred_at?: number | null;
+            /**
+             * Causes
+             * @default []
+             */
+            causes: string[];
+        };
+        /**
+         * ObservationFailed
+         * @description Report a known failure, not a write whose result is unknown.
+         */
+        ObservationFailed: {
+            binding: components["schemas"]["ObservationJobBinding"];
+            /**
+             * Observations
+             * @default []
+             */
+            observations: components["schemas"]["ObservationCandidate"][];
+            /**
+             * Content
+             * @default []
+             */
+            content: components["schemas"]["ContentReference"][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "failed";
+            diagnostic: components["schemas"]["Diagnostic"];
+        };
+        /**
+         * ObservationJobBinding
+         * @description Keep the job and cause fixed while each dispatch has its own call ID.
+         */
+        ObservationJobBinding: {
+            /** Extension Id */
+            extension_id: string;
+            /** Scope */
+            scope: components["schemas"]["SessionScope"] | components["schemas"]["WorkspaceScope"] | components["schemas"]["RepositoryScope"] | components["schemas"]["InstallationScope"];
+            /** Runtime Revision */
+            runtime_revision: string;
+            /** History Revision */
+            history_revision: string;
+            /** Job Id */
+            job_id: string;
+            /** Call Id */
+            call_id: string;
+            /** Event Id */
+            event_id: string;
+        };
+        ObservationJobResult: components["schemas"]["ObservationSucceeded"] | components["schemas"]["ObservationFailed"] | components["schemas"]["ObservationCanceled"] | components["schemas"]["ObservationOutcomeUnknown"];
+        /**
+         * ObservationOutcomeUnknown
+         * @description Keep a lost external outcome explicit until evidence can resolve it.
+         */
+        ObservationOutcomeUnknown: {
+            binding: components["schemas"]["ObservationJobBinding"];
+            /**
+             * Observations
+             * @default []
+             */
+            observations: components["schemas"]["ObservationCandidate"][];
+            /**
+             * Content
+             * @default []
+             */
+            content: components["schemas"]["ContentReference"][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "outcome_unknown";
+            diagnostic: components["schemas"]["Diagnostic"];
+            receipt?: components["schemas"]["EncodedDocument"] | null;
+        };
+        /**
+         * ObservationSucceeded
+         * @description Report completed work, which can have no new observations.
+         */
+        ObservationSucceeded: {
+            binding: components["schemas"]["ObservationJobBinding"];
+            /**
+             * Observations
+             * @default []
+             */
+            observations: components["schemas"]["ObservationCandidate"][];
+            /**
+             * Content
+             * @default []
+             */
+            content: components["schemas"]["ContentReference"][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "succeeded";
+        };
+        /**
          * OpenRewindRequest
          * @description Represent open rewind request.
          */
         OpenRewindRequest: {
             /** Request Id */
             request_id: string;
+        };
+        /**
+         * OperationBinding
+         * @description Identify one call without exposing a worker or transport request object.
+         */
+        OperationBinding: {
+            /** Extension Id */
+            extension_id: string;
+            /** Operation Id */
+            operation_id: string;
+            /** Scope */
+            scope: components["schemas"]["SessionScope"] | components["schemas"]["WorkspaceScope"] | components["schemas"]["RepositoryScope"] | components["schemas"]["InstallationScope"];
+            /** Runtime Revision */
+            runtime_revision: string;
+            /** Call Id */
+            call_id: string;
         };
         /** @enum {string} */
         OperationStatus: "preparing" | "succeeded" | "failed" | "interrupted";
@@ -3127,6 +4697,16 @@ export interface components {
             succeeded: boolean;
             /** Reason */
             reason: string | null;
+        };
+        /**
+         * PaneSectionsResponse
+         * @description Return the extension sections of one core pane and the titles of views that failed.
+         */
+        PaneSectionsResponse: {
+            /** Views */
+            views: components["schemas"]["TerminalView"][];
+            /** Unavailable */
+            unavailable: string[];
         };
         /**
          * PlanChoiceResponse
@@ -3225,6 +4805,20 @@ export interface components {
             daily_sessions: components["schemas"]["DailySessionCountResponse"][];
         };
         /**
+         * ProjectionGenerationResponse
+         * @description Describe one projection generation, its state, and its comparison with the live one.
+         */
+        ProjectionGenerationResponse: {
+            /** Generation */
+            generation: string;
+            /** Owner */
+            owner: string;
+            /** History Revision */
+            history_revision: string;
+            state: components["schemas"]["GenerationState"];
+            comparison?: components["schemas"]["GenerationComparison"] | null;
+        };
+        /**
          * PushConfigurationResponse
          * @description Represent push configuration response.
          */
@@ -3263,6 +4857,43 @@ export interface components {
             device_id: string;
             /** Device Label */
             device_label?: string | null;
+        };
+        /**
+         * QueryPageCursor
+         * @description Carry an opaque package token within a host-checked selection and snapshot.
+         */
+        QueryPageCursor: {
+            selection: components["schemas"]["QuerySelection"];
+            snapshot: components["schemas"]["QuerySnapshot"];
+            /** Position */
+            position: string;
+        };
+        /**
+         * QuerySelection
+         * @description Keep page tokens tied to the same operation, scope, settings, and arguments.
+         */
+        QuerySelection: {
+            /** Extension Id */
+            extension_id: string;
+            /** Operation Id */
+            operation_id: string;
+            /** Scope */
+            scope: components["schemas"]["SessionScope"] | components["schemas"]["WorkspaceScope"] | components["schemas"]["RepositoryScope"] | components["schemas"]["InstallationScope"];
+            /** Runtime Revision */
+            runtime_revision: string;
+            /** Settings Revision */
+            settings_revision: number;
+            /** Arguments Digest */
+            arguments_digest: string;
+        };
+        /**
+         * QuerySnapshot
+         * @description Name the state used by a read, with an optional stored-data cursor.
+         */
+        QuerySnapshot: {
+            /** State Revision */
+            state_revision: string;
+            cursor?: components["schemas"]["SnapshotCursor"] | null;
         };
         /**
          * QuestionAnswerResponse
@@ -3333,6 +4964,101 @@ export interface components {
             text: string;
         };
         /**
+         * RawEventAuditResponse
+         * @description Describe one raw event and its bounded interpretation metadata.
+         */
+        RawEventAuditResponse: {
+            /** Raw Event Id */
+            raw_event_id: string;
+            /** Session Id */
+            session_id: string;
+            /** Harness */
+            harness: string;
+            /** Source Type */
+            source_type: string;
+            /** Source Name */
+            source_name: string;
+            /** Source Position */
+            source_position: string;
+            /** Observed At */
+            observed_at: number;
+            /** Encoding */
+            encoding: string;
+            /** Payload Byte Length */
+            payload_byte_length: number;
+            /**
+             * Translator Version
+             * @default
+             */
+            translator_version: string;
+            /**
+             * Decision
+             * @default untranslated
+             */
+            decision: string;
+            /** Reason */
+            reason?: string | null;
+            /**
+             * Completed At
+             * @default 0
+             */
+            completed_at: number;
+            /**
+             * History Revision
+             * @default default
+             */
+            history_revision: string;
+            /**
+             * Runtime Revision
+             * @default
+             */
+            runtime_revision: string;
+            /**
+             * Format Version
+             * @default 1
+             */
+            format_version: number;
+            /**
+             * Canonical Event Count
+             * @default 0
+             */
+            canonical_event_count: number;
+            /**
+             * Steps
+             * @default []
+             */
+            steps: components["schemas"]["RawEventAuditStepResponse"][];
+            /**
+             * Steps Truncated
+             * @default false
+             */
+            steps_truncated: boolean;
+        };
+        /**
+         * RawEventAuditStepResponse
+         * @description Describe one recorded processing step without its complete bodies.
+         */
+        RawEventAuditStepResponse: {
+            /** Step Index */
+            step_index: number;
+            /** Stage */
+            stage: string;
+            /** Owner */
+            owner: string | null;
+            /** Outcome */
+            outcome: string | null;
+            /** Observed Byte Length */
+            observed_byte_length: number | null;
+            /** Observed Digest */
+            observed_digest: string | null;
+            /** Diagnostic Code */
+            diagnostic_code: string | null;
+            /** Reason */
+            reason: string | null;
+            /** Operation Kinds */
+            operation_kinds: string[];
+        };
+        /**
          * ReadPlanChoicesRequest
          * @description Represent read plan choices request.
          */
@@ -3352,6 +5078,21 @@ export interface components {
             content: components["schemas"]["ContentResponse"];
         };
         /**
+         * RecordKey
+         * @description Keep collection keys inside one owner and data scope.
+         */
+        RecordKey: {
+            /** Owner */
+            owner: string;
+            /** Collection */
+            collection: string;
+            /** Scope */
+            scope: components["schemas"]["SessionScope"] | components["schemas"]["WorkspaceScope"] | components["schemas"]["RepositoryScope"] | components["schemas"]["InstallationScope"];
+            /** Key */
+            key: string;
+        };
+        RecordState: components["schemas"]["MissingRecord"] | components["schemas"]["StoredRecord"] | components["schemas"]["DeletedRecord"];
+        /**
          * RecordedResponse
          * @description Represent recorded response.
          */
@@ -3361,6 +5102,14 @@ export interface components {
              * @default true
              */
             recorded: boolean;
+        };
+        /**
+         * RelatedScopesResponse
+         * @description Name the scopes that one scope relates to, most specific first.
+         */
+        RelatedScopesResponse: {
+            /** Scopes */
+            scopes: (components["schemas"]["SessionScope"] | components["schemas"]["WorkspaceScope"] | components["schemas"]["RepositoryScope"] | components["schemas"]["InstallationScope"])[];
         };
         /**
          * RenameSessionRequest
@@ -3390,6 +5139,13 @@ export interface components {
             git_directory: string;
         };
         /**
+         * RepositoryScopeResponse
+         * @description Give the repository scope of a directory, or none.
+         */
+        RepositoryScopeResponse: {
+            scope: components["schemas"]["RepositoryScope"] | null;
+        };
+        /**
          * RepositoryStatusResponse
          * @description Represent repository status response.
          */
@@ -3401,6 +5157,12 @@ export interface components {
             /** Dirty */
             dirty: boolean;
         };
+        /**
+         * ReprocessingState
+         * @description Show where one candidate history is in its replay and switch.
+         * @enum {string}
+         */
+        ReprocessingState: "building" | "ready" | "switching" | "active" | "retired" | "failed";
         /**
          * RescanExtensionsRequest
          * @description Reject stale management writes before package files are read.
@@ -3579,6 +5341,43 @@ export interface components {
              * @default false
              */
             required: boolean;
+        };
+        /**
+         * SecretStatusResponse
+         * @description Tell whether one declared reference has a stored value; never the value.
+         */
+        SecretStatusResponse: {
+            /** Name */
+            name: string;
+            /** Required */
+            required: boolean;
+            /** Configured */
+            configured: boolean;
+        };
+        /**
+         * SecretWriteRequest
+         * @description Carry one new secret value; no response contains it.
+         */
+        SecretWriteRequest: {
+            /** Secret */
+            secret: string;
+        };
+        /**
+         * SectionBlock
+         * @description Group feature-owned blocks under one heading.
+         */
+        SectionBlock: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "section";
+            /** Block Id */
+            block_id: string;
+            /** Title */
+            title: string;
+            /** Children */
+            children: (components["schemas"]["TextBlock"] | components["schemas"]["TableBlock"] | components["schemas"]["ListBlock"] | components["schemas"]["StatusBlock"] | components["schemas"]["FileTreeBlock"] | components["schemas"]["DiffBlock"] | components["schemas"]["SectionBlock"])[];
         };
         /**
          * SelectEffortRequest
@@ -3907,6 +5706,88 @@ export interface components {
             arguments: components["schemas"]["ContentResponse"] | null;
         };
         /**
+         * SnapshotCursor
+         * @description Select one complete projection boundary.
+         */
+        SnapshotCursor: {
+            /** Scope */
+            scope: components["schemas"]["SessionScope"] | components["schemas"]["WorkspaceScope"] | components["schemas"]["RepositoryScope"] | components["schemas"]["InstallationScope"];
+            /** History Revision */
+            history_revision: string;
+            /** Projection Generation */
+            projection_generation: string;
+            /** Commit Cursor */
+            commit_cursor: number;
+        };
+        /**
+         * StatusBlock
+         * @description Show a short status message with a semantic tone.
+         */
+        StatusBlock: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "status";
+            /** Block Id */
+            block_id: string;
+            /** Label */
+            label: string;
+            /**
+             * Tone
+             * @default text
+             * @enum {string}
+             */
+            tone: "text" | "muted" | "accent" | "success" | "warning" | "error";
+            detail?: components["schemas"]["TextSpan"] | null;
+        };
+        /**
+         * StoredRecord
+         * @description Carry a complete row with its host-allocated commit revision.
+         */
+        StoredRecord: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            state: "stored";
+            key: components["schemas"]["RecordKey"];
+            /** Revision */
+            revision: number;
+            document: components["schemas"]["EncodedDocument"];
+            /** Summary */
+            summary: string;
+        };
+        /**
+         * TableBlock
+         * @description Let the client fit a bounded table to its current width.
+         */
+        TableBlock: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "table";
+            /** Block Id */
+            block_id: string;
+            /** Columns */
+            columns: string[];
+            /** Rows */
+            rows: components["schemas"]["TableRow"][];
+        };
+        /**
+         * TableRow
+         * @description Keep one row's cells and optional action together.
+         */
+        TableRow: {
+            /** Item Id */
+            item_id: string;
+            /** Cells */
+            cells: components["schemas"]["TextLine"][];
+            /** Action Id */
+            action_id?: string | null;
+        };
+        /**
          * TaskResponse
          * @description Represent task response.
          */
@@ -3934,6 +5815,36 @@ export interface components {
         TasksHiddenRequest: {
             /** Hidden */
             hidden: boolean;
+        };
+        /**
+         * TerminalAction
+         * @description Reference a registered command instead of executable shell text.
+         */
+        TerminalAction: {
+            /** Action Id */
+            action_id: string;
+            /** Command Id */
+            command_id: string;
+            /** Label */
+            label: string;
+            arguments: components["schemas"]["EncodedDocument"];
+            /** Expected State Revision */
+            expected_state_revision?: string | null;
+        };
+        /**
+         * TerminalBinding
+         * @description Keep presentation results attached to one accepted request.
+         */
+        TerminalBinding: {
+            /** Extension Id */
+            extension_id: string;
+            /** View Id */
+            view_id: string;
+            /** Runtime Revision */
+            runtime_revision: string;
+            /** Settings Revision */
+            settings_revision: number;
+            snapshot: components["schemas"]["SnapshotCursor"];
         };
         /**
          * TerminalDiagnosticsResponse
@@ -3973,6 +5884,29 @@ export interface components {
             input_state: components["schemas"]["TerminalInputStateResponse"] | null;
         };
         /**
+         * TerminalView
+         * @description Return layout data for one exact host-selected view revision.
+         */
+        TerminalView: {
+            binding: components["schemas"]["TerminalBinding"];
+            /** Title */
+            title: string;
+            /** Blocks */
+            blocks: (components["schemas"]["TextBlock"] | components["schemas"]["TableBlock"] | components["schemas"]["ListBlock"] | components["schemas"]["StatusBlock"] | components["schemas"]["FileTreeBlock"] | components["schemas"]["DiffBlock"] | components["schemas"]["SectionBlock"])[];
+            /**
+             * Actions
+             * @default []
+             */
+            actions: components["schemas"]["TerminalAction"][];
+        };
+        /**
+         * TerminalViewResponse
+         * @description Return one checked terminal view for the pane client to paint.
+         */
+        TerminalViewResponse: {
+            view: components["schemas"]["TerminalView"];
+        };
+        /**
          * TerminalWindowDiagnosticResponse
          * @description Represent terminal window diagnostic response.
          */
@@ -3985,6 +5919,47 @@ export interface components {
             screen: string | null;
             /** Screen Error */
             screen_error: string | null;
+        };
+        /**
+         * TextBlock
+         * @description Render wrapped text with semantic styles.
+         */
+        TextBlock: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "text";
+            /** Block Id */
+            block_id: string;
+            content: components["schemas"]["TextLine"];
+        };
+        /**
+         * TextLine
+         * @description Group bounded spans for a table cell, list item, or heading.
+         */
+        TextLine: {
+            /** Spans */
+            spans: components["schemas"]["TextSpan"][];
+        };
+        /**
+         * TextSpan
+         * @description Select semantic emphasis without supplying an escape sequence.
+         */
+        TextSpan: {
+            /** Text */
+            text: string;
+            /**
+             * Tone
+             * @default text
+             * @enum {string}
+             */
+            tone: "text" | "muted" | "accent" | "success" | "warning" | "error";
+            /**
+             * Bold
+             * @default false
+             */
+            bold: boolean;
         };
         /**
          * TogglePanesRequest
@@ -4167,6 +6142,15 @@ export interface components {
             view_mode: string;
         };
         /**
+         * ViewSettingsResponse
+         * @description Return the settings that one view receives for its scope in the published runtime.
+         */
+        ViewSettingsResponse: {
+            /** Settings Revision */
+            settings_revision: number;
+            settings: components["schemas"]["EncodedDocument"] | null;
+        };
+        /**
          * WebBodyResponse
          * @description Represent a web entry body.
          */
@@ -4175,6 +6159,49 @@ export interface components {
             url: string | null;
             state: components["schemas"]["FileState"];
             result: components["schemas"]["ContentResponse"] | null;
+        };
+        /** @enum {string} */
+        WebSlot: "feed" | "session_tab" | "workspace_page" | "toolbar" | "status" | "settings" | "mirror" | "scoreboard";
+        /** @enum {string} */
+        WebViewMode: "add" | "replace";
+        /**
+         * WebViewResponse
+         * @description Describe one active view and where its module and styles load from.
+         */
+        WebViewResponse: {
+            /** Extension Id */
+            extension_id: string;
+            /** Package Digest */
+            package_digest: string;
+            /** View Id */
+            view_id: string;
+            /** Title */
+            title: string;
+            slot: components["schemas"]["WebSlot"];
+            /** Scopes */
+            scopes: components["schemas"]["ScopeKind"][];
+            mode: components["schemas"]["WebViewMode"];
+            /** Target */
+            target?: string | null;
+            /** Order */
+            order: number;
+            /** Module Url */
+            module_url: string;
+            /**
+             * Style Urls
+             * @default []
+             */
+            style_urls: string[];
+        };
+        /**
+         * WebViewsResponse
+         * @description List the active views of one published runtime.
+         */
+        WebViewsResponse: {
+            /** Runtime Revision */
+            runtime_revision: string;
+            /** Views */
+            views: components["schemas"]["WebViewResponse"][];
         };
         /**
          * WorkspaceScope
@@ -4609,6 +6636,8 @@ export interface operations {
             query?: {
                 after_cursor?: number;
                 include_application?: boolean;
+                view_revision?: number | null;
+                after_entry?: number | null;
             };
             header?: {
                 "Last-Event-ID"?: string | null;
@@ -5851,6 +7880,46 @@ export interface operations {
             };
         };
     };
+    raw_event_audit_api_diagnostics_raw_events__raw_event_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                raw_event_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RawEventAuditResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     terminal_diagnostics_api_diagnostics_terminal_get: {
         parameters: {
             query?: never;
@@ -5867,6 +7936,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TerminalDiagnosticsResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    extension_work_api_diagnostics_extension_work_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionWorkResponse"];
                 };
             };
             /** @description The request names something unknown, or cannot be acted on as posed. */
@@ -7071,6 +9178,84 @@ export interface operations {
             };
         };
     };
+    recent_extension_operations_api_extensions_operations_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionOperationsResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    extension_health_api_extensions_health_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionHealthResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     extension_runtime_state_api_extensions_state_get: {
         parameters: {
             query?: never;
@@ -7417,10 +9602,93 @@ export interface operations {
             };
         };
     };
+    retry_extension_cleanup_api_extensions_cleanup_retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionRuntimeResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Extension changes are read-only or the browser origin is not accepted. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The operation does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description State changed, work is pending, or dependent confirmation is incomplete. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The request is not application/json. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The daemon extension manager is unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     read_extension_settings_api_extensions__extension_id__settings_get: {
         parameters: {
             query?: {
-                /** @description JSON-encoded ExtensionScope */
+                /** @description JSON-encoded ExtensionScope; the installation scope if absent */
                 scope?: string | null;
                 package_digest?: string | null;
             };
@@ -7586,6 +9854,1147 @@ export interface operations {
             };
             /** @description The daemon extension manager is unavailable. */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    extension_secrets_api_extensions__extension_id__secrets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                extension_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionSecretsResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    store_extension_secret_api_extensions__extension_id__secrets__name__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                extension_id: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecretWriteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionSecretsResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    clear_extension_secret_api_extensions__extension_id__secrets__name__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                extension_id: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionSecretsResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    extension_records_api_extensions__extension_id__records__collection__get: {
+        parameters: {
+            query: {
+                scope: string;
+                after?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                extension_id: string;
+                collection: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionRecordPageResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    extension_changes_api_extensions__extension_id__changes_get: {
+        parameters: {
+            query: {
+                scope: string;
+                history_revision?: string;
+                projection_generation?: string;
+                cursor?: number;
+            };
+            header?: never;
+            path: {
+                extension_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    extension_job_api_extensions__extension_id__jobs__job_id__get: {
+        parameters: {
+            query: {
+                scope: string;
+            };
+            header?: never;
+            path: {
+                extension_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionJobResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    cancel_extension_job_api_extensions__extension_id__jobs__job_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                extension_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExtensionJobCancelRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionJobCancelResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    reconcile_extension_job_api_extensions__extension_id__jobs__job_id__reconcile_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                extension_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExtensionJobReconcileRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionJobResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    extension_command_api_extensions__extension_id__commands__command_id__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                extension_id: string;
+                command_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExtensionCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionJobResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    extension_query_api_extensions__extension_id__queries__query_id__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                extension_id: string;
+                query_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExtensionQueryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionQueryResult"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    rebuild_projection_api_extensions__extension_id__projections_rebuild_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                extension_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectionGenerationResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    projection_generation_api_extensions__extension_id__projections_generations__generation__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                extension_id: string;
+                generation: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectionGenerationResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    activate_projection_generation_api_extensions__extension_id__projections_generations__generation__activate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                extension_id: string;
+                generation: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectionGenerationResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    resume_projection_generation_api_extensions__extension_id__projections_generations__generation__resume_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                extension_id: string;
+                generation: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectionGenerationResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    reprocess_session_api_history_sessions__session_id__reprocess_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HistoryReprocessingResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    candidate_history_api_history_candidates__history_revision__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                history_revision: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HistoryReprocessingResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    activate_candidate_history_api_history_candidates__history_revision__activate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                history_revision: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HistoryReprocessingResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    extension_web_views_api_extension_web_views_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebViewsResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    extension_view_settings_api_extension_web_views__extension_id__settings_get: {
+        parameters: {
+            query?: {
+                /** @description JSON-encoded ExtensionScope; the installation scope if absent */
+                scope?: string | null;
+            };
+            header?: never;
+            path: {
+                extension_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ViewSettingsResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    extension_related_scopes_api_extension_web_related_scopes_get: {
+        parameters: {
+            query?: {
+                /** @description JSON-encoded ExtensionScope; the installation scope if absent */
+                scope?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RelatedScopesResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    extension_web_asset_extensions__extension_id___package_digest___asset_path__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                extension_id: string;
+                package_digest: string;
+                asset_path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    extension_terminal_view_api_extension_terminal_views__extension_id___view_id__get: {
+        parameters: {
+            query: {
+                scope: string;
+                columns: number;
+                rows: number;
+                block?: string | null;
+                item?: string | null;
+            };
+            header?: never;
+            path: {
+                extension_id: string;
+                view_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TerminalViewResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    open_extension_pane_api_extension_terminal_panes_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExtensionPaneRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionPaneResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    extension_terminal_views_api_extension_terminal_views_get: {
+        parameters: {
+            query?: {
+                window_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AvailableViewsResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    extension_pane_sections_api_extension_terminal_sessions__session_id___pane__get: {
+        parameters: {
+            query: {
+                columns: number;
+                rows: number;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+                pane: components["schemas"]["CorePane"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaneSectionsResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    run_terminal_action_api_extension_terminal_actions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExtensionActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionJobResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    extension_repository_scope_api_extension_web_repository_scope_get: {
+        parameters: {
+            query: {
+                directory: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepositoryScopeResponse"];
+                };
+            };
+            /** @description The request names something unknown, or cannot be acted on as posed. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An internal failure. Audited as an `errors` row; the body says nothing more. */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

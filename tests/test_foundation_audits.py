@@ -11,6 +11,7 @@ from tests import (
     foundation_test_liveness,
     foundation_test_primitives,
     foundation_test_reactions,
+    storage_reads,
 )
 from tests.harness_names import CODEX_HARNESS
 
@@ -151,7 +152,7 @@ def test_dead_cli_process_becomes_one_session(
         ),
     )
     runtime.interpreter.tick()
-    events = runtime.store.page_from(0, 10)
+    events = storage_reads.page_from(runtime.store, 0, 10)
     assert [type(stored.payload) for stored in events] == [foundation_dependencies.domain.event_session.SessionFinished]
     assert foundation_test_interpreter.stored_reason(events[0]) == "process_exited"
     assert not runtime.sessions.watchable()
@@ -185,7 +186,7 @@ def test_dead_run_finishes_before_its_rollout(
         ),
     )
     runtime.interpreter.tick()
-    stored_events = runtime.store.page_from(0, 10)
+    stored_events = storage_reads.page_from(runtime.store, 0, 10)
     assert [type(event.payload) for event in stored_events] == [
         foundation_dependencies.domain.event_session.SessionFinished,
         foundation_dependencies.domain.event_conversation.MessageCreated,

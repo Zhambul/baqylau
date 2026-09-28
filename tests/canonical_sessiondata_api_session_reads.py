@@ -33,7 +33,7 @@ async def read_application_and_session_frames(
                 read_model, stream_models.SilentAudit(), stream_models.SessionApplicationSnapshots(),
             ),
             api_values.SESSION,
-            0,
+            streams.SessionStreamPosition(0),
         ),
     )
     application = await reader.next()
@@ -54,7 +54,9 @@ async def read_reconnected_frame(
     """
     reader = stream_models.FrameReader(
         streams.session_frames(
-            streams.SessionStreamServices(read_model, stream_models.SilentAudit()), api_values.SESSION, cursor,
+            streams.SessionStreamServices(read_model, stream_models.SilentAudit()),
+            api_values.SESSION,
+            streams.SessionStreamPosition(cursor),
         ),
     )
     frame = await reader.next()
@@ -73,7 +75,9 @@ async def read_first_frame_and_confirm_no_update(
     """
     reader = stream_models.FrameReader(
         streams.session_frames(
-            streams.SessionStreamServices(read_model, stream_models.SilentAudit()), api_values.SESSION, 0,
+            streams.SessionStreamServices(read_model, stream_models.SilentAudit()),
+            api_values.SESSION,
+            streams.SessionStreamPosition(0),
         ),
     )
     first = await reader.next()

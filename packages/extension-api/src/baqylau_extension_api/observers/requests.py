@@ -3,7 +3,7 @@
 
 from baqylau_extension_api.errors import ExtensionContractError
 from baqylau_extension_api.manifest.package import ExtensionManifest
-from baqylau_extension_api.models.canonical import CoreFact
+from baqylau_extension_api.models.canonical import CoreFact, fact_type
 from baqylau_extension_api.models.observer_jobs import (
     ObservationCancelRequest,
     ObservationJobRequest,
@@ -34,9 +34,7 @@ def validate_observation_request(
         message = "observer request exceeds its encoded size limit"
         raise ExtensionContractError(message)
     _validate_trigger(checked, schemas)
-    fact = checked.event.fact
-    fact_type = fact.payload.kind if isinstance(fact, CoreFact) else fact.event_type
-    if fact_type not in selection.input_types:
+    if fact_type(checked.event.fact) not in selection.input_types:
         message = "observer fact type is not selected"
         raise ExtensionContractError(message)
     documents.validate_settings(manifest, checked.settings, schemas)

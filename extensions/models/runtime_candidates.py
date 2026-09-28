@@ -3,6 +3,7 @@
 
 from typing import Annotated, Self
 
+from baqylau_extension_api.errors import ExtensionContractError
 from baqylau_extension_api.manifest.package import ExtensionManifest
 from baqylau_extension_api.manifest.rules import require_unique
 from baqylau_extension_api.models.base import Identifier, Revision, WireModel
@@ -11,20 +12,32 @@ from baqylau_extension_api.schemas import SchemaSet
 from pydantic import Field, model_validator
 
 from extensions.models.lifecycle_selection import RuntimePackageSelection, RuntimeSelection, validate_package_identity
+from extensions.models.record_migration import RecordSource, validate_record_sources
 from extensions.models.settings import SettingsOverrides
-from extensions.models.settings_migration import validate_migration_source
+from extensions.models.settings_migration import needs_settings_migration, validate_migration_source
 
 
 class MigratingRuntimePackage(WireModel):
-    """Pin old raw choices without pretending that converted values already exist."""
+    """Pin old raw choices and stored record schemas without pretending that converted values already exist."""
 
     extension_info: ExtensionInfo
     source: SettingsOverrides
+    records: Annotated[tuple[RecordSource, ...], Field(max_length=1000)] = ()
 
     def validate_manifest(self, manifest: ExtensionManifest, schemas: SchemaSet) -> None:
-        """Check the selected identity, saved values, scopes, and exact conversion paths."""
+        """Check the selected identity, saved values, scopes, and exact conversion paths.
+
+        Raises:
+            ExtensionContractError: If the package needs neither a settings nor a record conversion.
+
+        """
         validate_package_identity(self.extension_info, manifest)
-        validate_migration_source(manifest, self.source, schemas)
+        validate_record_sources(manifest, self.records)
+        if needs_settings_migration(manifest, self.source):
+            validate_migration_source(manifest, self.source, schemas)
+        elif not self.records:
+            message = "a migrating package requires a settings or record conversion"
+            raise ExtensionContractError(message)
 
 
 type RuntimePackageCandidate = RuntimePackageSelection | MigratingRuntimePackage
@@ -45,7 +58,7 @@ class MigratingRuntimeSelection(WireModel):
             A plan with unique owners and at least one required conversion.
 
         Raises:
-            ValueError: If no package requires settings conversion.
+            ValueError: If no package requires a conversion.
 
         """
         require_unique((package.extension_info.extension_id for package in self.packages), "runtime package IDs")

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Zhambyl Yermagambet
-"""Keep the SDK dead-code roots tied to declared public names."""
+"""Keep the SDK and test kit dead-code roots tied to declared public names."""
 
 import ast
 from collections.abc import Iterator
@@ -7,6 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SDK_ROOT = ROOT / "packages" / "extension-api" / "src" / "baqylau_extension_api"
+TESTKIT_ROOT = ROOT / "packages" / "extension-testkit" / "src" / "baqylau_extension_testkit"
 
 
 def public_members(declaration: ast.ClassDef) -> Iterator[str]:
@@ -42,8 +43,9 @@ def public_names(path: Path) -> Iterator[str]:
 
 
 def test_deadcode_roots_are_real_public_names() -> None:
-    """Reject an invented or removed SDK entry point in the Vulture roots."""
-    declared = {name for path in SDK_ROOT.rglob("*.py") for name in public_names(path)}
+    """Reject an invented or removed SDK or test kit entry point in the Vulture roots."""
+    sources = (*SDK_ROOT.rglob("*.py"), *TESTKIT_ROOT.rglob("*.py"))
+    declared = {name for path in sources for name in public_names(path)}
     tree = ast.parse((ROOT / "vulture_extension_api.py").read_text(encoding="utf-8"))
     selected = {
         ast.unparse(node.value)

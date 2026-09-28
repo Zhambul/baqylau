@@ -66,3 +66,9 @@ class LifecyclePlanResponse(WireModel):
     extension_id: ExtensionId
     request: LifecyclePreviewRequest
     affected_extensions: tuple[ExtensionId, ...]
+
+
+class ExtensionOperationsResponse(WireModel):
+    """Return the newest lifecycle operations, newest first."""
+
+    operations: tuple[ExtensionOperationResponse, ...]

@@ -13,6 +13,7 @@ from baqylau_extension_api.manifest.operations import (
     QueryDefinition,
     ServiceRequirement,
 )
+from baqylau_extension_api.manifest.processes import ProcessDeclaration
 from baqylau_extension_api.manifest.views import TerminalView, WebView
 from baqylau_extension_api.models.base import WireModel
 
@@ -31,3 +32,6 @@ class Contributions(WireModel):
     consumes: Annotated[tuple[ServiceRequirement, ...], Field(max_length=100)] = ()
     web: Annotated[tuple[WebView, ...], Field(max_length=100)] = ()
     terminal: Annotated[tuple[TerminalView, ...], Field(max_length=100)] = ()
+    processes: Annotated[tuple[ProcessDeclaration, ...], Field(max_length=100)] = ()
+    uses_inference: bool = False
+    uses_sessions: bool = False

@@ -11,6 +11,8 @@ from baqylau_extension_api.contracts.plugin import ExtensionCapabilities, Extens
 
 from baqylau_dev.signatures import MethodSignatures, method_signatures
 
+FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
+
 
 @dataclass(frozen=True)
 class ProtocolSpec:
@@ -42,7 +44,37 @@ def sdk_protocols() -> tuple[ProtocolSpec, ...]:
 def _protocol_spec(protocol: type, capability: str | None) -> ProtocolSpec:
     tree = ast.parse(inspect.getsource(protocol))
     declaration = next(node for node in tree.body if isinstance(node, ast.ClassDef))
-    return ProtocolSpec(
-        name=f"{protocol.__module__}.{protocol.__name__}", capability=capability,
-        members=method_signatures(declaration),
-    )
+    name = f"{protocol.__module__}.{protocol.__name__}"
+    return ProtocolSpec(name=name, capability=capability, members=_required_signatures(declaration))
+
+
+def required_methods(declaration: ast.ClassDef) -> frozenset[str]:
+    """Name the protocol methods that an implementation must define.
+
+    A method with a body is a default method: the implementation inherits it
+    from its explicit protocol base, so it is not required.
+
+    Returns:
+        The names of the stub methods.
+
+    """
+    methods = [member for member in declaration.body if isinstance(member, FUNCTIONS)]
+    stubs = [method for method in methods if all(map(_empty, method.body))]
+    return frozenset(method.name for method in stubs)
+
+
+def _required_signatures(declaration: ast.ClassDef) -> MethodSignatures:
+    required = required_methods(declaration)
+    signatures = method_signatures(declaration)
+    return {name: signatures[name] for name in sorted(required)}
+
+
+def _empty(statement: ast.stmt) -> bool:
+    if isinstance(statement, ast.Pass):
+        return True
+    constant = statement.value if isinstance(statement, ast.Expr) else None
+    return isinstance(constant, ast.Constant) and _placeholder(constant.value)
+
+
+def _placeholder(literal: object) -> bool:
+    return literal is Ellipsis or isinstance(literal, str)

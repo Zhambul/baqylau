@@ -33,6 +33,8 @@ from tests.plugin_tests import (
     vocabulary as fixture,
 )
 
+TRANSCRIPT_PREFIX = "prefix\n"
+
 
 def test_claude_active_send_is_not_called_queued(
     monkeypatch: pytest.MonkeyPatch,
@@ -85,7 +87,7 @@ def test_claude_active_send_is_not_called_queued(
 def test_claude_native_queue_state_changes(tmp_path: Path) -> None:
     """Verify claude native queue state changes to sent when the queue drains."""
     source = tmp_path / fixture.SESSION_JSONL_PATH
-    source.write_text("prefix\n", encoding=fixture.TEXT_ENCODING)
+    source.write_text(TRANSCRIPT_PREFIX, encoding=fixture.TEXT_ENCODING)
     position = source.stat().st_size
     enqueue = {
         fixture.TYPE_FIELD: fixture.QUEUE_OPERATION_ID,
@@ -122,7 +124,7 @@ def test_claude_native_queue_state_changes(tmp_path: Path) -> None:
 def test_claude_native_prompt_confirms_text(tmp_path: Path) -> None:
     """Verify claude native prompt confirms text delivery."""
     source = tmp_path / fixture.SESSION_JSONL_PATH
-    source.write_text("prefix\n", encoding=fixture.TEXT_ENCODING)
+    source.write_text(TRANSCRIPT_PREFIX, encoding=fixture.TEXT_ENCODING)
     position = source.stat().st_size
     with source.open(fixture.LETTER_A, encoding=fixture.TEXT_ENCODING) as transcript_file:
         transcript_file.write(
@@ -149,7 +151,7 @@ def test_claude_native_prompt_confirms_text(tmp_path: Path) -> None:
 def test_claude_native_slash_command_confirms(tmp_path: Path) -> None:
     """Verify claude native slash command confirms text delivery."""
     source = tmp_path / fixture.SESSION_JSONL_PATH
-    source.write_text("prefix\n", encoding=fixture.TEXT_ENCODING)
+    source.write_text(TRANSCRIPT_PREFIX, encoding=fixture.TEXT_ENCODING)
     position = source.stat().st_size
     with source.open(fixture.LETTER_A, encoding=fixture.TEXT_ENCODING) as transcript_file:
         transcript_file.write(
@@ -294,3 +296,22 @@ def test_claude_attachment_delivery_keeps_prompt(
             True,
         ),
     ]
+
+
+def test_claude_pasted_queue_prompt_is_queued(tmp_path: Path) -> None:
+    """A queued prompt inside Claude Code's paste tag is the sent prompt, so it is not typed again."""
+    source = tmp_path / fixture.SESSION_JSONL_PATH
+    source.write_text(TRANSCRIPT_PREFIX, encoding=fixture.TEXT_ENCODING)
+    position = source.stat().st_size
+    enqueue = {
+        fixture.TYPE_FIELD: fixture.QUEUE_OPERATION_ID,
+        fixture.OPERATION_FIELD: fixture.ENQUEUE,
+        fixture.TIMESTAMP_FIELD: "2026-09-25T00:00:00.000Z",
+        "sessionId": fixture.SESSION_ONE_ID,
+        fixture.CONTENT_FIELD: f'<pasted_content id="5122">\n{fixture.NATIVE_PROMPT_TEXT}\n</pasted_content id="5122">',
+    }
+    with source.open(fixture.LETTER_A, encoding=fixture.TEXT_ENCODING) as transcript_file:
+        transcript_file.write(f"{json.dumps(enqueue)}\n")
+
+    state = claudecontroller.native_text_state(str(source), position, fixture.NATIVE_PROMPT_TEXT)
+    assert state == claudecontroller.NATIVE_TEXT_QUEUED

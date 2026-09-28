@@ -1,0 +1,8 @@
+// ${header}
+import { eslintConfig } from '@baqylau/dev-tools/eslint';
+
+export default eslintConfig({
+  root: import.meta.dirname,
+  projects: ['./tsconfig.json'],
+  ignores: ['eslint.config.js', '.venv/**', '.baqylau-dev/**', 'build/**'],
+});

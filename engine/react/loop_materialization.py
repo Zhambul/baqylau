@@ -2,6 +2,7 @@
 """Provide reaction-loop read-model operations."""
 
 import contextlib
+from dataclasses import replace
 from typing import Protocol
 
 from audit.failures import FailureContext
@@ -38,6 +39,25 @@ def _state(
     return sessiondata_contract.AggregateState(session=stored.session, actors=actors)
 
 
+def _committed_state(
+    before: sessiondata_contract.AggregateState, changes: session_data.SessionDataChanges,
+) -> sessiondata_contract.AggregateState:
+    """Keep the in-batch state equal to the rows that the transaction commits.
+
+    A dropped update keeps its row from before this event.
+
+    Returns:
+        The state before this event with the committed session and actor rows.
+
+    """
+    committed = before
+    for actor in changes.actors:
+        committed = committed.with_actor(actor)
+    if changes.session is None:
+        return committed
+    return replace(committed, session=changes.session)
+
+
 def _changed_actors(
     before: sessiondata_contract.AggregateState,
     after: sessiondata_contract.AggregateState,
@@ -55,6 +75,7 @@ class _ReactionLoopMaterializationContext(ReactionLoopContext, Protocol):
         self,
         canonical_event: event_base.CanonicalEvent[event_base.EventPayload],
         states: dict[domain_ids.SessionId, sessiondata_contract.AggregateState],
+        core_transform: sessiondata_contract.CoreChangeTransform | None = None,
     ) -> tuple[actor_state.ActorFacts, ...]:
         """Apply one event to the aggregate."""
 
@@ -100,10 +121,11 @@ class ReactionLoopMaterialization:
         canonical_event: event_base.CanonicalEvent[event_base.EventPayload],
         states: dict[domain_ids.SessionId, sessiondata_contract.AggregateState],
         listeners: tuple[sessiondata_contract.AppliedActorListener, ...],
+        core_transform: sessiondata_contract.CoreChangeTransform | None = None,
     ) -> None:
         session_id = canonical_event.session_id
         try:
-            changed_actors = self._apply_materialized_event(canonical_event, states)
+            changed_actors = self._apply_materialized_event(canonical_event, states, core_transform)
         except Exception:
             self._audit_failure("session data", _context(canonical_event))
             raise
@@ -113,6 +135,7 @@ class ReactionLoopMaterialization:
         self: _ReactionLoopMaterializationContext,
         canonical_event: event_base.CanonicalEvent[event_base.EventPayload],
         states: dict[domain_ids.SessionId, sessiondata_contract.AggregateState],
+        core_transform: sessiondata_contract.CoreChangeTransform | None = None,
     ) -> tuple[actor_state.ActorFacts, ...]:
         before = states.get(canonical_event.session_id) or _state(
             self.dependencies.session_data_repository,
@@ -127,6 +150,10 @@ class ReactionLoopMaterialization:
             session=None if after.session == before.session else after.session,
             actors=changed_actors,
         )
+        if core_transform is not None:
+            changes = core_transform.transform(canonical_event, before, changes)
+            after = _committed_state(before, changes)
+            changed_actors = changes.actors
         self.dependencies.session_data_repository.apply(
             canonical_event.session_id, changes, _event_cursor(canonical_event),
         )

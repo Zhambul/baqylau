@@ -7,13 +7,17 @@ from functools import partial
 from baqylau_extension_api.models.canonical import CanonicalFact, CoreFact, CoreStateSnapshot
 from baqylau_extension_api.models.transforms import CanonicalTransformRequest, CanonicalTransformResult
 
+from extensions import prior_state_selection
 from extensions.interpretation_calls import CheckedReply, InterpretationCall
 from extensions.interpretation_checks import InterpretationChecks
 from extensions.interpretation_selection import processing_context
-from extensions.models import interpretation_selections as selection, interpretation_steps as steps
+from extensions.models import (
+    interpretation_lifecycle,
+    interpretation_selections as selection,
+    interpretation_steps as steps,
+    interpretation_transforms,
+)
 from extensions.models.interpretation_admission import JournalAdmission, limited_step, rejected_outcome
-from extensions.models.interpretation_lifecycle import require_separate_ids
-from extensions.models.interpretation_transforms import apply_canonical_step
 from extensions.registry_package import RegistryPackage
 
 
@@ -56,8 +60,8 @@ class InterpretationCanonical:
         proposed: tuple[CanonicalFact, ...], reply: CanonicalTransformResult,
     ) -> tuple[CanonicalFact, ...]:
         step = steps.CanonicalTransformStep(request=request, outcome=steps.AppliedStep(reply=reply))
-        following = apply_canonical_step(self.checks.context, current, step)
-        require_separate_ids(self.required, following)
+        following = interpretation_transforms.apply_canonical_step(self.checks.context, current, step)
+        interpretation_lifecycle.require_separate_ids(self.required, following)
         self.checks.facts((*proposed, *following))
         return following
 
@@ -66,7 +70,7 @@ class InterpretationCanonical:
         selected = selection.canonical_inputs(declaration, current)
         return CanonicalTransformRequest(
             context=processing_context(self.checks.context, package.manifest.extension_id), inputs=selected,
-            prior_state=self.prior,
+            prior_state=prior_state_selection.prior_for(package.manifest, self.prior),
         )
 
     def _call(self, package: RegistryPackage, request: CanonicalTransformRequest) -> CanonicalTransformResult:

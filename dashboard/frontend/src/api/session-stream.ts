@@ -3,6 +3,7 @@ import type { SessionApplication } from '../application/session-model';
 import {
   decodeSessionApplicationFrame,
   decodeSessionStreamFrame,
+  decodeViewReset,
 } from './stream-decoder';
 import type { SessionStreamDelta } from './stream-decoder';
 
@@ -11,6 +12,8 @@ export type SessionStreamCallbacks = {
   readonly disconnected: () => void;
   readonly delta: (frame: SessionStreamDelta, cursor: number) => void;
   readonly application: (application: SessionApplication) => void;
+  /** The server closes the stream after this; the client reloads its view. */
+  readonly reset: (viewRevision: number) => void;
   readonly invalid: (error: Error) => void;
 };
 
@@ -45,12 +48,25 @@ export class SessionStream {
 
   constructor(
     sessionId: SessionId,
-    cursor: number,
+    position: {
+      readonly cursor: number;
+      readonly viewRevision: number | null;
+      /** The highest entry row that the view has; a projection commits some entries late. */
+      readonly entryCursor?: number | null;
+    },
     callbacks: SessionStreamCallbacks,
     factory: EventSourceFactory = (url) => new EventSource(url),
   ) {
+    const view =
+      position.viewRevision === null
+        ? ''
+        : `&view_revision=${encodeURIComponent(String(position.viewRevision))}`;
+    const entries =
+      position.entryCursor === undefined || position.entryCursor === null
+        ? ''
+        : `&after_entry=${encodeURIComponent(String(position.entryCursor))}`;
     this.source = factory(
-      `/sessionData/${encodeURIComponent(sessionId)}/stream?after_cursor=${encodeURIComponent(String(cursor))}`,
+      `/sessionData/${encodeURIComponent(sessionId)}/stream?after_cursor=${encodeURIComponent(String(position.cursor))}${view}${entries}`,
     );
     this.source.onopen = callbacks.opened;
     this.source.onerror = callbacks.disconnected;
@@ -60,6 +76,17 @@ export class SessionStream {
           decodeSessionStreamFrame(messageText(event)),
           eventCursor(event),
         );
+      } catch (error) {
+        callbacks.invalid(
+          error instanceof Error ? error : new Error(String(error)),
+        );
+      }
+    });
+    this.source.addEventListener('reset', (event) => {
+      try {
+        const viewRevision = decodeViewReset(messageText(event));
+        this.source.close();
+        callbacks.reset(viewRevision);
       } catch (error) {
         callbacks.invalid(
           error instanceof Error ? error : new Error(String(error)),

@@ -5,7 +5,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
-from typing import TYPE_CHECKING
 
 from domain import (
     entry_attention,
@@ -15,11 +14,8 @@ from domain import (
     entry_resources,
     entry_shells,
 )
-from domain.entry_base import EntryBody
-from domain.ids import ActorId, CanonicalEventId, SessionId, TurnId
-
-if TYPE_CHECKING:
-    from domain.ids import AttentionId
+from domain.entry_base import EntryBody, TurnState
+from domain.ids import ActorId, AttentionId, CanonicalEventId, SessionId, TurnId
 
 
 class EntryTypeName(StrEnum):
@@ -150,6 +146,21 @@ def pending_attention(entries: Sequence[SessionEntry]) -> tuple[SessionEntry, ..
             open_attentions = {
                 attention_id: open_entry
                 for attention_id, open_entry in open_attentions.items()
-                if open_entry.actor_id != entry.actor_id
+                if _open_after_turn(open_entry, entry, entry_body)
             }
     return tuple(open_attentions.values())
+
+
+def _open_after_turn(
+    open_session_entry: SessionEntry,
+    turn_end_session_entry: SessionEntry,
+    turn_body: entry_conversation.TurnFinishedBody,
+) -> bool:
+    # A question cannot outlive its turn. A harness can finish the turn that
+    # proposes a plan and then wait for the decision, so only an aborted turn
+    # ends a plan.
+    if open_session_entry.actor_id != turn_end_session_entry.actor_id:
+        return True
+    return turn_body.state is TurnState.FINISHED and isinstance(
+        open_session_entry.body, entry_attention.PlanProposedBody,
+    )

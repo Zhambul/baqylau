@@ -1,7 +1,7 @@
 import AxeBuilder from '@axe-core/playwright';
 import type { Page } from '@playwright/test';
 
-import { expect, test } from './fixtures';
+import { expect, fixtureWorkingDirectory, test } from './fixtures';
 
 const FIXTURE_TIME = 1_700_000_000_000;
 // macOS patch releases can rasterize the same text with small edge differences.
@@ -721,7 +721,7 @@ test('keeps the new-session and resume-preview modal boundaries', async ({
 }) => {
   const failures = watchBrowserFailures(page);
   await page.goto('/');
-  const workingDirectory = await page.locator('.dirpath').innerText();
+  const workingDirectory = fixtureWorkingDirectory;
   await page.getByRole('button', { name: '+ session' }).click();
 
   const dialog = page.getByRole('dialog', { name: 'new session' });
@@ -737,7 +737,14 @@ test('keeps the new-session and resume-preview modal boundaries', async ({
   const search = dialog.getByPlaceholder(
     'search all sessions in this directory…',
   );
+  // The search reply renders the list again; focus a row only after it.
+  const searched = page.waitForResponse(
+    (response) =>
+      response.url().includes('/api/resumable-sessions') &&
+      new URL(response.url()).searchParams.get('search') === 'Frontend parity',
+  );
   await search.fill('Frontend parity');
+  await searched;
   const row = dialog
     .getByRole('option')
     .filter({ hasText: 'Frontend parity work' });
@@ -791,7 +798,7 @@ test('does not replace an unknown saved effort during resume', async ({
   });
 
   await page.goto('/');
-  const workingDirectory = await page.locator('.dirpath').innerText();
+  const workingDirectory = fixtureWorkingDirectory;
   await page.getByRole('button', { name: '+ session' }).click();
   const dialog = page.getByRole('dialog', { name: 'new session' });
   await dialog.getByLabel('directory').fill(workingDirectory);

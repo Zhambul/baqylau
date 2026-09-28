@@ -10,8 +10,12 @@ FRONTEND_POLICY = $(wildcard packages/dev-tools-web/*.mjs packages/dev-tools-web
 DEV_TOOLS_WEB_DIR = packages/dev-tools-web
 DEV_TOOLS_WEB_MODULES = $(DEV_TOOLS_WEB_DIR)/node_modules/.package-lock.json
 DEV_TOOLS_WEB_BUILD = $(DEV_TOOLS_WEB_DIR)/dist/coverage.d.mts
+DEV_TOOLS_CHECKS_DIR = $(DEV_TOOLS_WEB_DIR)/test
+DEV_TOOLS_CHECKS_MODULES = $(DEV_TOOLS_CHECKS_DIR)/node_modules/.package-lock.json
 EXTENSION_WEB_DIR = packages/extension-api-web
 EXTENSION_WEB_MODULES = $(EXTENSION_WEB_DIR)/node_modules/.package-lock.json
+EXTENSION_WEB_BUILD = $(EXTENSION_WEB_DIR)/dist/index.js
+EXTENSION_WEB_SOURCES = $(wildcard $(EXTENSION_WEB_DIR)/src/*.ts $(EXTENSION_WEB_DIR)/src/*/*.ts)
 
 $(DEV_TOOLS_WEB_MODULES): $(DEV_TOOLS_WEB_DIR)/package.json $(DEV_TOOLS_WEB_DIR)/package-lock.json
 	cd $(DEV_TOOLS_WEB_DIR) && $(NPM) ci
@@ -19,13 +23,20 @@ $(DEV_TOOLS_WEB_MODULES): $(DEV_TOOLS_WEB_DIR)/package.json $(DEV_TOOLS_WEB_DIR)
 $(DEV_TOOLS_WEB_BUILD): $(DEV_TOOLS_WEB_MODULES) $(FRONTEND_POLICY)
 	cd $(DEV_TOOLS_WEB_DIR) && $(NPM) run build
 
-$(FRONTEND_MODULES): $(FRONTEND_DIR)/package.json $(FRONTEND_DIR)/package-lock.json $(FRONTEND_DIR)/.npmrc $(DEV_TOOLS_WEB_BUILD)
-	cd $(FRONTEND_DIR) && $(NPM) ci
-
-frontend-install: $(FRONTEND_MODULES)
+$(DEV_TOOLS_CHECKS_MODULES): $(DEV_TOOLS_CHECKS_DIR)/package.json $(DEV_TOOLS_CHECKS_DIR)/package-lock.json $(DEV_TOOLS_CHECKS_DIR)/.npmrc $(DEV_TOOLS_WEB_BUILD)
+	cd $(DEV_TOOLS_CHECKS_DIR) && $(NPM) ci
 
 $(EXTENSION_WEB_MODULES): $(EXTENSION_WEB_DIR)/package.json $(EXTENSION_WEB_DIR)/package-lock.json $(EXTENSION_WEB_DIR)/.npmrc $(DEV_TOOLS_WEB_BUILD)
 	cd $(EXTENSION_WEB_DIR) && $(NPM) ci
+
+# The dashboard imports the public web SDK's view host from its built output.
+$(EXTENSION_WEB_BUILD): $(EXTENSION_WEB_MODULES) $(EXTENSION_WEB_SOURCES)
+	cd $(EXTENSION_WEB_DIR) && $(NPM) run build
+
+$(FRONTEND_MODULES): $(FRONTEND_DIR)/package.json $(FRONTEND_DIR)/package-lock.json $(FRONTEND_DIR)/.npmrc $(DEV_TOOLS_WEB_BUILD) $(EXTENSION_WEB_BUILD)
+	cd $(FRONTEND_DIR) && $(NPM) ci
+
+frontend-install: $(FRONTEND_MODULES)
 
 extension-web-install: $(EXTENSION_WEB_MODULES)
 
@@ -38,6 +49,11 @@ test-frontend: frontend-install
 	cd $(FRONTEND_DIR) && $(NPM) run check
 	cd $(FRONTEND_DIR) && $(NPM) run test:coverage
 	$(MAKE) --no-print-directory test-extension-web
+	$(MAKE) --no-print-directory test-dev-tools-web
+
+# The shared frontend rules must fail on deliberate violations, and the dashboard must keep them.
+test-dev-tools-web: $(DEV_TOOLS_CHECKS_MODULES) frontend-install
+	cd $(DEV_TOOLS_CHECKS_DIR) && $(NPM) test
 
 test-extension-web: extension-web-install
 	cd $(DEV_TOOLS_WEB_DIR) && $(NPM) run format:check
@@ -136,6 +152,41 @@ policy-check:
 policy-generate:
 	$(PY) -m baqylau_dev generate
 
+# Build the shared packages for a release; publication is a separate, manual step.
+RELEASE_DIR = dist/release
+release-artifacts:
+	rm -rf $(RELEASE_DIR) && mkdir -p $(RELEASE_DIR)
+	for package in extension-api extension-testkit dev-tools; do \
+		$(PY) -m pip wheel --no-deps --no-build-isolation --wheel-dir $(RELEASE_DIR) packages/$$package || exit 1; \
+		rm -rf packages/$$package/build; \
+	done
+	cd $(EXTENSION_WEB_DIR) && npm run build && npm pack --pack-destination ../../$(RELEASE_DIR)
+	cd packages/dev-tools-web && npm pack --pack-destination ../../$(RELEASE_DIR)
+	$(PY) -m baqylau_dev report > $(RELEASE_DIR)/policy-report.txt
+	cd $(RELEASE_DIR) && shasum -a 256 *.whl *.tgz policy-report.txt > SHA256SUMS
+
+# A new package's web part passes its npm gates with the built artifacts. Run release-artifacts first.
+# Each consumer runs in a new directory outside the checkout, which is removed at the end.
+RELEASE_TARBALLS = $(abspath $(RELEASE_DIR))
+test-template-web:
+	package=$$(mktemp -d)/package && trap 'rm -rf "$$(dirname $$package)"' EXIT && \
+	$(PY) -m baqylau_dev new --root $$package --id example.fresh --web && cd $$package && \
+	$(NPM) pkg set \
+		devDependencies.@baqylau/dev-tools=file:$(RELEASE_TARBALLS)/baqylau-dev-tools-0.1.0-alpha.1.tgz \
+		devDependencies.@baqylau/extension-api=file:$(RELEASE_TARBALLS)/baqylau-extension-api-0.1.0-alpha.1.tgz && \
+	$(NPM) install --ignore-scripts && $(MAKE) --no-print-directory lint-web
+
+# A clean environment with only the wheels must report the same policy as the host.
+test-release-consumers: test-template-web
+	consumer=$$(mktemp -d) && trap 'rm -rf "$$consumer"' EXIT && \
+	$(PY) -m venv $$consumer/venv && $$consumer/venv/bin/python -m pip install --quiet $(RELEASE_TARBALLS)/*.whl && \
+	$$consumer/venv/bin/python -m baqylau_dev new --root $$consumer/package --id example.fresh --terminal && \
+	cd $$consumer/package && $$consumer/venv/bin/python -m baqylau_dev report > ../policy-report.txt && \
+	diff $(RELEASE_TARBALLS)/policy-report.txt ../policy-report.txt && \
+	$$consumer/venv/bin/python -m baqylau_dev check --gate lint && \
+	$$consumer/venv/bin/python -m pytest -q --ignore=tests/e2e
+	cd $(EXTENSION_WEB_DIR) && $(NPM) run test:external -- ../../$(RELEASE_DIR)
+
 # WPS checks design rules that Ruff does not implement. setup.cfg records the
 # project rules that take precedence over conflicting WPS rules.
 wemake:
@@ -175,4 +226,4 @@ lint-fix:
 deadcode:
 	$(PY) -m baqylau_dev check --gate deadcode
 
-.PHONY: frontend-install extension-web-install build-frontend test-frontend test-extension-web test-browser browser-static-e2e test-python test test-seq test-extension-api test-all e2e test-drift test-browser-drift browser-live-e2e terminal-live-e2e test-par lint lint-fix typecheck wemake deadcode policy-check policy-generate
+.PHONY: release-artifacts test-template-web test-release-consumers frontend-install extension-web-install build-frontend test-frontend test-extension-web test-dev-tools-web test-browser browser-static-e2e test-python test test-seq test-extension-api test-all e2e test-drift test-browser-drift browser-live-e2e terminal-live-e2e test-par lint lint-fix typecheck wemake deadcode policy-check policy-generate

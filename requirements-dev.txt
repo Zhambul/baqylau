@@ -4,6 +4,8 @@
 # here so renderer goldens/tests are reproducible.
 # Common lint and test tools come from the same policy used by external packages.
 -e ./packages/dev-tools
+# Extension tests start a private host from an installed executable through the shared kit.
+-e ./packages/extension-testkit
 # Offline test wheel builds use the SDK's standard build backend and wheel packer.
 setuptools>=77
 wheel>=0.45,<1

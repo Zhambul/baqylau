@@ -39,6 +39,12 @@ class TerminalSelection(WireModel):
     item_id: Identifier | None = None
 
 
+class TerminalViewInput(WireModel):
+    """Give a view's query the pane's focus, so the query can read details of the focused item."""
+
+    selection: TerminalSelection | None = None
+
+
 class TerminalViewRequest(WireModel):
     """Pass a recorded snapshot and current display choices to a presenter."""
 

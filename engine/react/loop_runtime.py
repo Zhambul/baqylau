@@ -32,7 +32,11 @@ def _notify_actor_batch(
 
 
 class _ReactionLoopRuntimeContext(ReactionLoopContext, Protocol):
-    def tick(self, listeners: tuple[sessiondata_contract.AppliedActorListener, ...] | None = None) -> int:
+    def tick(
+        self,
+        listeners: tuple[sessiondata_contract.AppliedActorListener, ...] | None = None,
+        core_transform: sessiondata_contract.CoreChangeTransform | None = None,
+    ) -> int:
         """React to and materialize one event batch."""
 
     def _react(self, canonical_event: event_base.CanonicalEvent[event_base.EventPayload]) -> None:
@@ -43,6 +47,7 @@ class _ReactionLoopRuntimeContext(ReactionLoopContext, Protocol):
         canonical_event: event_base.CanonicalEvent[event_base.EventPayload],
         states: dict[domain_ids.SessionId, sessiondata_contract.AggregateState],
         listeners: tuple[sessiondata_contract.AppliedActorListener, ...],
+        core_transform: sessiondata_contract.CoreChangeTransform | None = None,
     ) -> None:
         """Apply an event to the read model."""
 
@@ -59,6 +64,7 @@ class ReactionLoopRuntime:
     def tick(
         self: _ReactionLoopRuntimeContext,
         listeners: tuple[sessiondata_contract.AppliedActorListener, ...] | None = None,
+        core_transform: sessiondata_contract.CoreChangeTransform | None = None,
     ) -> int:
         """React to and materialize one event batch.
 
@@ -77,11 +83,17 @@ class ReactionLoopRuntime:
                 continue
             canonical_event = private_committed(stored)
             self._react(canonical_event)
-            self._materialize(canonical_event, states, applied_listeners)
+            self._materialize(canonical_event, states, applied_listeners, core_transform)
         return len(page.facts)
 
-    def drain(self: _ReactionLoopRuntimeContext, cancelled: Callable[[], bool]) -> int:
+    def drain(
+        self: _ReactionLoopRuntimeContext,
+        cancelled: Callable[[], bool],
+        core_transform: sessiondata_contract.CoreChangeTransform | None = None,
+    ) -> int:
         """Fold ready history before announcing the final display state.
+
+        A core transform from the captured batch changes each proposal before it commits.
 
         Returns:
             The number of processed events across all batches.
@@ -92,7 +104,7 @@ class ReactionLoopRuntime:
         with self.dependencies.changes.batch(), ExitStack() as cleanup:
             cleanup.callback(_notify_actor_batch, batch, self.dependencies.listeners, self._audit_failure)
             while not cancelled():
-                count = self.tick((batch,))
+                count = self.tick((batch,), core_transform)
                 if not count:
                     break
                 total += count

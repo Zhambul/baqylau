@@ -673,7 +673,7 @@ class _FixtureSeed(_FixtureFactPhases, _FixtureObservationPhase):
         from tests import frontend_fixture_runtime as runtime  # noqa: PLC0415 -- Set the fixture environment first.
 
         self._instances = runtime.registry()
-        self._instances[runtime.provider_runtime.repositories] = FixtureRepositoryQueries()
+        self._instances[runtime.provider_runtime.repositories.build] = FixtureRepositoryQueries()  # type: ignore[attr-defined]
         self._fake_terminal = runtime.FakeTerminal((
             runtime.window(self._active_window, tags={runtime.SESSION_WINDOW_TAG: str(self._active_session)}),
             runtime.window(self._waiting_window, tags={runtime.SESSION_WINDOW_TAG: str(self._waiting_session)}),

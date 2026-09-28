@@ -38,7 +38,7 @@ Feature: rewind restores a named prompt for revision
     And session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "file checkpoint" with prompt
       """
-      Remember the marker rewind-code-anchor-194. Do not modify any file.
+      Remember the marker rewind-code-anchor-194. Do not modify any file in this reply.
       Reply only with FILE_CHECKPOINT_READY.
       """
     Then turn "file checkpoint" completes
@@ -65,7 +65,7 @@ Feature: rewind restores a named prompt for revision
     And session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" as turn "kept memory" with prompt
       """
-      Remember the marker rewind-kept-194. Do not modify any file.
+      Remember the marker rewind-kept-194. Do not modify any file in this reply.
       Reply only with KEPT_MEMORY_READY.
       """
     Then turn "kept memory" completes

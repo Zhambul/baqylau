@@ -15,6 +15,14 @@
   import SessionActions from '../sessions/components/SessionActions.svelte';
   import StatsView from '../stats/components/StatsView.svelte';
   import ExtensionsSettings from '../extensions/ExtensionsSettings.svelte';
+  import ExtensionSettingsPage from '../extensions/settings/ExtensionSettingsPage.svelte';
+  import ExtensionPage from '../extensions/views/ExtensionPage.svelte';
+  import RepositoryPage from '../extensions/views/RepositoryPage.svelte';
+  import ExtensionSlot from '../extensions/views/ExtensionSlot.svelte';
+  import {
+    provideWebViewCatalog,
+    WebViewCatalog,
+  } from '../extensions/views/web-view-catalog.svelte';
   import BrandMark from '../shared/components/BrandMark.svelte';
   import SunMark from '../shared/components/SunMark.svelte';
   import ToastStack from '../shared/components/ToastStack.svelte';
@@ -46,6 +54,9 @@
     );
   const appState = new AppState(startup.hash);
   setAppState(appState);
+  const webViews = new WebViewCatalog();
+  const installationScope = { kind: 'installation' } as const;
+  provideWebViewCatalog(webViews);
 
   let fullscreenIsAvailable = $state(fullscreenAvailable());
   let fullscreenIsActive = $state(fullscreenActive());
@@ -140,6 +151,7 @@
     const controller = new AbortController();
     wakeLock.start();
     void appState.initialize(controller.signal);
+    webViews.follow(controller.signal);
     if (startup.openNewSession)
       setTimeout(() => {
         openNewSession();
@@ -307,6 +319,11 @@
         {/if}
       {/if}
     </div>
+    <ExtensionSlot
+      slot="toolbar"
+      scope={installationScope}
+      label="extension actions"
+    />
     <button
       id="statsbtn"
       class="ghost"
@@ -379,16 +396,31 @@
 </header>
 <AccountUsageStrip />
 <AttentionStrip />
+<ExtensionSlot
+  slot="status"
+  scope={installationScope}
+  label="extension status"
+/>
 <main id="view" inert={newSessionOpen}>
   {#if appState.route.kind === 'stats'}
     <StatsView />
   {:else if appState.route.kind === 'settings'}
     <ExtensionsSettings />
+  {:else if appState.route.kind === 'extension-settings'}
+    {#key appState.route.extensionId}
+      <ExtensionSettingsPage route={appState.route} />
+    {/key}
   {:else if appState.route.kind === 'launching'}
     <LaunchingView {appState} />
   {:else if appState.route.kind === 'session'}
     {#key `${appState.route.sessionId}:${appState.route.actorId ?? ''}`}
       <SessionView route={appState.route} />
+    {/key}
+  {:else if appState.route.kind === 'extension-page'}
+    <ExtensionPage route={appState.route} />
+  {:else if appState.route.kind === 'repository-page'}
+    {#key appState.route.directory}
+      <RepositoryPage route={appState.route} />
     {/key}
   {:else if appState.route.kind === 'not-found'}
     <div class="empty">route not found</div>

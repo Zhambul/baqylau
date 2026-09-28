@@ -185,3 +185,6 @@ class SystemRecord(BaseModel):
     request_id: Annotated[str | None, Field(alias="requestId")] = None
     trigger: str | None = None
     url: str | None = None
+    # Claude Code 2.1.x names the local command that a `local_command` record ran
+    # (corpus: {"command": "rename", "args": "<title>"}).
+    command_run: Annotated[ForeignMetadata | None, Field(alias="commandRun")] = None

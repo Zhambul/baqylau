@@ -35,7 +35,7 @@ def check_imports(root: Path, modules: tuple[SourceModule, ...]) -> None:
     )
     for module in modules:
         for node in ast.walk(module.tree):
-            for name in _node_imports(module, node):
+            for name in node_imports(module, node):
                 _require_import(module, name, allowed)
 
 
@@ -49,7 +49,13 @@ def _dependency_roots(root: Path) -> frozenset[str]:
     )
 
 
-def _node_imports(module: SourceModule, node: ast.AST) -> tuple[str, ...]:
+def node_imports(module: SourceModule, node: ast.AST) -> tuple[str, ...]:
+    """Name the modules and members that one import node imports.
+
+    Returns:
+        The imported names; no names for other nodes.
+
+    """
     if isinstance(node, ast.Import):
         return tuple(alias.name for alias in node.names)
     if isinstance(node, ast.ImportFrom):

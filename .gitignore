@@ -32,3 +32,8 @@ packages/*/test-results/
 !.claude/skills/
 .claude/skills/*
 !.claude/skills/github-projects
+
+# Local release artifacts from `make release-artifacts`; publication is manual.
+/dist/
+packages/dev-tools-web/test/.cases/
+packages/dev-tools-web/test/node_modules/

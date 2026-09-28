@@ -9,6 +9,7 @@ from tests import (
     sqlite_repository_dependencies as repository_dependencies,
     sqlite_test_dependencies as test_dependencies,
     sqlite_value_dependencies as standard_dependencies,
+    storage_reads,
 )
 from tests.harness_names import CODEX_HARNESS
 
@@ -51,7 +52,7 @@ def assert_canonical_pages(
     other: domain_dependencies.domain_ids.SessionId,
 ) -> None:
     """Check event order and cursor boundaries for the test pages."""
-    whole = canonical.page_from(0, 10)
+    whole = storage_reads.page_from(canonical, 0, 10)
     assert ([committed.event_id for committed in whole], [committed.session_id for committed in whole]) == (
         [
             domain_dependencies.domain_ids.CanonicalEventId("event-0"),
@@ -64,11 +65,12 @@ def assert_canonical_pages(
     assert None not in cursors
     stored_cursors = [cursor for cursor in cursors if cursor is not None]
     assert stored_cursors == sorted(stored_cursors)
-    assert [committed.event_id for committed in canonical.page_from(stored_cursors[0], 10)] == [
+    after_first = storage_reads.page_from(canonical, stored_cursors[0], 10)
+    assert [committed.event_id for committed in after_first] == [
         domain_dependencies.domain_ids.CanonicalEventId("event-1"),
         domain_dependencies.domain_ids.CanonicalEventId("event-2"),
     ]
-    first_page = canonical.page_from(0, 2)
+    first_page = storage_reads.page_from(canonical, 0, 2)
     assert [committed.cursor for committed in first_page] == stored_cursors[:2]
 
 
