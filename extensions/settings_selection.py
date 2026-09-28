@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from baqylau_extension_api.models.base import Digest, ExtensionId
 
-from extensions.lifecycle_control_contract import LifecycleConflictError, LifecycleRequestError
+from extensions.lifecycle_control_contract import LifecycleConflictError, SettingsNotDeclaredError
 from extensions.lifecycle_plan_reads import discovered_package
 from extensions.lifecycle_plan_resources import LifecyclePlanningState, SelectedPackage
 from extensions.models.settings import SettingsOverrides
@@ -30,7 +30,7 @@ def settings_target(
 
     Raises:
         LifecycleConflictError: If an enabled package has another selected digest.
-        LifecycleRequestError: If the package declares no settings.
+        SettingsNotDeclaredError: If the package declares no settings.
 
     """
     committed = next((
@@ -42,7 +42,7 @@ def settings_target(
         raise LifecycleConflictError(message)
     if selected.manifest.settings is None:
         message = "the selected extension has no settings declaration"
-        raise LifecycleRequestError(message)
+        raise SettingsNotDeclaredError(message)
     overrides = next((entry.settings for entry in state.manager.lifecycle.settings
                       if entry.extension_id == extension_id), SettingsOverrides())
     return SettingsTarget(selected, overrides, committed is not None)

@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { HttpFailure } from '../../api/client';
 import * as settingsApi from '../../api/extension-settings';
 import * as extensionsApi from '../../api/extensions';
 
@@ -124,6 +125,21 @@ describe('extension settings page', () => {
       await screen.findByText(/Recorded history does not change/),
     ).toBeInTheDocument();
     expect(screen.getByText(/has its own values/)).toBeInTheDocument();
+  });
+
+  it('says that a package without settings has none', async () => {
+    vi.mocked(settingsApi.readExtensionSettings).mockRejectedValue(
+      new HttpFailure(
+        404,
+        'the selected extension has no settings declaration',
+      ),
+    );
+    renderPage();
+
+    expect(
+      await screen.findByText('This extension has no settings.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('resets the override with an explicit null', async () => {

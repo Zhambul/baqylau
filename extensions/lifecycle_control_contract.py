@@ -17,6 +17,10 @@ class LifecycleConflictError(LifecycleRequestError):
     """The caller must read changed state or confirm the complete affected set."""
 
 
+class SettingsNotDeclaredError(LifecycleRequestError):
+    """The package declares no settings, so it has no settings to read or change."""
+
+
 class LifecycleUnavailableError(RuntimeError):
     """The manager cannot accept a new user change in its current phase."""
 
