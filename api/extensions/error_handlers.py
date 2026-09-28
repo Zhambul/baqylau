@@ -11,6 +11,7 @@ from extensions.lifecycle_control_contract import (
     LifecycleConflictError,
     LifecycleRequestError,
     LifecycleUnavailableError,
+    SettingsNotDeclaredError,
 )
 from extensions.manager_contract import ManagerStateError
 from extensions.terminal_views import TerminalViewFailedError
@@ -35,6 +36,8 @@ def lifecycle_error(_request: Request, error: Exception) -> Response:
     """
     if isinstance(error, ExtensionReadOnlyError):
         status = HTTPStatus.FORBIDDEN
+    elif isinstance(error, SettingsNotDeclaredError):
+        status = HTTPStatus.NOT_FOUND
     elif isinstance(error, LifecycleConflictError):
         status = HTTPStatus.CONFLICT
     elif isinstance(error, (LifecycleUnavailableError, ManagerStateError, TerminalViewFailedError)):

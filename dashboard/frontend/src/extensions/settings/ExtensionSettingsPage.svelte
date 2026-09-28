@@ -25,6 +25,8 @@
 
   const OPERATION_POLL_MS = 1_000;
   const CONFLICT = 409;
+  /** The host answers 404 for a package that declares no settings. */
+  const NOT_DECLARED = 404;
 
   let { route }: { route: ExtensionSettingsRoute } = $props();
 
@@ -42,6 +44,7 @@
 
   let reply = $state<ExtensionSettings | null>(null);
   let loadFailure = $state<string | null>(null);
+  let undeclared = $state(false);
   let operation = $state<ExtensionOperation | null>(null);
   let writeFailure = $state<string | null>(null);
   let stale = $state(false);
@@ -64,9 +67,13 @@
     try {
       reply = await readExtensionSettings(route.extensionId, scope, signal);
       loadFailure = null;
+      undeclared = false;
       stale = false;
     } catch (error) {
-      if (!signal.aborted) loadFailure = messageFrom(error);
+      if (signal.aborted) return;
+      undeclared =
+        error instanceof HttpFailure && error.status === NOT_DECLARED;
+      loadFailure = undeclared ? null : messageFrom(error);
     }
   }
 
@@ -143,7 +150,9 @@
   </p>
   <h2>{scopeLabel(scope)}</h2>
 
-  {#if loadFailure !== null}
+  {#if undeclared}
+    <p>This extension has no settings.</p>
+  {:else if loadFailure !== null}
     <p class="failure" role="alert">{loadFailure}</p>
   {:else if snapshot === null}
     <p class="waiting">loading settings…</p>
