@@ -62,6 +62,20 @@ export class WebViewCatalog {
   }
 
   /**
+   * The tabs of a session page, in the host order. A repository tab shows the
+   * repository of the session's directory; a tab for both scopes is a
+   * session tab.
+   */
+  sessionTabs(): readonly WebView[] {
+    return this.views.filter(
+      (view) =>
+        view.slot === 'session_tab' &&
+        view.mode === 'add' &&
+        (view.scopes.includes('session') || view.scopes.includes('repository')),
+    );
+  }
+
+  /**
    * The view that replaces the core feed row of one entry kind. The runtime
    * switch refuses two replacements of one scoped target, so there is at most one.
    */

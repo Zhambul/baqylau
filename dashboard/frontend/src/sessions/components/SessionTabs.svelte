@@ -19,9 +19,7 @@
   }
 
   const catalog = webViewCatalog();
-  const extensionTabs = $derived(
-    catalog?.forSlot('session_tab', 'session') ?? [],
-  );
+  const extensionTabs = $derived(catalog?.sessionTabs() ?? []);
 
   function viewHref(extensionId: string, viewId: string): string {
     return formatRoute({
