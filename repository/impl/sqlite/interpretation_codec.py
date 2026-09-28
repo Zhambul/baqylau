@@ -2,8 +2,11 @@
 """Use the existing core codec and one explicit extension metadata model."""
 
 import sqlite3
+from collections.abc import Iterable
+from contextlib import suppress
 from dataclasses import astuple
 
+from baqylau_extension_api.errors import ExtensionContractError
 from baqylau_extension_api.models.canonical import CanonicalFact, CoreFact
 from baqylau_extension_api.models.documents import EncodedDocument
 from baqylau_extension_api.models.events import ExtensionFact
@@ -37,6 +40,25 @@ def stored_fact(row: sqlite3.Row) -> StoredCanonicalFact:
         fact=fact, cursor=int(row["cursor"]), accepted_at=float(row["accepted_at"]),
         history_revision=str(row["history_revision"]),
     )
+
+
+def visible_facts(fact_rows: Iterable[sqlite3.Row]) -> tuple[StoredCanonicalFact, ...]:
+    """Decode the facts that extensions can see, in their order.
+
+    A core fact stored before the host checked facts against the public API
+    can be one that the API refuses, such as an assignment finish with an
+    empty ID. Extensions never saw it, so a page leaves it out, and a replay
+    of the history does not stop at it.
+
+    Returns:
+        The decoded facts, without the refused core facts.
+
+    """
+    decoded: list[StoredCanonicalFact] = []
+    for row in fact_rows:
+        with suppress(ExtensionContractError):
+            decoded.append(stored_fact(row))
+    return tuple(decoded)
 
 
 def _extension_fact(row: sqlite3.Row) -> ExtensionFact:

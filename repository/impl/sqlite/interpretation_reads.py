@@ -76,7 +76,7 @@ def read_page(
     rows = interpretation_pages.page_rows(connection, history_revision, after_cursor, limit, scope)
     return CanonicalPage(
         history_revision=history_revision, head=interpretation_selection.canonical_head(connection, history_revision),
-        facts=tuple(interpretation_codec.stored_fact(row) for row in rows),
+        facts=interpretation_codec.visible_facts(rows),
     )
 
 

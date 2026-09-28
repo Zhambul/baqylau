@@ -52,4 +52,4 @@ class SqliteSessionHistoryReader:
         """
         with self.database.read() as connection_handle:
             rows = connection_handle.execute(_SESSION_FACTS_SQL, (history_revision, session_id, session_id)).fetchall()
-        return tuple(interpretation_codec.stored_fact(row) for row in rows)
+        return interpretation_codec.visible_facts(rows)
