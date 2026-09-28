@@ -12,7 +12,8 @@ class CanonicalPage(base.WireModel):
     A consumer advances to its last returned row. An empty live stream page
     can advance to the head. Scope pages do not imply a global consumer checkpoint.
     A content budget can reduce the returned count. An oversized first fact is
-    returned alone; a content limit cannot hide all remaining facts.
+    returned alone; a content limit cannot hide all remaining facts. A stored
+    core fact that the public API refuses is not returned.
     """
 
     history_revision: base.Identifier
