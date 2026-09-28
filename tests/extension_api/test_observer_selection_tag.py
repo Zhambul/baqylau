@@ -5,9 +5,8 @@ The tag had a default, so `model_dump_json(exclude_defaults=True)` left it out,
 and the SDK then refused the package's own manifest.
 """
 
-from pydantic import TypeAdapter
-
 from baqylau_extension_api.manifest import observers
+from pydantic import TypeAdapter
 
 SELECTIONS: TypeAdapter[observers.DeclaredProcessingSelection] = TypeAdapter(observers.DeclaredProcessingSelection)
 
