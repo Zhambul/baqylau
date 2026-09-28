@@ -50,6 +50,8 @@ class ClaudeCodeModel(StrEnum):
     CLAUDE_FABLE_FIVE = "claude-fable-5"
     CLAUDE_FABLE_FIVE_ONE = "claude-fable-5-1"
     CLAUDE_OPUS_FIVE = "claude-opus-5"
+    CLAUDE_OPUS_FIVE_FIVE = "claude-opus-5-5"
+    CLAUDE_OPUS_FIVE_FIVE_MILLION = "claude-opus-5-5[1m]"
     CLAUDE_OPUS_FOUR_EIGHT = "claude-opus-4-8"
     CLAUDE_OPUS_FOUR_SIX = "claude-opus-4-6"
     CLAUDE_SONNET_FIVE = "claude-sonnet-5"

@@ -82,6 +82,9 @@ class UserRecord(BaseModel):
     tool_denial_kind: Annotated[str | None, Field(alias="toolDenialKind")] = None
     turn_companion: Annotated[bool | None, Field(alias="turnCompanion")] = None
     queue_skip_attachments: Annotated[bool | None, Field(alias="queueSkipAttachments")] = None
+    # Claude Code 2.1.x queues a goal check-in with a priority (corpus: "later") and its origin.
+    queue_priority: Annotated[str | None, Field(alias="queuePriority")] = None
+    queue_origin: Annotated[Origin | None, Field(alias="queueOrigin")] = None
     user_feedback: Annotated[ForeignMetadata | str | None, Field(alias="userFeedback")] = None
     image_paste_ids: Annotated[list[str | int] | None, Field(alias="imagePasteIds")] = None
     mcp_meta: Annotated[ForeignMetadata | None, Field(alias="mcpMeta")] = None
