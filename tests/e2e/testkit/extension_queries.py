@@ -68,6 +68,19 @@ def invocation_outcomes(
     return {invocation.get("outcome") for invocation in invocations}
 
 
+def kept_output_lines(client: HostClient, scope: Mapping[str, str], group: str) -> int:
+    """Count the output lines that the adapters calls of one group keep; only a call that owns its output keeps it.
+
+    Returns:
+        The most lines that one call keeps.
+
+    """
+    rows = read(client, ADAPTERS, f"{ADAPTERS}.invocations", scope, {"group": group})["rows"]
+    outputs = [row["invocation"]["output"] or {} for row in rows]
+    texts = [output.get("text") or "" for output in outputs]
+    return max((len(text.splitlines()) for text in texts), default=0)
+
+
 def repository_scope(client: HostClient, path: str) -> dict[str, str]:
     """Resolve the repository of one directory through the git package.
 

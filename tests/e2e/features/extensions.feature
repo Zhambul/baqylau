@@ -26,6 +26,7 @@ Feature: extension packages see a real harness session
       """
     Then turn "read logs" completes
     And the adapters "logs" call in session "primary" finishes
+    And the adapters "logs" call in session "primary" keeps its output
     And extension package "adapters" projects a "baqylau.adapters.invocation" entry in session "primary"
 
     Examples:
