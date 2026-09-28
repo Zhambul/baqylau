@@ -70,13 +70,12 @@ class TranslationPhase(CoreInterpretation):
         """
         plugin = self.dependencies.services.harnesses.plugin(raw_event.harness)
         translator = self.dependencies.services.core_translators.get(raw_event.source_type, plugin.translator)
-        translation = _translate_safely(
+        translation, facts = extension_mapping.public_translation(raw_event, _translate_safely(
             translator, extension_mapping.source_input(raw_event, source, bundle), stages.TranslationStage.ACTIVITY,
-        )
+        ))
         return CoreActivityStep(
             source=source, content_snapshot=bundle, translator_version=plugin.harness_info.plugin_version,
-            decision=translation.decision, reason=translation.reason,
-            facts=extension_mapping.translated_facts(raw_event, translation),
+            decision=translation.decision, reason=translation.reason, facts=facts,
         )
 
     def accept_interpretation(
