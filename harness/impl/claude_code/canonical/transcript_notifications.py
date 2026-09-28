@@ -21,6 +21,8 @@ MONITOR_SUMMARY_PREFIX = "Monitor"
 MONITOR_EVENT_SUMMARY_PREFIX = "Monitor event:"
 MONITOR_EXPIRED_MARKER = "[Monitor expired"
 COMPLETED_STATUS = "completed"
+TASK_ID_TAG = "task-id"
+TOOL_USE_ID_TAG = "tool-use-id"
 
 
 def note_tag(document: str, name: str) -> str | None:
@@ -34,11 +36,14 @@ def note_tag(document: str, name: str) -> str | None:
     return tag_match.group(1).strip() if tag_match else None
 
 
-def task_notification(content: str) -> TranscriptRecord:
+def task_notification(content: str) -> TranscriptRecord | None:
     """Return the fact in one task notification.
 
+    A notification that names no task and no tool call, such as a goal
+    check-in, names no work, so it has no fact.
+
     Returns:
-        The parsed transcript record.
+        The parsed transcript record, or None when the notification names no work.
 
     """
     notification_match = TASK_NOTIFICATION.search(content)
@@ -51,6 +56,8 @@ def task_notification(content: str) -> TranscriptRecord:
     event = note_tag(document, "event")
     if event is not None:
         return monitor_notification(document, summary, event)
+    if note_tag(document, TASK_ID_TAG) is None and note_tag(document, TOOL_USE_ID_TAG) is None:
+        return None
     return assignment_notification(document, summary)
 
 
@@ -81,7 +88,7 @@ def background_notification(document: str) -> BackgroundCommandCompletedTranscri
 
     """
     return BackgroundCommandCompletedTranscriptRecord(
-        ClaudeCodeCallId(note_tag(document, "tool-use-id") or ""),
+        ClaudeCodeCallId(note_tag(document, TOOL_USE_ID_TAG) or ""),
         note_tag(document, "status") or COMPLETED_STATUS,
         note_tag(document, "output-file"),
     )
@@ -95,7 +102,7 @@ def monitor_notification(document: str, summary: str, event: str) -> MonitorEven
 
     """
     return MonitorEventTranscriptRecord(
-        ClaudeCodeShellId(note_tag(document, "task-id") or ""),
+        ClaudeCodeShellId(note_tag(document, TASK_ID_TAG) or ""),
         summary,
         event,
     )
@@ -110,8 +117,8 @@ def monitor_ended_notification(document: str) -> MonitorEndedTranscriptRecord:
     """
     expired = (note_tag(document, "summary") or "").startswith(MONITOR_EVENT_SUMMARY_PREFIX)
     return MonitorEndedTranscriptRecord(
-        ClaudeCodeShellId(note_tag(document, "task-id") or ""),
-        ClaudeCodeCallId(note_tag(document, "tool-use-id") or ""),
+        ClaudeCodeShellId(note_tag(document, TASK_ID_TAG) or ""),
+        ClaudeCodeCallId(note_tag(document, TOOL_USE_ID_TAG) or ""),
         note_tag(document, "status") or COMPLETED_STATUS,
         None if expired else note_tag(document, "event"),
     )
@@ -124,9 +131,9 @@ def assignment_notification(document: str, summary: str) -> ActorAssignmentFinis
         The parsed assignment completion.
 
     """
-    actor_id = note_tag(document, "task-id")
+    actor_id = note_tag(document, TASK_ID_TAG)
     return ActorAssignmentFinishedTranscriptRecord(
-        ClaudeCodeCallId(note_tag(document, "tool-use-id") or ""),
+        ClaudeCodeCallId(note_tag(document, TOOL_USE_ID_TAG) or ""),
         ClaudeCodeActorId(actor_id) if actor_id else None,
         note_tag(document, "status") or COMPLETED_STATUS,
         summary,
