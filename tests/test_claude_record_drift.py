@@ -7,6 +7,7 @@ the transcript, and a notification leaves the lead waiting for a subagent that
 already finished. A field is listed as soon as a record carries it.
 """
 
+from harness.impl.claude_code import model
 from harness.impl.claude_code.canonical import record_attachments, record_documents, record_transcript_entries
 
 
@@ -71,3 +72,32 @@ def test_teammate_idle_notification_result() -> None:
 
     assert record.idle_reason == "completed"
     assert record.result == "TERMINAL_COLOR_DONE"
+
+
+def test_queued_goal_check_in_user_record() -> None:
+    """Keep reading a user record that Claude Code queued for a goal check-in.
+
+    Claude Code 2.1.x added `queuePriority` and `queueOrigin`. The user record
+    model forbids an unknown field, and a record it refuses is lost.
+    """
+    record = record_transcript_entries.UserRecord.model_validate({
+        "message": {"role": "user", "content": "<task-notification>check</task-notification>"},
+        "queuePriority": "later",
+        "queueOrigin": {"kind": "task-notification", "source": "goal-checkin"},
+    })
+
+    assert record.queue_priority == "later"
+    assert record.queue_origin is not None
+    assert record.queue_origin.source == "goal-checkin"
+
+
+def test_opus_five_five_model_ids() -> None:
+    """Accept the Opus 5.5 model IDs, and keep the large window of the `[1m]` form.
+
+    A model ID that is not in the list fails the translation of every assistant
+    record of the session.
+    """
+    assert model.ClaudeCodeModel("claude-opus-5-5") == model.ClaudeCodeModel.CLAUDE_OPUS_FIVE_FIVE
+    million = model.ClaudeCodeModel("claude-opus-5-5[1m]")
+
+    assert model.window(million) == model.LARGE_CONTEXT_WINDOW

@@ -83,3 +83,5 @@ class Origin(BaseModel):
     sender_task_id: Annotated[str | None, Field(alias="senderTaskId")] = None
     body: str | None = None
     from_: str | None = Field(default=None, alias="from")
+    # Claude Code 2.1.x names what queued a notification (corpus: "goal-checkin").
+    source: str | None = None
