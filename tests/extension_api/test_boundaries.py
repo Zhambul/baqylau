@@ -19,7 +19,7 @@ def test_sdk_imports_only_its_declared_boundary() -> None:
     assert SDK_ROOT.is_dir()
     allowed = {
         "__future__", "base64", "binascii", "collections", "dataclasses", "decimal", "hashlib",
-        "pathlib", "types", "typing", "graphlib", "heapq", "itertools",
+        "functools", "pathlib", "types", "typing", "graphlib", "heapq", "itertools",
         "pydantic", "packaging", "jsonschema", "referencing", "baqylau_extension_api",
     }
     runtime_only = {
