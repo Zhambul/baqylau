@@ -10,6 +10,9 @@ from pathlib import Path
 from core.git_status import RepositoryStatus, parse_status
 
 GIT_TIMEOUT_SECONDS = 2
+# Every query here only reads. Without this option `git status` can take the index lock to refresh the
+# index; the time limit then kills it and leaves `.git/index.lock`, so the user's next Git command fails.
+READ_ONLY = "--no-optional-locks"
 GIT_EXECUTABLE = shutil.which("git") or "git"
 
 
@@ -57,7 +60,7 @@ class RepositoryQueries:
         """
         try:
             return subprocess.run(  # noqa: S603 -- Use the configured Git executable with separate query arguments, without a shell.
-                [cls.git_executable, "-C", working_directory, *arguments],
+                [cls.git_executable, READ_ONLY, "-C", working_directory, *arguments],
                 capture_output=True,
                 text=True,
                 timeout=GIT_TIMEOUT_SECONDS,

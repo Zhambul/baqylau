@@ -48,6 +48,28 @@ describe('web view catalog', () => {
     expect(catalog.forSlot('toolbar', 'session')).toEqual([]);
   });
 
+  it('lists session and repository tabs of a session page once each', async () => {
+    const logs = webView({ view_id: 'test.shell.logs', slot: 'session_tab' });
+    const git = webView({
+      view_id: 'test.shell.git',
+      slot: 'session_tab',
+      scopes: ['repository'],
+    });
+    const both = webView({
+      view_id: 'test.shell.both',
+      slot: 'session_tab',
+      scopes: ['session', 'repository'],
+    });
+    const page = webView({
+      view_id: 'test.shell.page',
+      slot: 'workspace_page',
+      scopes: ['repository'],
+    });
+    const catalog = await catalogWith([logs, git, both, page]);
+
+    expect(catalog.sessionTabs()).toEqual([logs, git, both]);
+  });
+
   it('finds the replacement of one entry kind in one scope', async () => {
     const replacement = webView({ mode: 'replace', target: 'shell_started' });
     const catalog = await catalogWith([replacement]);

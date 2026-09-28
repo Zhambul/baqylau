@@ -132,10 +132,13 @@ diagnostic when it ends. The host runs command jobs one at a time.
 A repository scope names one worktree. Use the SDK's rule
 (`baqylau_extension_api.repositories`) to make one: run Git with
 `REPOSITORY_ARGUMENTS` and read its output with `repository_from_git`, so the
-host and every package give a repository the same ID. A `workspace_page` view
-that declares the `repository` scope opens at `#/repo/<directory>/x/<extension>/<view>`;
-the session page links to it with the session's directory, and the host
-resolves the directory to its repository. The Kitty pane selector also offers
+host and every package give a repository the same ID. A `session_tab` view
+that declares the `repository` scope is a tab of the session page, beside the
+core tabs; the host resolves the session's directory to its repository and
+opens the view with that scope. A `workspace_page` view that declares the
+`repository` scope opens at `#/repo/<directory>/x/<extension>/<view>`, and the
+session page links to it with the session's directory. Either view also opens
+at that address. The Kitty pane selector also offers
 the repository of the window's session. The view renders in a
 shadow root, and its styles stay inside it. The host serves each asset only by
 its declared digest.

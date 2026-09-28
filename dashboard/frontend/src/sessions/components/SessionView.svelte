@@ -17,6 +17,7 @@
   import SessionTabs from './SessionTabs.svelte';
   import ExtensionSlot from '../../extensions/views/ExtensionSlot.svelte';
   import ExtensionViewMount from '../../extensions/views/ExtensionViewMount.svelte';
+  import RepositoryViewMount from '../../extensions/views/RepositoryViewMount.svelte';
   import WorkspaceLinks from '../../extensions/views/WorkspaceLinks.svelte';
   import { webViewCatalog } from '../../extensions/views/web-view-catalog.svelte';
 
@@ -91,6 +92,12 @@
       <div class="empty" role="status">
         This extension view is not available.
       </div>
+    {:else if !extensionMount.view.scopes.includes('session')}
+      <RepositoryViewMount
+        view={extensionMount.view}
+        directory={view.session.workingDirectory}
+        runtimeRevision={extensionMount.runtimeRevision}
+      />
     {:else}
       {#key extensionMount.key}
         <ExtensionViewMount
