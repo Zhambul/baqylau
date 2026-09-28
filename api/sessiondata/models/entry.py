@@ -103,6 +103,9 @@ class EntryResponse(BaseModel):
     entry_id: str
     type: EntryType
     cursor: int
+    # The cursor of the fact that the row belongs to. The feed is ordered by
+    # (commit_cursor, cursor), so a row that a projector wrote late shows at its fact.
+    commit_cursor: int
     actor_id: str
     parent_actor_id: str | None
     turn_id: str | None

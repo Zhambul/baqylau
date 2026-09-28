@@ -19,6 +19,8 @@ export type Question = {
 type EntryEnvelope = {
   readonly entryId: EntryId;
   readonly cursor: number;
+  /** The fact that the row belongs to; the feed is ordered by it, then by `cursor`. */
+  readonly commitCursor: number;
   readonly actorId: ActorId;
   readonly parentActorId: ActorId | null;
   readonly turnId: string | null;

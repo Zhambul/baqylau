@@ -6,6 +6,7 @@ import { decodeEntry } from './entries';
 const wire = {
   entry_id: 'entry-one',
   cursor: 7,
+  commit_cursor: 7,
   actor_id: 'actor-lead',
   parent_actor_id: null,
   turn_id: null,

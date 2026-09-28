@@ -45,7 +45,7 @@ def write_changes(
     Record changes keep the projection generation that produced them.
     """
     for position, entry in enumerate(session_data_changes.entries):
-        insert_entry(connection, _ENTRY_SQL, (canonical_cursor, position), entry)
+        insert_entry(connection, _ENTRY_SQL, (entry.commit_cursor or canonical_cursor, position), entry)
     if session_data_changes.session is not None:
         goal_dismissals.expire(connection, session_id, session_data_changes.session.goal, canonical_cursor)
         connection.execute(

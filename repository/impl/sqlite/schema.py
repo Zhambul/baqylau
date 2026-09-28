@@ -35,7 +35,7 @@ from __future__ import annotations
 
 from types import MappingProxyType
 
-MAIN_SCHEMA_VERSION = 41
+MAIN_SCHEMA_VERSION = 42
 AUDIT_SCHEMA_VERSION = 1
 TOOL_COUNTS_REPAIR_VERSION = 15
 FIRST_REPEATED_REPAIR_VERSION = 21
@@ -942,8 +942,37 @@ def _repeat_repairs(
 # at the canonical head, so enable applies to future facts; only an explicit
 # rebuild reads the past. `history_reprocessings` records one closed session's
 # replay into a candidate history, its comparison, and its switch.
+_SESSION_ENTRY_FACT_ORDER_MIGRATION = (
+    """
+    UPDATE session_entries SET commit_cursor=(
+        SELECT MIN(fact.cursor) FROM canonical_events AS fact
+        WHERE fact.session_id=session_entries.session_id
+            AND fact.event_id=json_extract(session_entries.payload, '$.source_event_id')
+    )
+    WHERE entry_type='extension' AND EXISTS(
+        SELECT 1 FROM canonical_events AS fact
+        WHERE fact.session_id=session_entries.session_id
+            AND fact.event_id=json_extract(session_entries.payload, '$.source_event_id')
+    )
+    """,
+    """
+    UPDATE extension_candidate_entries SET commit_cursor=(
+        SELECT MIN(fact.cursor) FROM canonical_events AS fact
+        WHERE fact.session_id=extension_candidate_entries.session_id
+            AND fact.event_id=json_extract(extension_candidate_entries.payload, '$.source_event_id')
+    )
+    WHERE entry_type='extension' AND EXISTS(
+        SELECT 1 FROM canonical_events AS fact
+        WHERE fact.session_id=extension_candidate_entries.session_id
+            AND fact.event_id=json_extract(extension_candidate_entries.payload, '$.source_event_id')
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS index_session_entries_order ON session_entries(session_id, commit_cursor, cursor)",
+)
 # Version 41 keeps each extension's consecutive worker failures and health
 # state, so that a failing extension stays visible across a restart.
+# Version 42 orders the feed by the fact that a row belongs to: an extension
+# row takes the cursor of the fact that caused it, and an index serves the order.
 MAIN_MIGRATIONS = _repeat_repairs({
     34: _EXTENSION_SHUTDOWN_TABLES,
     37: _EXTENSION_JOB_TABLES,
@@ -951,6 +980,7 @@ MAIN_MIGRATIONS = _repeat_repairs({
     39: _CANONICAL_SCOPE_HEAD_MIGRATION,
     40: _EXTENSION_PROJECTION_GENERATION_TABLES,
     41: _EXTENSION_HEALTH_TABLES,
+    42: _SESSION_ENTRY_FACT_ORDER_MIGRATION,
     5: (
         """
         UPDATE session_data_actors
@@ -1629,8 +1659,9 @@ CREATE TABLE IF NOT EXISTS shell_output(
 -- by the writers behind `SessionDataRepository`. `revision` and
 -- `session_entries.commit_cursor` use the canonical event cursor, so "everything
 -- after cursor C" is one question with one answer across both kinds of change.
--- One commit can add several entries; the row `cursor` orders them for paging
--- and `position` orders them inside their commit.
+-- The feed is ordered by `commit_cursor`, the fact that a row belongs to, then
+-- by the row `cursor`. An extension row names the fact that caused it, so a row
+-- that a projector wrote late, or a rebuild wrote again, stays at its fact.
 
 CREATE TABLE IF NOT EXISTS session_data(
     session_id TEXT PRIMARY KEY,
@@ -1675,6 +1706,9 @@ CREATE INDEX IF NOT EXISTS index_session_entries_session
 
 CREATE INDEX IF NOT EXISTS index_session_entries_commit
     ON session_entries(commit_cursor, position);
+
+CREATE INDEX IF NOT EXISTS index_session_entries_order
+    ON session_entries(session_id, commit_cursor, cursor);
 
 -- The reaction loop's high-water mark against canonical_events; one row,
 -- typed, the same standing as schema_version — not a key-value table.

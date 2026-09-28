@@ -144,6 +144,7 @@ def session_entry(row: sqlite3.Row) -> SessionEntryRow:
     """
     return SessionEntryRow(
         cursor=row["cursor"],
+        commit_cursor=row["commit_cursor"],
         entry_id=row["entry_id"],
         session_id=row[SESSION_ID_COLUMN],
         entry_type=row["entry_type"],

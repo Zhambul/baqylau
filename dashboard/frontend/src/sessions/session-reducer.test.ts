@@ -14,6 +14,19 @@ import {
 } from './session-reducer';
 
 describe('session reducer', () => {
+  it('puts a late row at the fact that it belongs to', () => {
+    const at = (cursor: number, commitCursor: number): Entry => ({
+      ...translateEntry(wireEntry(cursor)),
+      commitCursor,
+    });
+    const feed = initialEntriesNewestFirst([at(1, 10), at(2, 20), at(3, 30)]);
+
+    // A projector writes row 4 late, for the fact at cursor 20.
+    const merged = prependLiveEntries(feed, [at(4, 20)]);
+
+    expect(merged.map((entry) => entry.cursor)).toEqual([3, 4, 2, 1]);
+  });
+
   it('replaces changed actors and adds newly observed actors', () => {
     const lead = translateActor(wireActor());
     const changedLead = translateActor({ ...wireActor(), status: 'idle' });
@@ -54,6 +67,7 @@ describe('session reducer', () => {
     const envelope = (id: string, cursor: number) => ({
       entryId: entryId(id),
       cursor,
+      commitCursor: cursor,
       actorId: actorId('actor-child'),
       parentActorId: actorId('actor-lead'),
       turnId: 'child-turn',

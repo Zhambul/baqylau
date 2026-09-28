@@ -38,6 +38,9 @@ SESSION_ID_COLUMN = "session_id"
 REVISION_COLUMN = "revision"
 
 
+_ROW_KEY_SQL = "SELECT commit_cursor, cursor FROM session_entries WHERE cursor=?"
+
+
 class _SqliteSessionDataState(contracts.SessionDataRepository):
     """Store the database for session-data operations."""
 
@@ -262,7 +265,7 @@ class _SqliteSessionDataEntryRead(_SqliteSessionDataState):
         with self.sqlite_database.read() as connection:
             found = connection.execute(
                 "SELECT * FROM session_entries "  # noqa: S608 -- Only ? placeholders vary; values are bound.
-                f"WHERE session_id=? AND entry_type IN ({names}) ORDER BY cursor",
+                f"WHERE session_id=? AND entry_type IN ({names}) ORDER BY commit_cursor, cursor",
                 (str(session_id), *entry_types),
             ).fetchall()
         return tuple(aggregate_mapper.entry(row) for row in found)
@@ -339,8 +342,10 @@ class _SqliteSessionDataEntryRead(_SqliteSessionDataState):
         before: int | None,
         limit: int,
     ) -> list[sqlite3.Row]:
-        ceiling = "" if at is None else "AND cursor <= ?"
-        floor = "" if before is None else "AND cursor < ?"
+        # The feed is ordered by the fact that a row belongs to, then by the row. `at` is a
+        # canonical cursor; `before` is the row of the oldest entry that the reader has.
+        ceiling = "" if at is None else "AND commit_cursor <= ?"
+        floor = "" if before is None else f"AND (commit_cursor, cursor) < ({_ROW_KEY_SQL})"
         arguments: list[str | int] = [str(session_id)]
         if at is not None:
             arguments.append(at)
@@ -351,7 +356,7 @@ class _SqliteSessionDataEntryRead(_SqliteSessionDataState):
             # question as whether the row after this page exists.
             return connection.execute(
                 "SELECT * FROM session_entries "  # noqa: S608 -- Clauses are fixed strings; values are bound.
-                f"WHERE session_id=? {ceiling} {floor} ORDER BY cursor DESC LIMIT ?",
+                f"WHERE session_id=? {ceiling} {floor} ORDER BY commit_cursor DESC, cursor DESC LIMIT ?",
                 (*arguments, limit + 1),
             ).fetchall()
 

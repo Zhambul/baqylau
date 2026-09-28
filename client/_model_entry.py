@@ -61,6 +61,8 @@ class EntryRecord(WireModel):
     entry_id: str
     type: str
     cursor: int
+    # The fact that the row belongs to: the feed is ordered by (commit_cursor, cursor).
+    commit_cursor: int
     actor_id: str
     parent_actor_id: str | None = None
     turn_id: str | None = None

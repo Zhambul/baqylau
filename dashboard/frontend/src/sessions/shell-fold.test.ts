@@ -20,6 +20,7 @@ function envelope(
     entry_id: `entry-${String(cursor)}`,
     type,
     cursor,
+    commit_cursor: cursor,
     actor_id: 'actor-lead',
     parent_actor_id: null,
     turn_id: 'turn-one',

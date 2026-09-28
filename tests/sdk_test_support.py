@@ -18,6 +18,7 @@ SESSION_ID_TEXT = "session-one"
 
 
 CURSOR_FIELD = "cursor"
+COMMIT_CURSOR_FIELD = "commit_cursor"
 
 
 STATE_FIELD = "state"
@@ -108,6 +109,7 @@ def session_data(
     return SessionDataResponse.model_validate(
         {
             CURSOR_FIELD: cursor,
+            COMMIT_CURSOR_FIELD: cursor,
             "session": {
                 "session_id": session_id,
                 "harness": "codex",
@@ -142,6 +144,7 @@ def message_entry(cursor: int) -> EntryResponse:
             ENTRY_ID_FIELD: f"entry-{cursor}",
             TYPE_FIELD: MESSAGE_ENTRY_TYPE,
             CURSOR_FIELD: cursor,
+            COMMIT_CURSOR_FIELD: cursor,
             ACTOR_ID_FIELD: LEAD_ACTOR_ID,
             PARENT_ACTOR_ID_FIELD: None,
             TURN_ID_FIELD: FIRST_TURN_ID,
@@ -176,6 +179,7 @@ def lead_message_entry(
             ENTRY_ID_FIELD: f"lead-message-{cursor}",
             TYPE_FIELD: MESSAGE_ENTRY_TYPE,
             CURSOR_FIELD: cursor,
+            COMMIT_CURSOR_FIELD: cursor,
             ACTOR_ID_FIELD: LEAD_ACTOR_ID,
             PARENT_ACTOR_ID_FIELD: None,
             TURN_ID_FIELD: turn_id,
@@ -205,6 +209,7 @@ def turn_finished_entry(cursor: int, turn_id: str | None) -> EntryResponse:
             ENTRY_ID_FIELD: f"turn-finished-{cursor}",
             TYPE_FIELD: "turn_finished",
             CURSOR_FIELD: cursor,
+            COMMIT_CURSOR_FIELD: cursor,
             ACTOR_ID_FIELD: LEAD_ACTOR_ID,
             PARENT_ACTOR_ID_FIELD: None,
             TURN_ID_FIELD: turn_id,
@@ -233,6 +238,7 @@ def prompt_entry(
             ENTRY_ID_FIELD: f"prompt-{cursor}",
             TYPE_FIELD: MESSAGE_ENTRY_TYPE,
             CURSOR_FIELD: cursor,
+            COMMIT_CURSOR_FIELD: cursor,
             ACTOR_ID_FIELD: actor_id,
             PARENT_ACTOR_ID_FIELD: None if actor_id == LEAD_ACTOR_ID else LEAD_ACTOR_ID,
             TURN_ID_FIELD: turn_id,
@@ -262,6 +268,7 @@ def shell_entry(cursor: int, shell_id: str) -> EntryResponse:
             ENTRY_ID_FIELD: f"entry-{cursor}",
             TYPE_FIELD: "shell_started",
             CURSOR_FIELD: cursor,
+            COMMIT_CURSOR_FIELD: cursor,
             ACTOR_ID_FIELD: LEAD_ACTOR_ID,
             PARENT_ACTOR_ID_FIELD: None,
             TURN_ID_FIELD: FIRST_TURN_ID,

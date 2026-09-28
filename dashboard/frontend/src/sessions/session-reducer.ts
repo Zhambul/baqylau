@@ -30,6 +30,14 @@ export function entriesForActor(
   );
 }
 
+/**
+ * Newest first by the fact that each row belongs to, then by the row. A row that
+ * a projector wrote late, or a rebuild wrote again, shows at its fact.
+ */
+function newestFirst(left: Entry, right: Entry): number {
+  return right.commitCursor - left.commitCursor || right.cursor - left.cursor;
+}
+
 function uniqueEntries(entries: readonly Entry[]): readonly Entry[] {
   const seen = new Set<string>();
   return entries.filter((entry) => {
@@ -42,7 +50,7 @@ function uniqueEntries(entries: readonly Entry[]): readonly Entry[] {
 export function initialEntriesNewestFirst(
   oldestFirst: readonly Entry[],
 ): readonly Entry[] {
-  return uniqueEntries([...oldestFirst].reverse()).slice(
+  return uniqueEntries([...oldestFirst].sort(newestFirst)).slice(
     0,
     MAXIMUM_FEED_ENTRIES,
   );
@@ -56,10 +64,9 @@ export function prependLiveEntries(
   const incoming = liveOldestFirst
     .filter((entry) => !known.has(entry.entryId))
     .reverse();
-  return uniqueEntries([...incoming, ...currentNewestFirst]).slice(
-    0,
-    MAXIMUM_FEED_ENTRIES,
-  );
+  return uniqueEntries(
+    [...incoming, ...currentNewestFirst].sort(newestFirst),
+  ).slice(0, MAXIMUM_FEED_ENTRIES);
 }
 
 export function appendOlderEntries(
@@ -70,8 +77,7 @@ export function appendOlderEntries(
   const older = olderOldestFirst
     .filter((entry) => !known.has(entry.entryId))
     .reverse();
-  return uniqueEntries([...currentNewestFirst, ...older]).slice(
-    0,
-    MAXIMUM_FEED_ENTRIES,
-  );
+  return uniqueEntries(
+    [...currentNewestFirst, ...older].sort(newestFirst),
+  ).slice(0, MAXIMUM_FEED_ENTRIES);
 }

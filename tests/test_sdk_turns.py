@@ -30,6 +30,7 @@ SESSION = SessionRef(SESSION_ID_TEXT)
 
 
 CURSOR_FIELD = "cursor"
+COMMIT_CURSOR_FIELD = "commit_cursor"
 
 
 STATE_FIELD = "state"
@@ -205,6 +206,7 @@ def test_assignment_uses_actor_that_finishes_it() -> None:
             ENTRY_ID_FIELD: "assignment-started",
             TYPE_FIELD: "assignment_started",
             CURSOR_FIELD: 1,
+            COMMIT_CURSOR_FIELD: 1,
             ACTOR_ID_FIELD: LEAD_ACTOR_ID,
             PARENT_ACTOR_ID_FIELD: None,
             TURN_ID_FIELD: FIRST_TURN_ID,
@@ -222,6 +224,7 @@ def test_assignment_uses_actor_that_finishes_it() -> None:
             ENTRY_ID_FIELD: "assignment-finished",
             TYPE_FIELD: "assignment_finished",
             CURSOR_FIELD: 2,
+            COMMIT_CURSOR_FIELD: 2,
             ACTOR_ID_FIELD: CHILD_ACTOR_ID,
             PARENT_ACTOR_ID_FIELD: LEAD_ACTOR_ID,
             TURN_ID_FIELD: CHILD_TURN_ID,
@@ -261,6 +264,7 @@ def test_team_assignment_uses_its_last_message() -> None:
             ENTRY_ID_FIELD: "assignment-started",
             TYPE_FIELD: "assignment_started",
             CURSOR_FIELD: 1,
+            COMMIT_CURSOR_FIELD: 1,
             ACTOR_ID_FIELD: LEAD_ACTOR_ID,
             PARENT_ACTOR_ID_FIELD: None,
             TURN_ID_FIELD: FIRST_TURN_ID,
@@ -278,6 +282,7 @@ def test_team_assignment_uses_its_last_message() -> None:
             ENTRY_ID_FIELD: CHILD_MESSAGE_ID,
             TYPE_FIELD: MESSAGE_ENTRY_TYPE,
             CURSOR_FIELD: 2,
+            COMMIT_CURSOR_FIELD: 2,
             ACTOR_ID_FIELD: CHILD_ACTOR_ID,
             PARENT_ACTOR_ID_FIELD: LEAD_ACTOR_ID,
             TURN_ID_FIELD: None,
@@ -298,6 +303,7 @@ def test_team_assignment_uses_its_last_message() -> None:
             ENTRY_ID_FIELD: "assignment-finished",
             TYPE_FIELD: "assignment_finished",
             CURSOR_FIELD: 3,
+            COMMIT_CURSOR_FIELD: 3,
             ACTOR_ID_FIELD: CHILD_ACTOR_ID,
             PARENT_ACTOR_ID_FIELD: LEAD_ACTOR_ID,
             TURN_ID_FIELD: None,
@@ -327,6 +333,7 @@ def test_claude_assignment_uses_child_prompt() -> None:
             ENTRY_ID_FIELD: "assignment-started",
             TYPE_FIELD: "assignment_started",
             CURSOR_FIELD: 1,
+            COMMIT_CURSOR_FIELD: 1,
             ACTOR_ID_FIELD: LEAD_ACTOR_ID,
             PARENT_ACTOR_ID_FIELD: None,
             TURN_ID_FIELD: FIRST_TURN_ID,
@@ -344,6 +351,7 @@ def test_claude_assignment_uses_child_prompt() -> None:
             ENTRY_ID_FIELD: "child-prompt",
             TYPE_FIELD: MESSAGE_ENTRY_TYPE,
             CURSOR_FIELD: 2,
+            COMMIT_CURSOR_FIELD: 2,
             ACTOR_ID_FIELD: CHILD_ACTOR_ID,
             PARENT_ACTOR_ID_FIELD: LEAD_ACTOR_ID,
             TURN_ID_FIELD: CHILD_TURN_ID,
@@ -377,6 +385,7 @@ def test_two_equal_pending_assignments_do_not() -> None:
             ENTRY_ID_FIELD: "child-prompt",
             TYPE_FIELD: MESSAGE_ENTRY_TYPE,
             CURSOR_FIELD: 3,
+            COMMIT_CURSOR_FIELD: 3,
             ACTOR_ID_FIELD: CHILD_ACTOR_ID,
             PARENT_ACTOR_ID_FIELD: LEAD_ACTOR_ID,
             TURN_ID_FIELD: CHILD_TURN_ID,

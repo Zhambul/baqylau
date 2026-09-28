@@ -12,6 +12,7 @@ vi.mock('../../api/extension-views', () => ({ readWebViews: vi.fn() }));
 const ENVELOPE = {
   entryId: entryId('entry-1'),
   cursor: 1,
+  commitCursor: 1,
   actorId: actorId('actor-1'),
   parentActorId: null,
   turnId: null,

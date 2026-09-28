@@ -51,6 +51,6 @@ def test_core_feed_envelope_round_trip(body: CoreEntryBody) -> None:
 
 
 def test_core_feed_envelope_fields_are_complete() -> None:
-    """Exclude only the host cursor from the public feed proposal."""
-    private_fields = {field.name for field in fields(entries.SessionEntry)} - {"cursor"}
+    """Exclude only the host's two cursors from the public feed proposal."""
+    private_fields = {field.name for field in fields(entries.SessionEntry)} - {"cursor", "commit_cursor"}
     assert set(CoreSessionEntry.model_fields) == private_fields

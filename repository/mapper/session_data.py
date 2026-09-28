@@ -74,4 +74,5 @@ def session_entry(session_entry_row: SessionEntryRow) -> SessionEntry:
         summary=session_entry_row.summary,
         body=decode_document(body_type, session_entry_row.payload),
         cursor=session_entry_row.cursor,
+        commit_cursor=session_entry_row.commit_cursor,
     )

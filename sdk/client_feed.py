@@ -48,14 +48,15 @@ def _validate_entries(
     entries: tuple[application_models.entry.EntryResponse, ...],
     snapshot_cursor: int,
 ) -> None:
+    # The feed is ordered by the fact that each row belongs to, then by the row.
     entry_ids = [entry.entry_id for entry in entries]
-    cursors = [entry.cursor for entry in entries]
+    keys = [(entry.commit_cursor, entry.cursor) for entry in entries]
     validation_results = (
         (len(entry_ids) != len(set(entry_ids)), "the entry feed returned a repeated entry id"),
-        (cursors != sorted(cursors), "the entry feed did not return unique ascending cursors"),
-        (len(cursors) != len(set(cursors)), "the entry feed did not return unique ascending cursors"),
+        (keys != sorted(keys), "the entry feed did not return unique ascending cursors"),
+        (len({key[1] for key in keys}) != len(keys), "the entry feed did not return unique ascending cursors"),
         (
-            any(cursor > snapshot_cursor for cursor in cursors),
+            any(key[0] > snapshot_cursor for key in keys),
             f"the entry feed returned an entry newer than snapshot cursor {snapshot_cursor}",
         ),
     )

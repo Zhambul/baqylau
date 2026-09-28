@@ -40,7 +40,7 @@ def read_after(
     known = known_row(connection, session_id, cursor) if entry_cursor is None else entry_cursor
     rows = connection.execute(
         "SELECT * FROM session_entries WHERE session_id=? AND (commit_cursor > ? OR cursor > ?) "
-        "ORDER BY commit_cursor, position",
+        "ORDER BY commit_cursor, cursor",
         (str(session_id), cursor, known),
     ).fetchall()
     return EntryRowRead(rows, highest_row(known, rows))
