@@ -12,7 +12,7 @@ entries = test_client_loading.load_shared("_model_entry")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 WIDTH = 60
 ENTRY_JSON = (
-    '{"entry_id":"e1","type":"extension","cursor":1,"actor_id":"lead","occurred_at":1.0,"summary":%s,'
+    '{"entry_id":"e1","type":"extension","cursor":1,"commit_cursor":1,"actor_id":"lead","occurred_at":1.0,"summary":%s,'
     '"body":{"owner":"test.git","entry_type":"commit","source_event_id":"s1","document":"{}",'
     '"schema_ref":{"owner":"test.git","name":"commit","version":1,"digest":"d"}}}'
 )

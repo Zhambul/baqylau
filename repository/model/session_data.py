@@ -56,3 +56,4 @@ class SessionEntryRow:
     occurred_at: float | None
     summary: str | None
     payload: str
+    commit_cursor: int = 0

@@ -3339,6 +3339,8 @@ export interface components {
             type: components["schemas"]["EntryType"];
             /** Cursor */
             cursor: number;
+            /** Commit Cursor */
+            commit_cursor: number;
             /** Actor Id */
             actor_id: string;
             /** Parent Actor Id */

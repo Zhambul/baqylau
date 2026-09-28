@@ -109,6 +109,7 @@ export function wireEntry(
     entry_id: `entry-${suffix}`,
     type: 'message',
     cursor,
+    commit_cursor: cursor,
     actor_id: actor,
     parent_actor_id: null,
     turn_id: `turn-${suffix}`,

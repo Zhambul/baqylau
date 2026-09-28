@@ -23,6 +23,7 @@ PANE_ACCEPTED_STATUSES = frozenset((200, 409))
 
 
 CURSOR_FIELD = "cursor"
+COMMIT_CURSOR_FIELD = "commit_cursor"
 
 
 WORKING_DIRECTORY_FIELD = "working_directory"
@@ -129,6 +130,7 @@ def test_question_state_folds_asked_and_answered() -> None:
             ENTRY_ID_FIELD: "question-asked",
             TYPE_FIELD: "question_asked",
             CURSOR_FIELD: 1,
+            COMMIT_CURSOR_FIELD: 1,
             ACTOR_ID_FIELD: LEAD_ACTOR_ID,
             PARENT_ACTOR_ID_FIELD: None,
             TURN_ID_FIELD: FIRST_TURN_ID,
@@ -156,6 +158,7 @@ def test_question_state_folds_asked_and_answered() -> None:
             ENTRY_ID_FIELD: "question-answered",
             TYPE_FIELD: "question_answered",
             CURSOR_FIELD: 2,
+            COMMIT_CURSOR_FIELD: 2,
             ACTOR_ID_FIELD: LEAD_ACTOR_ID,
             PARENT_ACTOR_ID_FIELD: None,
             TURN_ID_FIELD: FIRST_TURN_ID,

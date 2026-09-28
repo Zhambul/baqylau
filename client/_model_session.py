@@ -38,11 +38,13 @@ class SessionModel(_SessionModelIngress, _SessionModelActors, _SessionModelFeed)
         # daemon measures elapsed time when it BUILDS a frame, and frames arrive
         # on change, not on a tick.
         self._framed_at = time.monotonic()
-        # First-appearance order, and the two things that order can hold: an
-        # entry as it arrived, or a command being folded. A shell takes the
-        # position of its START and grows in place, which is what makes its
-        # output land under its own command instead of at the end of the feed.
+        # Feed order, and the two things that order can hold: an entry, or a
+        # command being folded. Each item sits at the fact that it belongs to,
+        # then at its row; a shell takes the place of its START and grows in
+        # place, so its output lands under its own command. A row that a
+        # projector wrote late still shows at its fact.
         self._order: list[str] = []
+        self._places: dict[str, tuple[int, int]] = {}
         self._entries: dict[str, EntryRecord] = {}
         self._shells: dict[str, ShellFold] = {}
         # Entries this model has already decided are dead. Remembered, not just

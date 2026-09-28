@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import time
+from bisect import insort
 from typing import TYPE_CHECKING
 
 from _model_entry import EntryPageDocument, EntryRecord, SnapshotDocument, StreamFrameDocument
@@ -16,6 +17,8 @@ if TYPE_CHECKING:
 _ENTRY_PREFIX = "entry:"
 _SHELL_PREFIX = "shell:"
 SHELL_ENTRIES = frozenset(("shell_started", "shell_output", "shell_backgrounded", "shell_finished"))
+# Each feed item's place: the fact that it belongs to, then its row.
+type Places = dict[str, tuple[int, int]]
 
 
 class _SessionModelState:
@@ -28,6 +31,7 @@ class _SessionModelState:
     live: bool
     _framed_at: float
     _order: list[str]
+    _places: Places
     _entries: dict[str, EntryRecord]
     _shells: dict[str, ShellFold]
     _dropped: set[str]
@@ -70,7 +74,7 @@ class _SessionModelIngress(_SessionModelState):
         if entry.type in SHELL_ENTRIES:
             self._fold_shell(entry)
             return
-        self._order.append(_ENTRY_PREFIX + entry_id)
+        _place(self._order, self._places, _ENTRY_PREFIX + entry_id, entry)
         if entry.type == "message":
             self._drop_superseded(entry)
 
@@ -81,7 +85,7 @@ class _SessionModelIngress(_SessionModelState):
             if entry.type != "shell_started":
                 return
             self._shells[shell_id] = ShellFold.from_entry(entry)
-            self._order.append(_SHELL_PREFIX + shell_id)
+            _place(self._order, self._places, _SHELL_PREFIX + shell_id, entry)
             return
         fold.fold(entry)
 
@@ -98,8 +102,14 @@ class _SessionModelIngress(_SessionModelState):
 
     def _drop_entry(self, key: str, entry: EntryRecord) -> None:
         self._order.remove(key)
+        self._places.pop(key, None)
         self._entries.pop(entry.entry_id, None)
         self._dropped.add(entry.entry_id)
+
+
+def _place(order: list[str], places: Places, key: str, entry: EntryRecord) -> None:
+    places[key] = (entry.commit_cursor, entry.cursor)
+    insort(order, key, key=places.__getitem__)
 
 
 def _is_prompt(entry: EntryRecord) -> bool:

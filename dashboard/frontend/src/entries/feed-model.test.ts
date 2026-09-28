@@ -13,6 +13,7 @@ function message(
     type: 'message',
     entryId: entryId(id),
     cursor: Number(id),
+    commitCursor: Number(id),
     actorId: actorId('lead'),
     parentActorId: null,
     turnId: 'turn',
@@ -36,6 +37,7 @@ function compaction(
   const common = {
     entryId: entryId(id),
     cursor: Number(id),
+    commitCursor: Number(id),
     actorId: actorId('lead'),
     parentActorId: null,
     turnId: null,
@@ -58,6 +60,7 @@ function skillEntry(
   const common = {
     entryId: entryId(id),
     cursor: Number(id),
+    commitCursor: Number(id),
     actorId: actorId('lead'),
     parentActorId: null,
     turnId: 'turn',
@@ -94,6 +97,7 @@ describe('feed density', () => {
       type: 'browser',
       entryId: entryId('browser-refresh'),
       cursor: 1,
+      commitCursor: 1,
       actorId: actorId('lead'),
       parentActorId: null,
       turnId: 'turn',
@@ -133,6 +137,7 @@ describe('feed density', () => {
         type: 'question_answered',
         entryId: entryId('answer'),
         cursor: 2,
+        commitCursor: 2,
         body: {
           attentionId: 'attention',
           answers: [
@@ -147,6 +152,7 @@ describe('feed density', () => {
         type: 'question_asked',
         entryId: entryId('question'),
         cursor: 1,
+        commitCursor: 1,
         body: {
           attentionId: 'attention',
           questions: [

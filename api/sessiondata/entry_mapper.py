@@ -38,6 +38,7 @@ def entry(session_entry: domain_entries.SessionEntry) -> entry_models.EntryRespo
         entry_id=str(session_entry.entry_id),
         type=session_entry.entry_type,
         cursor=session_entry.cursor,
+        commit_cursor=session_entry.commit_cursor,
         actor_id=str(session_entry.actor_id),
         parent_actor_id=None if session_entry.parent_actor_id is None else str(session_entry.parent_actor_id),
         turn_id=None if session_entry.turn_id is None else str(session_entry.turn_id),

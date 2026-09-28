@@ -66,6 +66,7 @@ def _pane_entry(
         "entry_id": entry_id,
         TYPE_FIELD: kind,
         CURSOR_FIELD: int(entry_id),
+        "commit_cursor": int(entry_id),
         ACTOR_ID_FIELD: actor_id,
         "parent_actor_id": None,
         "turn_id": None,

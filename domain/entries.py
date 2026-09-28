@@ -111,6 +111,9 @@ class SessionEntry:
     summary: str | None
     body: EntryBody
     cursor: int = 0
+    # The cursor of the fact that the row belongs to, which orders the feed. Zero before a
+    # write means the commit's own fact; an extension row names the fact that caused it.
+    commit_cursor: int = 0
 
     @property
     def entry_type(self) -> EntryTypeName:

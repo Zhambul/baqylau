@@ -112,6 +112,7 @@ def session_entry(
             ),
             document=change.entry.document.json_text,
         ),
+        commit_cursor=source.cursor,
     )
 
 

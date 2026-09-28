@@ -443,6 +443,7 @@ export function translateEntry(wire: Schemas['EntryResponse']): Entry {
   return {
     entryId: entryId(wire.entry_id),
     cursor: wire.cursor,
+    commitCursor: wire.commit_cursor,
     actorId: actorId(wire.actor_id),
     parentActorId: parent === null ? null : actorId(parent),
     turnId: wire.turn_id,
@@ -457,6 +458,7 @@ export function decodeEntry(value: unknown): Entry {
   return {
     entryId: entryId(text(value, 'entry_id')),
     cursor: finiteNumber(value, 'cursor'),
+    commitCursor: finiteNumber(value, 'commit_cursor'),
     actorId: actorId(text(value, 'actor_id')),
     parentActorId: parent === null ? null : actorId(parent),
     turnId: optionalText(value, 'turn_id'),

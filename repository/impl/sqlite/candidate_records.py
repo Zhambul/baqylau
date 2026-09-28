@@ -68,7 +68,7 @@ def write_candidate_changes(
             raise ValueError(message)
         _write_candidate_record(connection_handle, generation, change, commit_cursor)
     for position, entry in enumerate(session_data_changes.entries):
-        leading = (generation, owner, commit_cursor, position)
+        leading = (generation, owner, entry.commit_cursor or commit_cursor, position)
         session_data_write.insert_entry(connection_handle, _CANDIDATE_ENTRY_SQL, leading, entry)
 
 
