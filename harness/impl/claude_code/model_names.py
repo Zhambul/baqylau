@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Zhambyl Yermagambet
 """Format Claude Code model names for people and limits."""
 
+import re
 from collections.abc import Mapping
 from types import MappingProxyType
 
@@ -13,12 +14,31 @@ from harness.impl.claude_code.model import (
 )
 
 SHORT_VERSION_PART_MAXIMUM = 2
+# A record names a model by an alias or by a `claude-` ID, with an optional `[1m]` window suffix. Each model
+# release adds IDs, so a record's model is checked by this shape and not against a list of known models.
+RECORD_MODEL = re.compile(r"(?:default|fable|opus|opusplan|sonnet|haiku|claude-[a-z0-9]+(?:[.-][a-z0-9]+)*)(?:\[1m\])?")
 ALIAS_DISPLAY: Mapping[str, str] = MappingProxyType({
     FABLE_MODEL: "fable-5",
     OPUS_MODEL: "opus-5",
     SONNET_MODEL: "sonnet-5",
     HAIKU_MODEL: "haiku-4.5",
 })
+
+
+def record_model(model_name: str) -> str:
+    """Check the model that a record names.
+
+    Returns:
+        The model name, unchanged.
+
+    Raises:
+        ValueError: If the name does not have the shape of a Claude Code model.
+
+    """
+    if RECORD_MODEL.fullmatch(model_name) is None:
+        message = f"{model_name!r} is not a Claude Code model name"
+        raise ValueError(message)
+    return model_name
 
 
 def short_model(model: str | None) -> str:

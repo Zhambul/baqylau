@@ -7,7 +7,9 @@ the transcript, and a notification leaves the lead waiting for a subagent that
 already finished. A field is listed as soon as a record carries it.
 """
 
-from harness.impl.claude_code import model
+import pytest
+
+from harness.impl.claude_code import model, model_names
 from harness.impl.claude_code.canonical import record_attachments, record_documents, record_transcript_entries
 
 
@@ -91,13 +93,26 @@ def test_queued_goal_check_in_user_record() -> None:
     assert record.queue_origin.source == "goal-checkin"
 
 
-def test_opus_five_five_model_ids() -> None:
-    """Accept the Opus 5.5 model IDs, and keep the large window of the `[1m]` form.
+NEW_MODELS = ("claude-opus-5-5", "claude-opus-5-5[1m]", "claude-sonnet-6", "opusplan", "opus[1m]")
 
-    A model ID that is not in the list fails the translation of every assistant
-    record of the session.
+
+@pytest.mark.parametrize("model_name", NEW_MODELS)
+def test_a_new_model_id_is_read(model_name: str) -> None:
+    """Read a model ID that is not in the known list, and keep its `[1m]` window.
+
+    A model ID in a closed list failed the translation of every assistant record
+    of the session at each model release. A record's model is checked by its shape.
     """
-    assert model.ClaudeCodeModel("claude-opus-5-5") == model.ClaudeCodeModel.CLAUDE_OPUS_FIVE_FIVE
-    million = model.ClaudeCodeModel("claude-opus-5-5[1m]")
+    assert model_names.record_model(model_name) == model_name
 
-    assert model.window(million) == model.LARGE_CONTEXT_WINDOW
+
+def test_a_million_suffix_keeps_the_large_window() -> None:
+    """The `[1m]` form of a model that is not in the known list still has the large window."""
+    assert model.window("claude-opus-4-1[1m]") == model.LARGE_CONTEXT_WINDOW
+
+
+@pytest.mark.parametrize("model_name", ["", "gpt-5", "claude-", "Claude Opus", "opus[2m]"])
+def test_a_malformed_model_name_is_refused(model_name: str) -> None:
+    """A value that has no model shape still fails its own record."""
+    with pytest.raises(ValueError, match="not a Claude Code model name"):
+        model_names.record_model(model_name)

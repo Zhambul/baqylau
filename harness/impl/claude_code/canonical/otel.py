@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 from domain.event_telemetry import UsageReported
 from domain.usage import TokenUsage, UsageScope
 from harness.impl.claude_code.canonical import support
-from harness.impl.claude_code.model import ClaudeCodeModel
+from harness.impl.claude_code.model_names import record_model
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -34,7 +34,7 @@ class UsageAmount:
 class UsageGroup:
     """Represent usage group."""
 
-    model: ClaudeCodeModel | None
+    model: str | None
     query_source: str
     amounts: list[UsageAmount]
 
@@ -79,14 +79,14 @@ class UsageGroup:
             The model and query source.
 
         """
-        return self.model.value if self.model else "", self.query_source
+        return self.model or "", self.query_source
 
 
 @dataclass(frozen=True)
 class UsageSample:
     """Represent one decoded OTel usage point."""
 
-    model: ClaudeCodeModel | None
+    model: str | None
     query_source: str
     key: str
     amount: Decimal
@@ -118,7 +118,7 @@ class UsageSample:
         native_amount: str | float,
     ) -> UsageSample:
         model_name = str(data_point.attribute("model") or "")
-        selected_model = ClaudeCodeModel(model_name) if model_name else None
+        selected_model = record_model(model_name) if model_name else None
         usage_key = str(data_point.attribute("type") or "")
         if "cost.usage" in metric_name:
             usage_key = "cost"
