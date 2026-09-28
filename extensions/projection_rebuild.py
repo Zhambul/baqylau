@@ -63,11 +63,13 @@ class ProjectionRebuild:
         return self.generations.create(owner, self.live.history_revision)
 
     def build_pending(self, registry_packages: Sequence[RegistryPackage], health: PassHealth) -> int:
-        """Advance every building generation by one bounded pass.
+        """Advance every building or ready generation by one bounded pass.
 
-        A generation with nothing pending becomes ready with its comparison. A
-        failed call fails the generation and keeps the live one. A generation
-        whose owner is not active waits.
+        A building generation with nothing pending becomes ready with its
+        comparison. A ready generation keeps following new facts, because a
+        switch needs it as far as the live generation in every scope. A failed
+        call fails the generation and keeps the live one. A generation whose
+        owner is not active waits.
 
         Returns:
             The number of facts read, so the caller can schedule a continuation.
@@ -76,11 +78,15 @@ class ProjectionRebuild:
         packages = projector_packages.projector_packages(registry_packages)
         transformers = transformer_packages.projection_transformer_packages(registry_packages)
         total = 0
-        for generation in self.generations.generations_in_state(GenerationState.BUILDING):
+        for generation in self._pending():
             package = next((package for package in packages if package.extension_id == generation.owner), None)
             if package is not None:
                 total += self._build(generation, (package, transformers), health)
         return total
+
+    def _pending(self) -> tuple[ProjectionGeneration, ...]:
+        building = self.generations.generations_in_state(GenerationState.BUILDING)
+        return (*building, *self.generations.generations_in_state(GenerationState.READY))
 
     def _build(
         self,
@@ -105,7 +111,7 @@ class ProjectionRebuild:
         if recorded.failures:
             failed = Diagnostic(code=FAILED_CODE, message=FAILED_MESSAGE).model_dump_json()
             self.generations.settle(generation.generation, GenerationState.FAILED, failed)
-        elif not read:
+        elif not read and generation.state == GenerationState.BUILDING:
             self.generations.settle(generation.generation, GenerationState.READY)
         return read
 
