@@ -88,7 +88,9 @@ class FakeManager:
 
         """
         lifecycle = SimpleNamespace(manager_id=self.manager_id)
-        return cast("ManagerSnapshot", SimpleNamespace(active_runtime=self.runtime_revision, lifecycle=lifecycle))
+        return cast("ManagerSnapshot", SimpleNamespace(
+            active_runtime=self.runtime_revision, lifecycle=lifecycle, switch_pending=False,
+        ))
 
 
 def a_page(event_type: str) -> interpretation_reads.CanonicalPage:

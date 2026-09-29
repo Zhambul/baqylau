@@ -53,6 +53,11 @@ class JobExecutor(job_scheduling_contract.JobScheduling):
             The number of accepted jobs read.
 
         """
+        manager = self.services.manager
+        if manager is not None and manager.read_state().switch_pending:
+            # No job can run while a runtime switch is pending, and each attempt borrows the registry, which the
+            # switch needs free. Attempts on every engine pass kept it busy, so the switch never happened.
+            return 0
         accepted = self.services.stores.jobs.jobs_in_state(JobState.ACCEPTED, limit)
         for job in accepted:
             self.submit(job_requests.JobKey(job.owner, job.scope, job.job_id))
