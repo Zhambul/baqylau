@@ -53,10 +53,7 @@ class JobExecutor(job_scheduling_contract.JobScheduling):
             The number of accepted jobs read.
 
         """
-        manager = self.services.manager
-        if manager is not None and manager.read_state().switch_pending:
-            # No job can run while a runtime switch is pending, and each attempt borrows the registry, which the
-            # switch needs free. Attempts on every engine pass kept it busy, so the switch never happened.
+        if _switch_pending(self.services.manager):
             return 0
         accepted = self.services.stores.jobs.jobs_in_state(JobState.ACCEPTED, limit)
         for job in accepted:
@@ -69,13 +66,19 @@ class JobExecutor(job_scheduling_contract.JobScheduling):
 
     def _run(self, job_key: job_requests.JobKey) -> None:
         try:
-            with _held(self.services.scopes, job_key.scope), self.services.registry.read_snapshot() as read:
-                self._dispatch(read.snapshot, job_key)
+            self._run_outside_switch(job_key)
         except Exception:  # noqa: BLE001 -- Leave the failed job for reconciliation.
             return
         finally:
             with self.lock:
                 self.queued.discard(job_key)
+
+    def _run_outside_switch(self, job_key: job_requests.JobKey) -> None:
+        if _switch_pending(self.services.manager):
+            # A job that was queued before the switch began stays accepted; it runs after the switch.
+            return
+        with _held(self.services.scopes, job_key.scope), self.services.registry.read_snapshot() as read:
+            self._dispatch(read.snapshot, job_key)
 
     def _dispatch(self, snapshot: RuntimeSnapshot, job_key: job_requests.JobKey) -> None:
         job = self.services.stores.jobs.read(job_key.owner, job_key.scope, job_key.job_id)
@@ -106,6 +109,19 @@ def open_job_executor(services: job_executor_services.JobExecutorServices) -> Jo
         services=services,
         pool=ThreadPoolExecutor(max_workers=JOB_WORKERS, thread_name_prefix="baqylau-extension-job"),
     )
+
+
+def _switch_pending(manager: runtime_identity.ManagerStateReads | None) -> bool:
+    """Tell whether a prepared runtime waits to replace the active one.
+
+    No job can run then, and each attempt borrows the registry, which the switch needs free. Jobs that ran one
+    after another kept it busy, so a package reload waited for minutes.
+
+    Returns:
+        True while a switch is pending.
+
+    """
+    return manager is not None and manager.read_state().switch_pending
 
 
 def _held(scopes: ExtensionScopeRegistry | None, scope: ExtensionScope) -> AbstractContextManager[object]:

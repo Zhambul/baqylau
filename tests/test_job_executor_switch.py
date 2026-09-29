@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from api.extensions import command_service
 from domain.extension_jobs import JobState
+from extensions.job_requests import JobKey
 from tests import (
     command_job_fixture as jobs_fixture,
     command_package_fixture as packages,
@@ -37,6 +38,9 @@ class _Manager:
         return self.phase
 
 
+_SWITCHING = _Manager(_Phase(switch_pending=True))
+
+
 def test_no_job_is_submitted_during_a_switch(main: repository_dependencies.SqliteDatabase) -> None:
     """The accepted job waits for the switch; without a switch, the executor takes it."""
     case = slow.a_slow_case()
@@ -52,3 +56,20 @@ def test_no_job_is_submitted_during_a_switch(main: repository_dependencies.Sqlit
     assert running.submit_accepted(10) == 1
     case.slow_commands.release.set()
     running.close()
+
+
+def test_a_queued_job_waits_for_the_switch(main: repository_dependencies.SqliteDatabase) -> None:
+    """A job submitted before the switch began does not borrow the registry during it, and stays accepted."""
+    case = slow.a_slow_case()
+    dispatch = command_service.CommandDispatch((case.package,), jobs_fixture.job_store(main))
+    accepted = command_service.accept_command(
+        dispatch, packages.OWNER, packages.COMMAND_ID, packages.SCOPE, packages.a_request(),
+    )
+    pending = job_executor_fixture.an_executor(case.registry, jobs_fixture.stores(main), _SWITCHING)
+
+    pending.submit(JobKey(packages.OWNER, packages.SCOPE, accepted.job_id))
+    pending.close()
+
+    waiting = dispatch.jobs.jobs_in_state(JobState.ACCEPTED, 10)
+    assert [job.job_id for job in waiting] == [accepted.job_id]
+    assert not case.slow_commands.started.is_set()
