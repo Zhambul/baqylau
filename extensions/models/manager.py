@@ -23,6 +23,11 @@ class ManagerSnapshot(WireModel):
     cleanup: tuple[RetirementIssue, ...] = ()
     cleanup_pending: bool = False
 
+    @property
+    def switch_pending(self) -> bool:
+        """Whether a prepared runtime waits to replace the active one."""
+        return self.phase in {"preparing", "awaiting_boundary"}
+
 
 class ManagerProgress(WireModel):
     """Report one short engine-boundary attempt without running feature cleanup."""

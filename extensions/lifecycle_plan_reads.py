@@ -36,7 +36,7 @@ def planning_state(
         LifecycleConflictError: If the selected state has changed.
 
     """
-    if manager.phase in {"preparing", "awaiting_boundary"} or manager.cleanup_pending:
+    if manager.switch_pending or manager.cleanup_pending:
         message = "another extension lifecycle change or cleanup is pending"
         raise LifecycleConflictError(message)
     if manager.phase != "running":
