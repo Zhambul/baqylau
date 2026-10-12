@@ -99,6 +99,7 @@ Feature: a dashboard answer resolves a harness question
       with the exact answer text.
       """
     And I name the pending question in work "ask shade" containing 'Which shade' "shade choice"
+    Then question "shade choice" accepts free text
     When I answer question "shade choice" with free text 'Amber' as control "type amber"
     Then control "type amber" response is accepted
     And control "type amber" outcome is acknowledged
@@ -112,6 +113,36 @@ Feature: a dashboard answer resolves a harness question
       | codex       | gpt-5.6-luna                    |
       | claude_code | haiku                           |
       | opencode2   | opencode-go/deepseek-v4.1-flash |
+
+  Scenario Outline: a question with option previews accepts no free-text answer
+    # Harness limit: claude_code only. Option previews are a Claude Code feature.
+    # Its single-choice preview dialog has no text-answer row.
+    Given session configuration "primary" uses <harness> with model <model> and low effort
+    When I launch session "primary" and assign question work "ask layout" to the lead with prompt
+      """
+      Ask "Which layout should I use?" with the heading Layout. Offer Grid
+      with description "Use a grid" and List with description "Use a list".
+      Give each option a preview: a sketch of the layout in three short lines
+      of plain text. The previews must be inside the question tool input.
+      Allow only one choice. Do not select an answer. After the user answers,
+      reply only with the word done.
+      """
+    And I name the pending question in work "ask layout" containing 'Which layout' "layout choice"
+    When I answer question "layout choice" with free text 'Table' as control "type table"
+    Then control "type table" response is rejected
+    And control "type table" outcome is rejected
+    And question "layout choice" accepts no free text
+    When I answer question "layout choice" with option 'Grid' as control "choose grid"
+    Then control "choose grid" response is accepted
+    And control "choose grid" outcome is acknowledged
+    And question "layout choice" records option 'Grid'
+    And question "layout choice" is resolved
+    And work "ask layout" completes
+    And work "ask layout" has final answer 'done'
+
+    Examples:
+      | harness     | model |
+      | claude_code | haiku |
 
   Scenario Outline: one dialog records answers to two questions
     Given session configuration "primary" uses <harness> with model <model> and low effort

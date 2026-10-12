@@ -127,6 +127,7 @@ function questions(value: unknown): readonly Question[] {
       label: text(choice, 'label'),
       description: optionalText(choice, 'description'),
     })),
+    freeText: flag(question, 'free_text'),
   }));
 }
 

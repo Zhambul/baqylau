@@ -31,6 +31,22 @@ def question_is_multiple_choice(client: BaqylauClient, questions: Questions, nam
     assert prompt.multiple
 
 
+@then(parsers.parse('question "{name}" accepts free text'))
+def question_accepts_free_text(client: BaqylauClient, questions: Questions, name: str) -> None:
+    """Check that a question accepts a typed answer."""
+    reference = questions.get(name)
+    _state, prompt = question_states.question(client.sessions.snapshot(reference.session), reference)
+    assert prompt.free_text
+
+
+@then(parsers.parse('question "{name}" accepts no free text'))
+def question_accepts_no_free_text(client: BaqylauClient, questions: Questions, name: str) -> None:
+    """Check that a question accepts only its choices."""
+    reference = questions.get(name)
+    _state, prompt = question_states.question(client.sessions.snapshot(reference.session), reference)
+    assert not prompt.free_text
+
+
 @then(parsers.parse("question \"{name}\" offers option '{option}'"))
 def question_offers_option(client: BaqylauClient, questions: Questions, name: str, option: str) -> None:
     """Check that a question offers one option."""

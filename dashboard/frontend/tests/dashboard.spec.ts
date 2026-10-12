@@ -587,6 +587,42 @@ test('starts rewind target selection without opening a native menu', async ({
   expect(failures).toEqual([]);
 });
 
+test('shows no text input for a question that accepts no free text', async ({
+  page,
+}) => {
+  const failures = watchBrowserFailures(page);
+  await page.route('**/sessionData/fixture-active/entries*', async (route) => {
+    const response = await route.fetch();
+    const value: unknown = await response.json();
+    if (!isRecord(value) || !Array.isArray(value.items))
+      throw new Error('the entries fixture has no item list');
+    const items = value.items.map((item: unknown) => {
+      if (
+        !isRecord(item) ||
+        item.type !== 'question_asked' ||
+        !isRecord(item.body) ||
+        !Array.isArray(item.body.questions)
+      )
+        return item;
+      const questions = item.body.questions.map((question: unknown) =>
+        isRecord(question) ? { ...question, free_text: false } : question,
+      );
+      return { ...item, body: { ...item.body, questions } };
+    });
+    await route.fulfill({ response, json: { ...value, items } });
+  });
+
+  await page.goto('/#/s/fixture-active');
+
+  const card = page.locator('.askcard');
+  await expect(card.locator('.askqtext')).toHaveText(
+    'How should the old entry be retired?',
+  );
+  await expect(card.locator('button.askopt')).toHaveCount(2);
+  await expect(card.locator('input.askother')).toHaveCount(0);
+  expect(failures).toEqual([]);
+});
+
 test('preserves the session, agent, monitor, and statistics routes', async ({
   page,
 }) => {

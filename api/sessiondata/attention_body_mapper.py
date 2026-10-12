@@ -43,6 +43,7 @@ def map_body(entry_body: entry_base.EntryBody) -> entry_models.EntryBodyResponse
                         entry_models.QuestionChoiceResponse(label=choice.label, description=choice.description)
                         for choice in question.choices
                     ),
+                    free_text=question.free_text,
                 )
                 for question in entry_body.questions
             ),

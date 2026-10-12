@@ -19,7 +19,12 @@ class AttentionChoice:
 
 @dataclass(frozen=True)
 class AttentionPrompt:
-    """Hold one question and the choices that a person can select."""
+    """Hold one question and the choices that a person can select.
+
+    `free_text` tells if a person can type an answer that is not a choice.
+    The default is true, because a stored prompt from before this field
+    always showed a text input.
+    """
 
     __pydantic_config__ = STORED
 
@@ -28,6 +33,7 @@ class AttentionPrompt:
     prompt: str
     multiple: bool
     choices: tuple[AttentionChoice, ...]
+    free_text: bool = True
 
 
 @dataclass(frozen=True)

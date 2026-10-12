@@ -27,6 +27,7 @@ class QuestionResponse(BaseModel):
     question: str
     multiple: bool
     choices: tuple[QuestionChoiceResponse, ...]
+    free_text: bool
 
     @model_validator(mode="after")
     def require_question_id(self) -> Self:

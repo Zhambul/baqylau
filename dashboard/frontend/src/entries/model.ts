@@ -14,6 +14,7 @@ export type Question = {
     readonly label: string;
     readonly description: string | null;
   }[];
+  readonly freeText: boolean;
 };
 
 type EntryEnvelope = {

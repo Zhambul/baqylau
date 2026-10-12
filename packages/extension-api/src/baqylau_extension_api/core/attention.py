@@ -20,6 +20,7 @@ class AttentionPrompt(CoreModel):
     prompt: str
     multiple: bool
     choices: tuple[AttentionChoice, ...]
+    free_text: bool = True
 
 
 class AttentionAnswer(CoreModel):

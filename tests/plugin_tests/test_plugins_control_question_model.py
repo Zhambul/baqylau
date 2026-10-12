@@ -10,6 +10,7 @@ from domain import (
     event_work,
     ids as domain_ids,
 )
+from domain.content import StructuredContent
 from harness.impl.claude_code.controls import (
     confirmdialog,
 )
@@ -74,6 +75,49 @@ def test_codex_question_discussion_declines(monkeypatch: pytest.MonkeyPatch) -> 
     assert calls == ["Continue in chat."]
     assert len(terminal.submitted) == 1
     assert terminal.submitted[0][1] == fixture.CHANGE_THE_APPROACH_TEXT
+
+
+def test_claude_typed_answer_without_row_is() -> None:
+    """Verify a typed answer to a question with no text row is rejected before the dialog is touched."""
+    session = Session(
+        control_state_values.PRIMARY_SESSION,
+        domain_ids.ActorId(fixture.SESSION_ONE_LEAD_ID),
+        fixture.SESSION_JSONL_PATH,
+        fixture.WORK_PATH,
+    )
+    attention = event_work.QuestionAsked(
+        domain_ids.AttentionId(fixture.ATTENTION_ONE),
+        (
+            domain_attention.AttentionPrompt(
+                prompt_id=domain_ids.QuestionId(fixture.QUESTION_ONE),
+                title="Layout",
+                prompt="Which layout?",
+                multiple=False,
+                choices=(domain_attention.AttentionChoice("Grid"),),
+                free_text=False,
+            ),
+        ),
+    )
+    terminal = FakeTerminal()
+
+    outcome = support_values.controller_of(
+        ProviderGraph().registry.plugin(CLAUDE_CODE_HARNESS),
+    ).execute(
+        control_models.AnswerQuestion(
+            session_id=session.session_id,
+            request_id=control_state_values.PRIMARY_REQUEST,
+            attention_id=domain_ids.AttentionId(fixture.ATTENTION_ONE),
+            decision=control_models.AnswerDecision.ANSWER,
+            answers=StructuredContent('[{"selected": [], "other": "Table"}]'),
+        ),
+        support_controls.control_context(session, terminal.plugin(), attention),
+    )
+
+    assert isinstance(outcome, control_models.ControlResult)
+    assert outcome.status == fixture.REJECTED
+    assert outcome.reason == "question 'Layout' accepts no typed answer; select an option or use Chat about this"
+    assert terminal.screen_reads == []
+    assert terminal.keys == []
 
 
 def test_claude_model_control_resolves_native(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

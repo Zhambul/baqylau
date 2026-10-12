@@ -71,6 +71,21 @@ def question_choices(question: records.Question) -> tuple[AttentionChoice, ...]:
     return tuple(choices)
 
 
+def accepts_free_text(question: records.Question) -> bool:
+    """Tell if the native dialog has a row for a typed answer.
+
+    Claude Code 2.1.296 shows a single-choice question that has an option
+    preview in a side-by-side dialog. That dialog has no "Type something"
+    row, so a typed answer cannot be given there.
+
+    Returns:
+        True when the dialog has a typed-answer row.
+
+    """
+    has_preview = any(option.preview is not None for option in question.options or ())
+    return bool(question.multi_select) or not has_preview
+
+
 def questions(arguments: records.ToolArguments) -> tuple[AttentionPrompt, ...]:
     """Map native questions to attention prompts.
 
@@ -90,6 +105,7 @@ def questions(arguments: records.ToolArguments) -> tuple[AttentionPrompt, ...]:
                 prompt=question.question or "",
                 multiple=bool(question.multi_select),
                 choices=question_choices(question),
+                free_text=accepts_free_text(question),
             ),
         )
     return tuple(prompts)

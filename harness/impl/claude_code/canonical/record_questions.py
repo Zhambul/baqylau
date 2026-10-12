@@ -35,6 +35,7 @@ class QuestionOption(BaseModel):
     model_config = OPEN_FOREIGN
     label: str | None = None
     description: str | None = None
+    preview: str | None = None
 
 
 class Question(BaseModel):

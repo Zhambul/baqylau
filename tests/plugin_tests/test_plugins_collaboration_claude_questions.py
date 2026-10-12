@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from domain import (
     event_work,
 )
@@ -11,7 +13,11 @@ from tests.harness_names import CLAUDE_CODE_HARNESS
 from tests.plugin_tests import vocabulary as fixture
 from tests.plugin_tests.support_events import payloads, raw_event
 
+if TYPE_CHECKING:
+    from tests.plugin_tests.support_values import JsonValue
+
 QUESTION_COUNT = 2
+PREVIEW_FIELD = "preview"
 
 
 def test_claude_question_preserves_multiple() -> None:
@@ -51,6 +57,49 @@ def test_claude_question_preserves_multiple() -> None:
     assert len(asked.questions) == QUESTION_COUNT
     assert asked.questions[0].multiple is True
     assert [choice.label for choice in asked.questions[0].choices] == ["Python", "JavaScript"]
+
+
+def test_claude_preview_question_accepts_no() -> None:
+    """Verify only a single-choice question with an option preview accepts no free text.
+
+    Claude Code shows that question in a side-by-side dialog that has no
+        typed-answer row. A multiple-choice question ignores the preview.
+    """
+    previewed_option: dict[str, JsonValue] = {fixture.LABEL_FIELD: "Grid", PREVIEW_FIELD: "+--+--+\n|  |  |"}
+    plain_option: dict[str, JsonValue] = {fixture.LABEL_FIELD: "List"}
+    translation = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {
+                fixture.HOOK_EVENT_NAME_FIELD: fixture.PRE_TOOL_USE_HOOK,
+                fixture.TOOL_USE_ID_FIELD: fixture.QUESTION_ONE,
+                fixture.TOOL_NAME_FIELD: fixture.ASK_USER_QUESTION_TOOL,
+                fixture.TOOL_INPUT_FIELD: {
+                    fixture.QUESTIONS_FIELD: [
+                        {
+                            fixture.QUESTION_FIELD: "Which layout?",
+                            fixture.OPTIONS_FIELD: [previewed_option, plain_option],
+                        },
+                        {
+                            fixture.QUESTION_FIELD: "Which layouts?",
+                            "multiSelect": True,
+                            fixture.OPTIONS_FIELD: [previewed_option, plain_option],
+                        },
+                        {
+                            fixture.QUESTION_FIELD: "Which list?",
+                            fixture.OPTIONS_FIELD: [plain_option],
+                        },
+                    ],
+                },
+            },
+            harness=CLAUDE_CODE_HARNESS,
+            source_type=fixture.HOOK_SOURCE,
+            raw_event_id="ask-preview",
+        ),
+    )
+
+    asked = payloads(translation, event_work.QuestionAsked)[0].payload
+
+    assert [question.free_text for question in asked.questions] == [False, True, True]
 
 
 def test_claude_question_resolution_is_canon_not() -> None:

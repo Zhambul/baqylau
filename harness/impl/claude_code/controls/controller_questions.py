@@ -35,6 +35,20 @@ def _native_prompts(question_asked: QuestionAsked) -> list[records.Question]:
     ]
 
 
+def _typed_answer_refusal(question_asked: QuestionAsked, answers: list[ask_models.AnswerDraft]) -> str | None:
+    """Refuse a typed answer before the dialog is touched.
+
+    Returns:
+        The refusal reason, or None when each typed answer has a row.
+
+    """
+    for prompt, answer in zip(question_asked.questions, answers, strict=False):
+        if not prompt.free_text and (answer.other or "").strip():
+            title = prompt.title or prompt.prompt
+            return f"question {title!r} accepts no typed answer; select an option or use Chat about this"
+    return None
+
+
 class AnswerQuestionHandler(ControlHandler):
     """Answer a Claude Code question."""
 
@@ -79,6 +93,13 @@ class AnswerQuestionHandler(ControlHandler):
                 request.request_id,
                 control_models.ControlAcknowledgement.REJECTED,
                 f"malformed question answer: {error}",
+            )
+        refusal = _typed_answer_refusal(control_context.pending_attention, answers)
+        if refusal is not None:
+            return control_models.ControlResult(
+                request.request_id,
+                control_models.ControlAcknowledgement.REJECTED,
+                refusal,
             )
         return _answer_question(
             request,

@@ -162,6 +162,7 @@ describe('feed density', () => {
               question: 'Which incidents do I close to Done?',
               multiple: false,
               choices: [],
+              freeText: true,
             },
             {
               questionId: '1',
@@ -169,6 +170,7 @@ describe('feed density', () => {
               question: 'Add a comment on each closed incident?',
               multiple: false,
               choices: [],
+              freeText: true,
             },
           ],
         },

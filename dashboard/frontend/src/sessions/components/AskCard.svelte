@@ -28,8 +28,9 @@
   const complete = $derived(
     answers.length === entry.body.questions.length &&
       answers.every(
-        (answer) =>
-          answer.selected.length > 0 || answer.other.trim().length > 0,
+        (answer, index) =>
+          answer.selected.length > 0 ||
+          typedAnswer(answer, index).trim().length > 0,
       ),
   );
 
@@ -55,10 +56,14 @@
     if (timer !== null) clearTimeout(timer);
   });
 
+  function typedAnswer(answer: Answer, index: number): string {
+    return entry.body.questions[index]?.freeText === true ? answer.other : '';
+  }
+
   function snapshot(): readonly Answer[] {
-    return answers.map((answer) => ({
+    return answers.map((answer, index) => ({
       selected: [...answer.selected],
-      other: answer.other,
+      other: typedAnswer(answer, index),
     }));
   }
 
@@ -179,7 +184,7 @@
             </button>
           {/each}
         </div>
-        {#if answers[index] !== undefined}
+        {#if answers[index] !== undefined && question.freeText}
           <input
             bind:value={answers[index].other}
             class:on={answers[index].other.trim().length > 0 &&

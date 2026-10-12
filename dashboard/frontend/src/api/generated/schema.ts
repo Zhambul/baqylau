@@ -4953,6 +4953,8 @@ export interface components {
             multiple: boolean;
             /** Choices */
             choices: components["schemas"]["QuestionChoiceResponse"][];
+            /** Free Text */
+            free_text: boolean;
         };
         /**
          * QueuedMessageResponse

@@ -148,6 +148,7 @@ def test_question_state_folds_asked_and_answered() -> None:
                             {"label": "Blue", "description": "Use blue"},
                             {"label": "Green", "description": "Use green"},
                         ],
+                        "free_text": True,
                     },
                 ],
             },
