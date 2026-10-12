@@ -18,6 +18,8 @@ from tests.plugin_tests.support_values import JsonValue, text_of
 if TYPE_CHECKING:
     from domain.messaging import MessagePhase
 
+THINKING = "thinking"
+
 
 def _assistant_message_phases(
     stop_reason: str | None,
@@ -52,7 +54,7 @@ def test_claude_assistant_preserves_reasoning() -> None:
                 fixture.MESSAGE_FIELD: {
                     fixture.MODEL: fixture.CLAUDE_OPUS_FOUR_EIGHT,
                     fixture.CONTENT_FIELD: [
-                        {fixture.TYPE_FIELD: "thinking", "thinking": "Inspect the failure"},
+                        {fixture.TYPE_FIELD: THINKING, THINKING: "Inspect the failure"},
                         {fixture.TYPE_FIELD: fixture.TEXT_FIELD, fixture.TEXT_FIELD: "I found it"},
                     ],
                     "usage": {
@@ -79,6 +81,27 @@ def test_claude_assistant_preserves_reasoning() -> None:
     usage = payloads(translation, UsageReported)[0].payload
     _assert_assistant_reasoning_and_model(reasoning, model)
     _assert_assistant_context_and_usage(context, model, usage)
+
+
+def test_claude_thinking_display_keeps_reasoning() -> None:
+    """Verify a Claude Code 2.1.296 thinking record with thinkingDisplay keeps its reasoning."""
+    translation = ClaudeCanonicalTranslator().translate(
+        raw_event(
+            {
+                fixture.TYPE_FIELD: fixture.ASSISTANT,
+                fixture.UUID_FIELD: fixture.ASSISTANT_ONE,
+                "thinkingDisplay": "updates",
+                fixture.MESSAGE_FIELD: {
+                    fixture.CONTENT_FIELD: [{fixture.TYPE_FIELD: THINKING, THINKING: "Check the layout"}],
+                },
+            },
+            harness=CLAUDE_CODE_HARNESS,
+            source_type=fixture.TRANSCRIPT_SOURCE,
+            raw_event_id="assistant-thinking-display",
+        ),
+    )
+
+    assert text_of(payloads(translation, ReasoningCreated)[0].payload.content) == "Check the layout"
 
 
 def _assert_assistant_reasoning_and_model(

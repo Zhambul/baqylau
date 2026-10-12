@@ -147,6 +147,8 @@ class AssistantRecord(BaseModel):
     truncated_after_output: Annotated[bool | None, Field(alias="truncatedAfterOutput")] = None
     # Claude Code 2.1.295 names the model that the reply asked for (corpus: "claude-haiku-5-5").
     requested_model: Annotated[str | None, Field(alias="requestedModel")] = None
+    # Claude Code 2.1.296 names how a thinking block is shown (corpus: "updates").
+    thinking_display: Annotated[str | None, Field(alias="thinkingDisplay")] = None
 
 
 class SystemRecord(BaseModel):

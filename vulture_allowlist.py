@@ -332,6 +332,7 @@ truncated_after_output  # AssistantRecord Claude 2.1.287 field
 run_id  # Origin / QueuedCommandAttachment Claude 2.1.294 field
 repeats_compact_summary  # UserRecord Claude 2.1.294 field
 requested_model  # AssistantRecord Claude 2.1.295 field
+thinking_display  # AssistantRecord Claude 2.1.296 field
 is_aborted_mid_stream  # AssistantRecord
 is_api_error_message  # AssistantRecord
 api_error_status  # AssistantRecord
