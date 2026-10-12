@@ -40,11 +40,35 @@ class _SessionModelFeed(_SessionModelState):
     """Provide feed and running-work queries."""
 
     def feed(self) -> Iterator[EntryRecord | ShellFold]:
-        for key in self._order:
-            if key.startswith(_ENTRY_PREFIX):
-                yield self._entries[key[len(_ENTRY_PREFIX) :]]
+        return map(self._feed_record, self._order)
+
+    def newest_feed(self) -> Iterator[EntryRecord | ShellFold]:
+        """Walk the feed from its newest item to its oldest.
+
+        Returns:
+            The feed items, newest first.
+
+        """
+        return map(self._feed_record, reversed(self._order))
+
+    def keep_newest(self, count: int) -> None:
+        """Forget every feed item but the newest `count`.
+
+        A pane keeps only the items that its last paint showed, so its memory
+        and its paint do not grow with the session. A late part of a forgotten
+        shell is not kept, and a forgotten entry that a frame sends again goes
+        back to its old place, where the next paint forgets it again.
+        """
+        forgotten = len(self._order) - count
+        if forgotten <= 0:
+            return
+        for key in self._order[:forgotten]:
+            self._places.pop(key)
+            if key.startswith(_SHELL_PREFIX):
+                self._shells.pop(key[len(_SHELL_PREFIX) :])
             else:
-                yield self._shells[key[len(_SHELL_PREFIX) :]]
+                self._entries.pop(key[len(_ENTRY_PREFIX) :])
+        self._order = self._order[forgotten:]
 
     def elapsed_since_frame(self) -> float:
         return max(0, time.monotonic() - self._framed_at)
@@ -54,12 +78,17 @@ class _SessionModelFeed(_SessionModelState):
 
     def pending_attention(self) -> EntryRecord | None:
         answered = _answered_attention_ids(self._entries)
-        for entry in reversed(list(self.feed())):
+        for entry in self.newest_feed():
             if isinstance(entry, ShellFold) or entry.type not in ATTENTION_TWINS:
                 continue
             if entry.body.attention_id not in answered:
                 return entry
         return None
+
+    def _feed_record(self, key: str) -> EntryRecord | ShellFold:
+        if key.startswith(_ENTRY_PREFIX):
+            return self._entries[key[len(_ENTRY_PREFIX) :]]
+        return self._shells[key[len(_SHELL_PREFIX) :]]
 
 
 def _answered_attention_ids(entries: dict[str, EntryRecord]) -> set[str | None]:

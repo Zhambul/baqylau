@@ -76,8 +76,10 @@ def _harness_flag(name: str, option_content: str) -> _HarnessFlag:
     if not separator or not harness_name or not harness_value:
         message = f"{name} needs HARNESS=VALUE"
         raise UsageError(message)
-    resolved_value = Path(harness_value).expanduser().resolve()
+    # Keep a link as a link. An updater points the link at its new version and
+    # removes the old one, so a target read at startup stops working.
+    absolute_value = Path(harness_value).expanduser().absolute()
     return _HarnessFlag(
         name,
-        f"{harness_name}={resolved_value}",
+        f"{harness_name}={absolute_value}",
     )

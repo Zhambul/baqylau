@@ -57,6 +57,7 @@
     "json-schema-merge-allof": "0.8.1",
     "json-schema-typed": "8.0.2",
     "openapi-fetch": "0.17.0",
+    "p-limit": "7.3.3",
     "refractor": "5.0.0"
   }
 }

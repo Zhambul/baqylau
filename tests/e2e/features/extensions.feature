@@ -35,6 +35,24 @@ Feature: extension packages see a real harness session
       | claude_code | haiku                           |
       | opencode2   | opencode-go/deepseek-v4.1-flash |
 
+  Scenario Outline: a burst of adapters reads never fails as an internal error
+    # Harness limit: claude_code only. The burst tests the host, so one harness that makes a real call is enough.
+    Given session configuration "primary" uses <harness> with model <model> and low effort
+    And extension package "adapters" is enabled
+    When I launch session "primary" as turn "read logs" with prompt
+      """
+      Run the exact shell command `adapters logs -e preprod -s 5m -n 3` once. Do not
+      change the command and do not run another command. Then reply only with LOGS_READ.
+      """
+    Then turn "read logs" completes
+    And the adapters "logs" call in session "primary" finishes
+    And 48 parallel reads of the adapters calls of session "primary" are ready or unavailable
+    And the adapters "logs" call in session "primary" finishes
+
+    Examples:
+      | harness     | model |
+      | claude_code | haiku |
+
   Scenario Outline: the git package reads the repository's adapters calls through the adapters service
     Given session configuration "primary" uses <harness> with model <model> and low effort in the isolated repository workspace
     And extension package "adapters" is enabled

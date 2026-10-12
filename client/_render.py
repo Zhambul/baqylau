@@ -7,5 +7,6 @@ from _render_compose import (
     mirror_rows as mirror_rows,
     mirror_screen as mirror_screen,
 )
+from _render_feed import MirrorRows as MirrorRows
 from _render_scoreboard import scoreboard as scoreboard
 from _render_styles import COPY_SCHEME as COPY_SCHEME, VIEW_SCHEME as VIEW_SCHEME

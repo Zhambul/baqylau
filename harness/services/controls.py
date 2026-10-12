@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import time
+from typing import TYPE_CHECKING
 
 from domain import (
     entries as domain_entries,
@@ -20,6 +21,9 @@ from harness.services import (
     open_session_work,
     terminal_gate,
 )
+
+if TYPE_CHECKING:
+    from domain.ids import WindowId
 
 ControlServiceDependencies = control_dependencies.ControlServiceDependencies
 ControlAudit = control_types.ControlAudit
@@ -79,6 +83,10 @@ class _HarnessControlState:
 
 class _HarnessControlExecution(_HarnessControlState):
     """Read and execute one harness control."""
+
+    def _window_is_closed(self, window_id: WindowId) -> bool:
+        open_windows = {str(window.window_id) for window in self._terminal.windows()}
+        return str(window_id) not in open_windows
 
     def _pending_attention_entry(self, request: control_models.ControlRequest) -> domain_entries.SessionEntry | None:
         attention_id = getattr(request, "attention_id", None)
@@ -168,7 +176,32 @@ class _HarnessControlExecution(_HarnessControlState):
             )
         if isinstance(request, control_models.RenameSession):
             return self._session_renamer.rename(plugin.controller, request, context)
-        return plugin.controller.execute(request, context)
+        return self._harness_outcome(plugin.controller, request, context)
+
+    def _harness_outcome(
+        self,
+        controller: harness_contract.HarnessController,
+        request: control_models.ControlRequest,
+        context: control_models.ControlContext,
+    ) -> control_models.ControlOutcome:
+        stored_window = context.session.terminal_window_id
+        if (
+            isinstance(request, control_models.CloseSession)
+            and stored_window
+            and context.terminal_window_id is None
+            and self._window_is_closed(stored_window)
+        ):
+            # The session's window closed before this request. A snapshot uses the
+            # last terminal read, so it can show the window as live a little longer.
+            # The close asks for what is already true. A session that never had a
+            # window, or whose window belongs to another session, still goes to its
+            # harness, which refuses it.
+            return control_models.ControlResult(
+                request.request_id,
+                control_models.ControlAcknowledgement.ACKNOWLEDGED,
+                "terminal window is already closed",
+            )
+        return controller.execute(request, context)
 
     def _apply_generated_title(
         self,

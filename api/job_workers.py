@@ -40,6 +40,7 @@ def job_executor(instances: Instances, manager: ExtensionManager) -> Iterator[Jo
         registry=resolve(instances, provider_extension_registry.extension_registry),
         stores=stores,
         manager=manager,
+        failures=resolve(instances, provider_extension_jobs.extension_job_failures),
         policy=resolve(instances, provider_extension_policy.extension_control_policy),
         scopes=resolve(instances, provider_extension_sources.extension_scope_registry),
     ))

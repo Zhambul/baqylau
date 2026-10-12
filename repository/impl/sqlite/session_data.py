@@ -285,6 +285,9 @@ class _SqliteSessionDataEntryRead(_SqliteSessionDataState):
         """Read what changed after the reader's canonical cursor and after its last entry row.
 
         Without an entry cursor, the reader has every entry row at or before its canonical cursor.
+        A read that stopped at its content budget ends at its last complete commit. Its
+        session and actor rows can be newer than that commit. The next read sends them
+        again, and a reader replaces them.
 
         Returns:
             Delta.
@@ -305,9 +308,10 @@ class _SqliteSessionDataEntryRead(_SqliteSessionDataState):
             session=None if session_row is None else aggregate_mapper.session_facts(session_row),
             actors=tuple(aggregate_mapper.actor_facts(row) for row in actor_rows),
             entries=tuple(aggregate_mapper.entry(row) for row in entry_read.rows),
-            cursor=_delta_cursor(cursor, session_row, actor_rows, entry_read.rows),
+            cursor=_delta_cursor(cursor, session_row, actor_rows, entry_read),
             view_revision=view_revision,
             entry_cursor=entry_read.entry_cursor,
+            complete=entry_read.page_end is None,
         )
 
     def changed_after(self, cursor: int) -> contracts.AggregateDelta:
@@ -392,10 +396,13 @@ def _delta_cursor(
     cursor: int,
     session_row: sqlite3.Row | None,
     actor_rows: list[sqlite3.Row],
-    entry_rows: list[sqlite3.Row],
+    entry_read: entry_rows_read.EntryRowRead,
 ) -> int:
+    # A read that stopped at its content budget ends at its last complete commit.
+    if entry_read.page_end is not None:
+        return max(cursor, entry_read.page_end)
     revisions = [int(row[REVISION_COLUMN]) for row in actor_rows]
     if session_row is not None:
         revisions.append(int(session_row[REVISION_COLUMN]))
-    revisions.extend(int(row["commit_cursor"]) for row in entry_rows)
+    revisions.extend(int(row["commit_cursor"]) for row in entry_read.rows)
     return max(revisions) if revisions else cursor

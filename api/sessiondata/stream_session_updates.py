@@ -29,7 +29,12 @@ async def wait_frame(
         An application frame or heartbeat, or None when neither is needed.
 
     """
-    timeout = sse.STREAM_HEARTBEAT_SECONDS if service is None else APPLICATION_POLL_SECONDS
+    if changed.is_set():
+        # A present notice wins: the data loop reads it, and it sends a due heartbeat too.
+        return None
+    timeout = sse.heartbeat_wait(state.heartbeat_at, asyncio.get_running_loop().time())
+    if service is not None:
+        timeout = min(timeout, APPLICATION_POLL_SECONDS)
     try:
         await asyncio.wait_for(changed.wait(), timeout)
     except TimeoutError:

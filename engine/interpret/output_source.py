@@ -29,7 +29,11 @@ from repository.mapper.documents import encode_document
 if TYPE_CHECKING:
     from repository.contract.shell_output import ShellOutputRepository
 
-READ_SIZE = 65_536
+# Each chunk is one raw event, and each raw event has a fixed processing cost.
+# Thus a large output must be few chunks. The payload keeps the chunk as base64,
+# which is 4/3 of the chunk. Half of the worker content limit (1 MiB) keeps it
+# below that limit.
+READ_SIZE = 524_288
 MAXIMUM_LIFETIME_SECONDS = 7_200
 FINISHED_POSITION = "finished"
 

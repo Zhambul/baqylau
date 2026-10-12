@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -32,6 +32,8 @@ class ShellFold:
     exit_code: int | None = None
     backgrounded: bool = False
     finished_at: float | None = None
+    # The entries that this fold holds, so that an overlapping frame folds each one once.
+    entry_ids: set[str] = field(default_factory=set)
 
     @classmethod
     def from_entry(cls, entry: EntryRecord) -> ShellFold:
@@ -47,9 +49,13 @@ class ShellFold:
             command=_text(body.command),
             execution=body.execution or "foreground",
             started_at=entry.occurred_at,
+            entry_ids={entry.entry_id},
         )
 
     def fold(self, entry: EntryRecord) -> None:
+        if entry.entry_id in self.entry_ids:
+            return
+        self.entry_ids.add(entry.entry_id)
         body = entry.body
         if entry.type == "shell_output":
             self._fold_output(body)

@@ -93,12 +93,22 @@ async def session_frame_loop(
                 yield frame  # noqa: ASYNC119 -- The caller closes this stream generator.
             if state.reset:
                 return
-            while not changed.is_set():
+            while _waits(changed, state):
                 idle_frame = await application_updates.wait_frame(
                     changed, session_application_service, session_id, state,
                 )
                 if idle_frame is not None:
                     yield idle_frame  # noqa: ASYNC119 -- The caller closes this stream generator.
+
+
+def _waits(changed: asyncio.Event, state: session_models.SessionFrameState) -> bool:
+    """Wait for a change only when the last read sent everything that it found.
+
+    Returns:
+        True while there is no change and nothing more to read.
+
+    """
+    return not changed.is_set() and not state.more_to_read
 
 
 async def session_iteration(
@@ -115,6 +125,7 @@ async def session_iteration(
     """
     delta = await sse.off_loop(session_data_repository.delta, session_id, state.cursor, state.entry_cursor)
     state.entry_cursor = delta.entry_cursor
+    state.more_to_read = not delta.complete
     if state.view_revision is None:
         state.view_revision = delta.view_revision
     elif delta.view_revision != state.view_revision:

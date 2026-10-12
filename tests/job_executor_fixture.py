@@ -7,10 +7,11 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
 from typing import TYPE_CHECKING, cast
 
+from audit.failures import CoalescingFailureRecorder
 from extensions.control_policy import ExtensionControlPolicy
 from extensions.job_executor import JobExecutor
 from extensions.job_executor_services import JobExecutorServices
-from tests import command_job_fixture as jobs_fixture
+from tests import command_job_fixture as jobs_fixture, foundation_test_events
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -35,6 +36,7 @@ def an_executor(
         registry=cast("registry_contract.ExtensionRegistry", registry),
         stores=observer_stores,
         manager=cast("runtime_identity.ManagerStateReads", manager),
+        failures=CoalescingFailureRecorder(foundation_test_events.RecordingAudit(), "extension job"),
         policy=ExtensionControlPolicy() if policy is None else policy,
     )
     return JobExecutor(services=services, pool=ThreadPoolExecutor(max_workers=1))

@@ -320,6 +320,18 @@ image_paste_ids  # UserRecord
 queue_skip_attachments  # UserRecord task-notification delivery flag
 turn_origin  # UserRecord Claude 2.1 field
 queue_priority  # UserRecord Claude 2.1 goal check-in field
+turn_position  # UserRecord Claude 2.1.284 field
+turn_index  # TurnPosition Claude 2.1.284 field
+producer  # Origin Claude 2.1.284 notification field
+rendered_role  # AttachmentRecord Claude 2.1.285 field
+fallback_credit  # MessageUsage Claude 2.1.285 field
+delivery_id  # QueuedCommandAttachment / QueueOperationRecord Claude 2.1.287 field
+command_uuid  # QueueOperationRecord Claude 2.1.287 field
+thinking_duration_ms  # AssistantRecord Claude 2.1.287 field
+truncated_after_output  # AssistantRecord Claude 2.1.287 field
+run_id  # Origin / QueuedCommandAttachment Claude 2.1.294 field
+repeats_compact_summary  # UserRecord Claude 2.1.294 field
+requested_model  # AssistantRecord Claude 2.1.295 field
 is_aborted_mid_stream  # AssistantRecord
 is_api_error_message  # AssistantRecord
 api_error_status  # AssistantRecord
@@ -566,12 +578,14 @@ FABLE  # harness/impl/claude_code/model.py ClaudeCodeModel
 OPUS  # harness/impl/claude_code/model.py ClaudeCodeModel
 SONNET  # harness/impl/claude_code/model.py ClaudeCodeModel
 HAIKU  # harness/impl/claude_code/model.py ClaudeCodeModel
-CLAUDE_FABLE_5  # harness/impl/claude_code/model.py ClaudeCodeModel
-CLAUDE_OPUS_5  # harness/impl/claude_code/model.py ClaudeCodeModel
-CLAUDE_OPUS_4_8  # harness/impl/claude_code/model.py ClaudeCodeModel
-CLAUDE_SONNET_5  # harness/impl/claude_code/model.py ClaudeCodeModel
-CLAUDE_HAIKU_4_5  # harness/impl/claude_code/model.py ClaudeCodeModel
-CLAUDE_HAIKU_4_5_20251001  # harness/impl/claude_code/model.py ClaudeCodeModel
+CLAUDE_FABLE_FIVE  # harness/impl/claude_code/model.py ClaudeCodeModel
+CLAUDE_FABLE_FIVE_ONE  # harness/impl/claude_code/model.py ClaudeCodeModel
+CLAUDE_OPUS_FIVE  # harness/impl/claude_code/model.py ClaudeCodeModel
+CLAUDE_OPUS_FOUR_EIGHT  # harness/impl/claude_code/model.py ClaudeCodeModel
+CLAUDE_SONNET_FIVE  # harness/impl/claude_code/model.py ClaudeCodeModel
+CLAUDE_HAIKU_FIVE_FIVE  # harness/impl/claude_code/model.py ClaudeCodeModel
+CLAUDE_HAIKU_FOUR_FIVE  # harness/impl/claude_code/model.py ClaudeCodeModel
+CLAUDE_HAIKU_FOUR_FIVE_OCTOBER  # harness/impl/claude_code/model.py ClaudeCodeModel
 LOW  # harness/impl/codex/model.py CodexEffort
 MEDIUM  # harness/impl/codex/model.py CodexEffort
 HIGH  # harness/impl/codex/model.py CodexEffort

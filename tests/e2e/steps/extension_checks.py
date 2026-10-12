@@ -9,15 +9,18 @@ from typing import TYPE_CHECKING
 from pytest_bdd import parsers, then
 
 from sdk.client import wait_for
-from tests.e2e.testkit import extension_queries as reads
+from tests.e2e.testkit import extension_bursts, extension_queries as reads
 from tests.e2e.testkit.extension_sources import PACKAGES
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from tests.e2e.testkit.expected_findings import ExpectedAuditErrors
     from tests.e2e.testkit.extension_context import ExtensionContext
 
 FINISHED_OUTCOMES = frozenset(("succeeded", "failed"))
+READY_STATUS = 200
+UNAVAILABLE_STATUS = 503
 
 
 def _call_finished(context: ExtensionContext, scope: Mapping[str, str], group: str) -> bool | None:
@@ -41,6 +44,31 @@ def adapters_call_finishes(extension_context: ExtensionContext, group: str, sess
     """Wait for the adapters projector to record one finished call of the group from the real CLI."""
     finished = partial(_call_finished, extension_context, extension_context.session_scope(session_name), group)
     wait_for(f"a finished adapters {group!r} call", finished, timeout=extension_context.wait_policy.feed)
+
+
+@then(parsers.parse(
+    '{count:d} parallel reads of the adapters calls of session "{session_name}" are ready or unavailable',
+))
+def adapters_reads_in_parallel(
+    extension_context: ExtensionContext,
+    expected_audit_errors: ExpectedAuditErrors,
+    count: int,
+    session_name: str,
+) -> None:
+    """Read the adapters calls from many feed rows at the same moment.
+
+    The worker's live lane holds 16 calls. The host answers a read that the
+    worker refuses with 503, never with an internal error, and records the
+    refusals of one burst as one audit row, which this scenario expects.
+    """
+    scope = extension_context.session_scope(session_name)
+    query_id = f"{reads.ADAPTERS}.invocations"
+    reads_burst = extension_bursts.burst(extension_context, reads.ADAPTERS, query_id, scope, count)
+    statuses = reads_burst.statuses
+    assert set(statuses) <= {READY_STATUS, UNAVAILABLE_STATUS}, sorted(statuses)
+    assert READY_STATUS in statuses, sorted(statuses)
+    assert len(reads_burst.audit_rows) == int(UNAVAILABLE_STATUS in statuses), reads_burst
+    expected_audit_errors.expect(reads_burst.audit_rows)
 
 
 @then(parsers.parse('the adapters extension answers no calls for session "{session_name}"'))

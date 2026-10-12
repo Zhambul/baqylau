@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from baqylau_extension_api.models.scopes import ExtensionScope
 from baqylau_extension_api.runtime.call_grants import HostCallLedger
 
+from audit.failures import CoalescingFailureRecorder, FailureContext
 from extensions.registry_package import RegistryPackage
 
 
@@ -28,3 +29,15 @@ class QueryAuthority:
             return call()
         with self.ledger.root(package.environment, scope, self.seconds):
             return call()
+
+
+@dataclass(frozen=True)
+class QueryHost:
+    """Run each query under its call grant, and record a worker that refuses it."""
+
+    authority: QueryAuthority
+    failures: CoalescingFailureRecorder
+
+    def refused(self, extension_id: str, query_id: str) -> None:
+        """Record a query that the worker refused; call it in the `except` block of the refusal."""
+        self.failures.record(query_id, FailureContext(source=extension_id))

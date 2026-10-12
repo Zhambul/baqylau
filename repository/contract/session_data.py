@@ -66,6 +66,9 @@ class SessionDelta:
     # after the core entries of the same fact, with that fact's canonical cursor, so
     # the canonical cursor alone cannot find them; their row cursors are new.
     entry_cursor: int = 0
+    # False when the read stopped at its content budget. Then the reader reads again
+    # at once from this delta's cursor, without a wait for a new change.
+    complete: bool = True
 
     @property
     def empty(self) -> bool:

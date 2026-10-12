@@ -22,10 +22,10 @@ from harness.registry import HarnessRegistry, HarnessRegistryError
 if TYPE_CHECKING:
     from domain.ids import HarnessName
     from harness.contract import HarnessPlugin
+    from harness.hooks.recorder import RawEventWriter
     from harness.models.hooks import (
         HarnessHookRequest,
     )
-    from repository.contract.facts import RawEventRepository
 
 
 class UnknownHookHarnessError(LookupError):
@@ -56,13 +56,16 @@ def _with_harness_process(
 class HookGatewayService:
     """Represent hook gateway service."""
 
-    def __init__(self, harness_registry: HarnessRegistry, raw_event_repository: RawEventRepository) -> None:
-        """Initialize the object."""
+    def __init__(self, harness_registry: HarnessRegistry, raw_event_writer: RawEventWriter) -> None:
+        """Use the harness registry and the writer of hook raw events."""
         self.registry = harness_registry
-        self.raw_events = raw_event_repository
+        self.raw_events = raw_event_writer
 
     def record(self, harness: HarnessName, harness_hook_request: HarnessHookRequest) -> bytes:
         """One delivery in, its synchronous reply out (b"" when there is none).
+
+        The daemon's writer writes the raw events after the reply, in arrival
+        order, so the harness does not wait for the database.
 
         Returns:
             Byte data.

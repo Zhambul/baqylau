@@ -29,18 +29,34 @@ EVENT_STREAM = "text/event-stream"
 NO_STORE = MappingProxyType({"Cache-Control": "no-store"})
 
 
+def heartbeat_wait(heartbeat_at: float, now: float) -> float:
+    """Return the seconds until the next heartbeat is due.
+
+    A stream waits for a change notice at most this long. A notice that brings
+    no frame does not move the heartbeat, so a quiet stream beats on time while
+    other sessions change.
+
+    Returns:
+        The seconds left, or zero when the heartbeat is due.
+
+    """
+    return max(heartbeat_at + STREAM_HEARTBEAT_SECONDS - now, 0)
+
+
 def sse_frame(event: str, payload: BaseModel, identity: int | None = None) -> str:
     """Return the SSE frame.
 
     One frame. `identity` becomes the SSE `id:`, which the browser sends back
         as Last-Event-ID — so only a stream whose frames ARE a cursor sets it.
+        The body uses the field aliases, as a route response does, so one model
+        has one shape on both.
 
     Returns:
         SSE frame.
 
     """
     prefix = "" if identity is None else f"id: {int(identity)}\n"
-    return f"{prefix}event: {event}\ndata: {payload.model_dump_json()}\n\n"
+    return f"{prefix}event: {event}\ndata: {payload.model_dump_json(by_alias=True)}\n\n"
 
 
 async def off_loop[**StoreReadParams, Frame](

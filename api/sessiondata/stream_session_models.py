@@ -45,6 +45,8 @@ class SessionFrameState:
     view_revision: int | None = None
     reset: bool = False
     entry_cursor: int | None = None
+    # The last read stopped at its content budget, so the stream reads again at once.
+    more_to_read: bool = False
 
 
 @dataclass(frozen=True)

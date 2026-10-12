@@ -52,3 +52,19 @@ async def _read_without_application() -> None:
 def test_application_can_be_excluded() -> None:
     """Do not read application state when the client excludes it."""
     asyncio.run(_read_without_application())
+
+
+async def _due_heartbeat() -> str | None:
+    now = asyncio.get_running_loop().time()
+    state = stream_session_models.SessionFrameState(0, None, now - sse.STREAM_HEARTBEAT_SECONDS, now)
+    waiting = stream_session_updates.wait_frame(asyncio.Event(), None, SESSION, state)
+    return await asyncio.wait_for(waiting, 1)
+
+
+def test_due_heartbeat_is_sent_at_once() -> None:
+    """A change notice that brought no frame does not move the next heartbeat.
+
+    Each notice started the full wait again, so a quiet session's stream sent
+    its first beat after up to twice the heartbeat time.
+    """
+    assert asyncio.run(_due_heartbeat()) == sse.BEAT

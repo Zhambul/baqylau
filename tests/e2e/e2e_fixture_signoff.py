@@ -115,12 +115,13 @@ def skill_work_driver(
 @fixture_dependencies.application.pytest.fixture(autouse=True)
 def scenario_signoff(
     application_process: fixture_dependencies.drivers.process_testkit.ApplicationProcess,
-    client: fixture_dependencies.harness.BaqylauClient,
+    pipeline_check: fixture_dependencies.drivers.expected_findings.PipelineCheck,
     sessions: fixture_dependencies.drivers.refs.Sessions,
     wait_policy: fixture_dependencies.drivers.WaitPolicy,
     workspace: str,
 ) -> Iterator[None]:
     """Process scenario signoff."""
+    client = pipeline_check.client
     for name in BACKGROUND_OUTPUT_FIXTURES:
         fixture_dependencies.application.Path(workspace, name).unlink(missing_ok=True)
     start = client.diagnostics.checkpoint()
@@ -129,6 +130,4 @@ def scenario_signoff(
         yield
         e2e_fixture_catalogs.finish_scenario_sessions(client, sessions, wait_policy)
         end = client.diagnostics.wait_until_drained(wait_policy.pipeline)
-        fixture_dependencies.drivers.process_testkit.assert_clean_diagnostics(
-            "the scenario has pipeline findings", client.diagnostics.report(start, end),
-        )
+        pipeline_check.assert_clean("the scenario has pipeline findings", start, end)

@@ -35,9 +35,10 @@ def test_static_menu_vocabulary_lives_on_harness() -> None:
     """Verify static menu vocabulary lives on the harness descriptor."""
     assert [model.model_name for model in claude_plugin.harness_info.models] == [
         fixture.FABLE,
-        "opus",
         "sonnet",
         "haiku",
+        "claude-opus-5-5",
+        "claude-sonnet-5-5",
         "claude-opus-4-6",
     ]
     assert all(model.model_name.startswith("gpt-") for model in codex_plugin.harness_info.models)

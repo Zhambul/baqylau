@@ -50,7 +50,7 @@ def session_data_list(
     cursor = read_model.high_water_cursor()
     repository_statuses = _RepositoryStatusCache(repositories)
     visible = read_model.running()
-    live = terminal.live_sessions(session_record.session.session_id for session_record in visible)
+    live = terminal.shown_sessions(session_record.session.session_id for session_record in visible)
     return SessionDataListResponse(
         cursor=cursor,
         sessions=tuple(

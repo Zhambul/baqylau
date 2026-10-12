@@ -1,0 +1,2 @@
+{"type":"queue-operation","operation":"enqueue","timestamp":"2026-09-29T12:45:34.596Z","sessionId":"session-one","content":"Check the result"}
+{"type":"user","uuid":"queued-prompt","promptId":"prompt-two","timestamp":"2026-09-29T12:45:37.768Z","message":{"role":"user","content":"Check the result"},"origin":{"kind":"human"},"promptSource":"queued","turnOrigin":"human","turnPosition":{"promptIndex":3,"turnIndex":3},"userType":"external","entrypoint":"cli","version":"2.1.284"}

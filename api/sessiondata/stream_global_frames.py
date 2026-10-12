@@ -74,8 +74,9 @@ async def global_frame_loop(
             if state.reset:
                 return
             while not changed.is_set():
+                beat_due = sse.heartbeat_wait(state.heartbeat_at, asyncio.get_running_loop().time())
                 try:
-                    await asyncio.wait_for(changed.wait(), sse.STREAM_HEARTBEAT_SECONDS)
+                    await asyncio.wait_for(changed.wait(), beat_due)
                 except TimeoutError:
                     state.heartbeat_at = asyncio.get_running_loop().time()
                     yield sse.BEAT  # noqa: ASYNC119 -- The caller closes this stream generator.

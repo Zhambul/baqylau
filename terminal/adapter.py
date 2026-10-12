@@ -68,25 +68,58 @@ PANE_CLIENT = pane_client.PANE_CLIENT
 
 
 class _TerminalAdapterState:
-    """Store services and shared terminal lookup helpers."""
+    """Store services and shared terminal lookup helpers, and answer display reads.
+
+    A display read uses the last terminal read and asks the terminal nothing,
+    so it does not wait on a busy terminal. The engine reads the terminal again
+    on each source pass, and an action on a window reads it again.
+    """
 
     def __init__(self, terminal_plugin: TerminalPlugin, session_finder: SessionFinder) -> None:
         """Initialize the object."""
         self._plugin = terminal_plugin
         self._sessions = session_finder
 
-    def _session_is_live(
+    def shown_window(self, session_id: SessionId) -> WindowId | None:
+        """Return the session's window as the last terminal read saw it.
+
+        Returns:
+            The window, or None when the last read did not show it.
+
+        """
+        return self._live_window(session_id, self._plugin.metadata.last_windows())
+
+    def shown_sessions(self, session_ids: Iterable[SessionId]) -> frozenset[SessionId]:
+        """Return the sessions whose window the last terminal read showed.
+
+        Returns:
+            The sessions on screen.
+
+        """
+        return self._sessions_on_screen(session_ids, self._plugin.metadata.last_windows())
+
+    def _sessions_on_screen(
+        self,
+        session_ids: Iterable[SessionId],
+        windows: tuple[terminal_values.WindowInfo, ...],
+    ) -> frozenset[SessionId]:
+        return frozenset(
+            session_id for session_id in session_ids if self._live_window(session_id, windows) is not None
+        )
+
+    def _live_window(
         self,
         session_id: SessionId,
-        on_screen: dict[terminal_values.WindowId, str | None],
-    ) -> bool:
+        windows: tuple[terminal_values.WindowInfo, ...],
+    ) -> WindowId | None:
         session = self._sessions.find(session_id)
         window_id = None if session is None else session.terminal_window_id
         if not window_id:
-            return False
+            return None
         native_window_id = terminal_values.WindowId(str(window_id))
-        owner = on_screen.get(native_window_id)
-        return native_window_id in on_screen and owner == str(session_id)
+        shown = next((window for window in windows if window.window_id == native_window_id), None)
+        owner = None if shown is None else shown.tags.get(terminal_values.SESSION_WINDOW_TAG)
+        return window_id if owner == str(session_id) else None
 
     def _tagged(self, tag: str, session_id: SessionId) -> terminal_values.WindowInfo | None:
         for window in self._plugin.metadata.windows():
@@ -193,15 +226,7 @@ class _TerminalSessionWindows(_TerminalAdapterState, SessionTerminalState):
             Live sessions.
 
         """
-        on_screen = {
-            window.window_id: window.tags.get(terminal_values.SESSION_WINDOW_TAG)
-            for window in self._plugin.metadata.windows()
-        }
-        live = set()
-        for session_id in session_ids:
-            if self._session_is_live(session_id, on_screen):
-                live.add(session_id)
-        return frozenset(live)
+        return self._sessions_on_screen(session_ids, self._plugin.metadata.windows())
 
     def current_window(self) -> WindowId | None:
         """Return the current window.

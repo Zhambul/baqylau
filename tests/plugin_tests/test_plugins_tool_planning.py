@@ -198,3 +198,28 @@ def _assert_claude_turn_boundaries(
     assert payloads(stop, TurnFinished)[0].turn_id == TurnId(fixture.PROMPT_ONE_ID)
     # Nothing after the Stop belongs to the turn it closed.
     assert after.canonical_events[0].turn_id is None
+
+
+def test_plan_without_text_makes_no_fact() -> None:
+    """Make no plan fact from an `ExitPlanMode` call without plan text.
+
+    Claude Code 2.1.294 writes the call with no arguments in the transcript, and
+    only its PreToolUse hook carries the plan. The first plan fact is kept, so an
+    empty one would hide the plan.
+    """
+    translator = ClaudeCanonicalTranslator()
+    plan_call = {
+        fixture.HOOK_EVENT_NAME_FIELD: fixture.PRE_TOOL_USE_HOOK,
+        fixture.TOOL_USE_ID_FIELD: fixture.PLAN_ONE,
+        fixture.TOOL_NAME_FIELD: "ExitPlanMode",
+    }
+    empty = translator.translate(raw_event(
+        {**plan_call, fixture.TOOL_INPUT_FIELD: {}},
+        harness=CLAUDE_CODE_HARNESS, source_type=fixture.HOOK_SOURCE, raw_event_id="plan-without-text",
+    ))
+    with_text = translator.translate(raw_event(
+        {**plan_call, fixture.TOOL_INPUT_FIELD: {"plan": "# Plan: one step"}},
+        harness=CLAUDE_CODE_HARNESS, source_type=fixture.HOOK_SOURCE, raw_event_id="plan-with-text",
+    ))
+    assert payloads(empty, PlanProposed) == []
+    assert text_of(payloads(with_text, PlanProposed)[0].payload.plan) == "# Plan: one step"

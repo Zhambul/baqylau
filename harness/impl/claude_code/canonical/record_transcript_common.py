@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from harness.impl.claude_code.canonical.record_common import FOREIGN, OPEN_FOREIGN
 from harness.impl.claude_code.canonical.record_usage import MessageObject
+from harness.impl.claude_code.ids import ClaudeCodeRunId
 
 
 class TranscriptDocument(BaseModel):
@@ -85,3 +86,16 @@ class Origin(BaseModel):
     from_: str | None = Field(default=None, alias="from")
     # Claude Code 2.1.x names what queued a notification (corpus: "goal-checkin").
     source: str | None = None
+    # Claude Code 2.1.284 names what produced a notification (corpus: "session-task").
+    producer: str | None = None
+    # Claude Code 2.1.294 names the run that produced a notification
+    # (corpus: "0muz8r4jb-d07abf90"). Nothing here reads it.
+    run_id: Annotated[ClaudeCodeRunId | None, Field(alias="runId")] = None
+
+
+class TurnPosition(BaseModel):
+    """Where a Claude Code 2.1.284 user record sits in its session."""
+
+    model_config = FOREIGN
+    prompt_index: Annotated[int, Field(alias="promptIndex")]
+    turn_index: Annotated[int, Field(alias="turnIndex")]

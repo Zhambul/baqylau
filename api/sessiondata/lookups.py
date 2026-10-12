@@ -40,13 +40,17 @@ def found(
 def is_live(terminal_adapter: TerminalAdapter, session_data: SessionData) -> bool:
     """Return true when the running session owns a terminal window.
 
+    It uses the last terminal read, so a snapshot does not wait on a busy
+    terminal. A pane gave up on a snapshot that waited, and its retries added
+    more load.
+
     Returns:
         True when the session is live.
 
     """
     return (
         session_data.session.state == LifecycleState.RUNNING
-        and terminal_adapter.window_for_session(session_data.session.session_id) is not None
+        and terminal_adapter.shown_window(session_data.session.session_id) is not None
     )
 
 

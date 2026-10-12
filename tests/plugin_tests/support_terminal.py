@@ -48,6 +48,23 @@ class SubmitProbeDriver:
         divider = fixture.DIVIDER_CHARACTER * fixture.DIVIDER_WIDTH
         return f"{divider}\n\u276f\u00a0\n{divider}"
 
+    def insert_text(
+        self,
+        _window_id: domain_ids.WindowId,
+        text: str,
+        *,
+        paste: bool = True,
+    ) -> bool:
+        """Put one pasted piece into the input box without a submission.
+
+        Returns:
+            True to report successful insertion.
+
+        """
+        assert paste
+        self.box += text
+        return True
+
     def submit_text(
         self,
         window_id: domain_ids.WindowId,
@@ -62,7 +79,7 @@ class SubmitProbeDriver:
 
         """
         self._submit_requests.append((window_id, paste))
-        self.box = text
+        self.box += text
         return True
 
     def send_key(self, window_id: domain_ids.WindowId, *keys: str) -> bool:

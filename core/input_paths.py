@@ -25,11 +25,15 @@ class InputPaths:
     def matches(self, path: Path, *, is_directory: bool) -> bool:
         """Select exact inputs, directory children, and new parents of missing inputs.
 
+        A source file is selected by its exact path, so that the file shows
+        again after its harness deletes and makes it again, for example a
+        database write log.
+
         Returns:
-            True only when the path can affect a selected additional input or output.
+            True only when the path can affect a selected input or output.
 
         """
-        if path in self.output_files:
+        if path in self.output_files or path in self.core_files:
             return True
         return any(
             path == selected or path.is_relative_to(selected)

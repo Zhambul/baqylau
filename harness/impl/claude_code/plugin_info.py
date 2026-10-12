@@ -9,7 +9,14 @@ from harness.impl.claude_code.hooks.constants import CLI_PROCESS_NAME
 from harness.models.catalog import EffortOption, ModelOption, RewindModeOption
 from harness.models.info import HarnessInfo
 
-MODEL_IDS = (*model.CLAUDE_CODE_MODELS[:4], model.ClaudeCodeModel.CLAUDE_OPUS_FOUR_SIX)
+MODEL_IDS = (
+    model.ClaudeCodeModel.FABLE,
+    model.ClaudeCodeModel.SONNET,
+    model.ClaudeCodeModel.HAIKU,
+    model.ClaudeCodeModel.CLAUDE_OPUS_FIVE_FIVE,
+    model.ClaudeCodeModel.CLAUDE_SONNET_FIVE_FIVE,
+    model.ClaudeCodeModel.CLAUDE_OPUS_FOUR_SIX,
+)
 MODEL_ALIASES = tuple(model_id.value for model_id in MODEL_IDS)
 EFFORT_VALUES = tuple(model.ClaudeCodeEffort)
 DEFAULT_MODEL_ID = MODEL_IDS[0]

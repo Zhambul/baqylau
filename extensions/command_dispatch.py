@@ -13,13 +13,16 @@ from domain.extension_jobs import JobState
 from domain.ids import ExtensionJobId
 from extensions import command_execution, command_packages, job_states
 from extensions.control_policy import ExtensionControlPolicy, require_extension_write
-from extensions.registry_package import RegistryPackage
+from extensions.registry_package import RegistryPackage, active_owners
 from repository.contract.extension_jobs import CommandJobRequest, ExtensionJob, ExtensionJobRepository
 
 READ_ONLY_CODE = "host.read_only"
 READ_ONLY_MESSAGE = "The host is read-only, so the write did not run."
 STALE_CODE = "host.stale_request"
 STALE_MESSAGE = "The runtime or settings changed after acceptance, so the command did not run."
+REMOVED_CODE = "host.command_removed"
+REMOVED_MESSAGE = "The active package no longer declares commands, so the job did not run."
+REMOVED = documents.Diagnostic(code=REMOVED_CODE, message=REMOVED_MESSAGE)
 
 
 @dataclass(frozen=True)
@@ -99,15 +102,22 @@ def execute_command_job(dispatch: CommandDispatch, accepted: ExtensionJob) -> Ex
     A write command that reaches the executor in read-only mode fails without a
     call, so an old accepted write cannot run after the policy changed. A
     command whose runtime or settings changed after acceptance also fails
-    without a call, so it cannot apply an obsolete selection.
+    without a call, so it cannot apply an obsolete selection. A job of a
+    package that is not active waits; an active package that no longer
+    declares commands cannot run it, so it fails.
 
     Returns:
-        The stored job after its final state, or the job when it is not accepted.
+        The stored job after its final state, or the job when it is not accepted or its package is not active.
 
     """
     if accepted.state != JobState.ACCEPTED:
         return accepted
-    package, capability = command_packages.command_package(dispatch.packages, accepted.owner)
+    try:
+        package, capability = command_packages.command_package(dispatch.packages, accepted.owner)
+    except command_packages.CommandNotFoundError:
+        if accepted.owner not in active_owners(dispatch.packages):
+            return accepted
+        return job_states.settle(dispatch.jobs, accepted, JobState.FAILED, diagnostic=REMOVED)
     request = CommandRequest.model_validate_json(accepted.request)
     refusal = _refusal(dispatch.policy, package, request)
     if refusal is not None:

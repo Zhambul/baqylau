@@ -145,6 +145,19 @@ class TerminalMetadata(Protocol):
         detection, and the pane width arithmetic.
         """
 
+    def last_windows(self) -> tuple[WindowInfo, ...]:
+        """Return the windows of the last `windows` read, without a new read.
+
+        A display read uses it, so that it does not wait on a busy terminal.
+        This default reads again, which is right for a terminal that keeps its
+        windows in memory.
+
+        Returns:
+            The windows that the last read found.
+
+        """
+        return self.windows()
+
     def tag_window(self, window_tag_request: WindowTagRequest) -> WindowTagResponse:
         """Return the tag window.
 

@@ -18,6 +18,7 @@ pytest_plugins = (
     "tests.e2e.e2e_fixture_files",
     "tests.e2e.e2e_fixture_controls",
     "tests.e2e.e2e_fixture_catalogs",
+    "tests.e2e.e2e_fixture_findings",
     "tests.e2e.e2e_fixture_signoff",
     "tests.e2e.e2e_fixture_lifecycle",
 )

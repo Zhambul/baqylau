@@ -37,6 +37,11 @@ _UPDATE_SQL = (
     "WHERE owner=? AND scope=? AND job_id=? AND revision=?"
 )
 _STATE_SQL = "SELECT * FROM extension_jobs WHERE state=? ORDER BY updated_at, job_id LIMIT ?"
+_OWNER_STATE_SQL = (
+    "SELECT * FROM extension_jobs WHERE state=? AND owner IN (SELECT value FROM json_each(?)) "
+    "ORDER BY updated_at, job_id LIMIT ?"
+)
+_OWNERS_ADAPTER: TypeAdapter[list[str]] = TypeAdapter(list[str])
 STALE_MESSAGE = "extension job changed since it was read"
 
 
@@ -80,15 +85,24 @@ class SqliteExtensionJobRepository:
             ).fetchone()
         return None if row is None else _job(row)
 
-    def jobs_in_state(self, job_state: JobState, limit: int) -> tuple[ExtensionJob, ...]:
+    def jobs_in_state(
+        self, job_state: JobState, limit: int, owners: frozenset[str] | None = None,
+    ) -> tuple[ExtensionJob, ...]:
         """Return the oldest jobs in one state, for recovery and scheduling.
+
+        With `owners`, only their jobs, so that no job of another owner holds them back.
 
         Returns:
             At most the limit, oldest update first.
 
         """
         with self.database.read() as connection_handle:
-            rows = connection_handle.execute(_STATE_SQL, (job_state, limit)).fetchall()
+            if owners is None:
+                rows = connection_handle.execute(_STATE_SQL, (job_state, limit)).fetchall()
+            else:
+                # Text, not bytes: SQLite reads a blob as binary JSON.
+                owner_list = _OWNERS_ADAPTER.dump_json(sorted(owners)).decode()
+                rows = connection_handle.execute(_OWNER_STATE_SQL, (job_state, owner_list, limit)).fetchall()
         return tuple(_job(row) for row in rows)
 
     def open_jobs(self, owner: str) -> int:

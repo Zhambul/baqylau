@@ -182,12 +182,20 @@ def isolated_claude_settings(source: fixture_dependencies.application.Path) -> d
     )
     settings["enabledPlugins"] = {}
     settings["extraKnownMarketplaces"] = {}
+    # The pseudo-terminal of the e2e reads no ANSI, so a faint prompt suggestion
+    # in the composer looks like typed text, and a send or a rename then waits
+    # for a draft that never comes. No scenario tests prompt suggestions.
+    settings["promptSuggestionEnabled"] = False
     settings.pop("statusLine", None)
     settings_environment = settings.setdefault("env", {})
     if not isinstance(settings_environment, dict):
         message = "Claude settings env is not an object"
         raise TypeError(message)
     settings_environment["CLAUDE_CODE_ENABLE_TELEMETRY"] = "0"
+    # Claude Code 2.1.294 gives the task tools (TaskCreate, TaskUpdate) only to
+    # models up to claude-haiku-4-5. The `haiku` alias now selects a newer model,
+    # so the task scenarios opt in.
+    settings_environment["CLAUDE_CODE_ENABLE_TODO_TOOLS"] = "1"
     for name in (
         "CLAUDE_OTEL_PORT",
         "OTEL_EXPORTER_OTLP_ENDPOINT",

@@ -96,10 +96,10 @@ class InputEvents(FileSystemEventHandler):
 
 
 def _is_harness_input(path: Path) -> bool:
-    return (
-        path.suffix in {".jsonl", ".sqlite", ".sqlite-wal"}
-        or (
-            path.suffix == ".json"
-            and any(part in {"tasks", "teams"} for part in path.parts)
-        )
+    # A new session starts in a new record file or task file. A database is an
+    # input only when a source names it, so the other databases of a harness,
+    # for example its logs, do not wake the engine.
+    return path.suffix == ".jsonl" or (
+        path.suffix == ".json"
+        and any(part in {"tasks", "teams"} for part in path.parts)
     )

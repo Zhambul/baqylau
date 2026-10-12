@@ -26,10 +26,9 @@ def payloads(native_record: NativeRecord) -> tuple[EventPayload, ...]:
         return (_message(native_record),)
     if event_type in {"session.step.started", "baqylau.terminal.attached"} and model is not None:
         return _selection(model)
-    if event_type == "session.reasoning.ended" and native_record.event.details.text:
-        return (event_conversation.ReasoningCreated(
-            ids.ReasoningId(native_record.event.id), TextContent(native_record.event.details.text),
-        ),)
+    reasoning = native_record.event.details.text
+    if event_type == "session.reasoning.ended" and reasoning and reasoning.strip():
+        return (event_conversation.ReasoningCreated(ids.ReasoningId(native_record.event.id), TextContent(reasoning)),)
     return _session_events(native_record)
 
 

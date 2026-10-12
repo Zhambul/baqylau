@@ -84,6 +84,15 @@ class KittyMetadata(TerminalMetadata):
         self._last_windows = tuple(found)
         return self._last_windows
 
+    def last_windows(self) -> tuple[WindowInfo, ...]:
+        """Return the windows of the last read, without a remote-control query.
+
+        Returns:
+            The windows that the last successful read found.
+
+        """
+        return self._last_windows
+
     def tag_window(self, window_tag_request: WindowTagRequest) -> WindowTagResponse:
         """Set tags on a window.
 

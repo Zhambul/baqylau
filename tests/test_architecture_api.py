@@ -232,6 +232,7 @@ def test_owned_packages_never_use_raw() -> None:
             "_collaboration_calls",
             "_compactions",
             "_continuation_shells",
+            "_goal_tool_calls",
             "_goals",
             "_mcp_tool_outcomes",
             "_plan_tasks",

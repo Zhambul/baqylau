@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Zhambyl Yermagambet
 """Bind validated metadata to an optional prepared capability set."""
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from baqylau_extension_api.contracts.plugin import ExtensionPlugin
@@ -43,3 +44,15 @@ class RegistryPackage:
             queries=None if self.plugin is None else self.plugin.capabilities.queries,
             settings_revision=self.settings.revision, settings=self.resolved_settings.for_scope(scope),
         )
+
+
+def active_owners(registry_packages: Iterable[RegistryPackage]) -> frozenset[str]:
+    """Name the extensions whose package has a running plugin.
+
+    A job of another extension waits, because its package can become active again.
+
+    Returns:
+        The extension ids of the active packages.
+
+    """
+    return frozenset(package.manifest.extension_id for package in registry_packages if package.plugin is not None)

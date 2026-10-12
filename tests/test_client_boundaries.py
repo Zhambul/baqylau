@@ -63,6 +63,7 @@ SHARED = (
     "_render_extension_items.py",
     "_render_extension_table.py",
     "_render_extension_text.py",
+    "_render_feed.py",
     "_render_files.py",
     "_render_line_numbers.py",
     "_render_numbers.py",

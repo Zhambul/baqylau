@@ -3,6 +3,7 @@ import type {
   QueryResult,
   QuerySnapshot,
 } from '@baqylau/extension-api';
+import pLimit, { type LimitFunction } from 'p-limit';
 
 import { apiClient, execute } from './client';
 import type { components } from './generated/schema';
@@ -16,6 +17,23 @@ type PageReply = Schemas['QueryPageCursor'];
 
 /** The host's default page size of a declared query. */
 const QUERY_LIMIT = 100;
+
+/**
+ * The reads of one extension that can run at the same time. The worker's live
+ * lane runs four calls and refuses a call when it holds sixteen, so a page
+ * with more views keeps its other reads until a read ends.
+ */
+export const QUERY_CONCURRENCY = 4;
+
+const limits = new Map<string, LimitFunction>();
+
+function limitOf(owner: string): LimitFunction {
+  const found = limits.get(owner);
+  if (found !== undefined) return found;
+  const limit = pLimit(QUERY_CONCURRENCY);
+  limits.set(owner, limit);
+  return limit;
+}
 
 /** Name one declared query of one extension in one scope. */
 export type QueryTarget = {
@@ -62,19 +80,21 @@ export async function runExtensionQuery(
   signal: AbortSignal,
   page?: QueryPageCursor,
 ): Promise<QueryResult> {
-  const reply = await execute(() =>
-    apiClient.POST('/api/extensions/{extension_id}/queries/{query_id}', {
-      params: {
-        path: { extension_id: target.owner, query_id: target.queryId },
-      },
-      body: {
-        scope: JSON.stringify(target.scope),
-        arguments: argumentsJson,
-        page: page ?? null,
-        limit: QUERY_LIMIT,
-      },
-      signal,
-    }),
+  const reply = await limitOf(target.owner)(() =>
+    execute(() =>
+      apiClient.POST('/api/extensions/{extension_id}/queries/{query_id}', {
+        params: {
+          path: { extension_id: target.owner, query_id: target.queryId },
+        },
+        body: {
+          scope: JSON.stringify(target.scope),
+          arguments: argumentsJson,
+          page: page ?? null,
+          limit: QUERY_LIMIT,
+        },
+        signal,
+      }),
+    ),
   );
   return queryResult(reply);
 }

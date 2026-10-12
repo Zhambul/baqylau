@@ -142,9 +142,10 @@ def test_the_claude_namer_speaks_one_vocabulary() -> None:
     # the PICKER offers the same strings, keyed by the alias the harness takes
     assert {option.model_name: option.display_name for option in sessiondata_components.harness.plugin.MODELS} == {
         "fable": "fable-5",
-        "opus": "opus-5",
         session_values.SONNET_MODEL_ID: session_values.SONNET_MODEL_NAME,
-        "haiku": "haiku-4.5",
+        "haiku": "haiku-5.5",
+        "claude-opus-5-5": "opus-5.5",
+        "claude-sonnet-5-5": "sonnet-5.5",
         "claude-opus-4-6": "opus-4.6",
     }
 

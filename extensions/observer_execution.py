@@ -12,7 +12,7 @@ from baqylau_extension_api.observers.registration import observer_selection
 
 from domain.extension_jobs import JobState
 from domain.ids import CanonicalEventId
-from extensions import job_states, observer_calls, observer_packages, observer_settlement
+from extensions import job_states, observer_calls, observer_packages, observer_settlement, registry_package
 from extensions.observer_models import ObserverRun
 
 if TYPE_CHECKING:
@@ -25,20 +25,29 @@ READ_ONLY_CODE = "host.read_only"
 READ_ONLY_MESSAGE = "The host is read-only, so the write observer did not run."
 CHAIN_LIMIT_CODE = "host.observer_chain_limit"
 CHAIN_LIMIT_MESSAGE = "The trigger has too many observer steps behind it, so the observer did not run."
+REMOVED_CODE = "host.observer_removed"
+REMOVED_MESSAGE = "The active package no longer declares an observer, so the job did not run."
 OBSERVER_CHAIN_LIMIT = 8
 
 
 def run_observer_job(stores: ObserverStores, context: ObserverJobContext, accepted: ExtensionJob) -> ExtensionJob:
     """Check the host policy and the cause chain, then run one accepted observer job.
 
+    A package that is not active can return with its observer, so its job waits.
+    An active package that no longer declares the observer cannot run the job, so
+    the job fails; otherwise the engine would submit it again after every batch.
+
     Returns:
-        The stored job after its final state; an absent observer leaves the job accepted.
+        The stored job after its final state, or the accepted job when its package is not active.
 
     """
     try:
         package = observer_packages.observer_package(context.packages, accepted.owner)
     except observer_packages.ObserverNotFoundError:
-        return accepted
+        if accepted.owner not in registry_package.active_owners(context.packages):
+            return accepted
+        removed = Diagnostic(code=REMOVED_CODE, message=REMOVED_MESSAGE)
+        return job_states.settle(stores.jobs, accepted, JobState.FAILED, diagnostic=removed)
     binding = ObservationJobBinding.model_validate_json(accepted.binding)
     if observer_selection(package.manifest, binding).effect == "write" and context.policy.read_only:
         refused = Diagnostic(code=READ_ONLY_CODE, message=READ_ONLY_MESSAGE)

@@ -40,10 +40,12 @@ export interface paths {
          * Record Hook Delivery
          * @description One pushed hook delivery: exact stdin bytes in, the reply bytes out.
          *
-         *     Recording happens on the request, never behind the interpreter tick — a
-         *     wedged tick cannot stop hook capture. Errors are audited HERE, and now
-         *     exclusively here: a hook client in `client/` records nothing at all, so a
-         *     delivery the daemon refused would otherwise vanish.
+         *     The reply goes back before the raw events are written: the daemon's one
+         *     hook recorder writes them after it, in arrival order, so the harness does
+         *     not wait for the database, and a wedged tick cannot stop hook capture. A
+         *     delivery refused here is audited HERE, and a write that fails later is
+         *     audited by the recorder: a hook client in `client/` records nothing at all,
+         *     so a delivery the daemon refused would otherwise vanish.
          *
          *     The headers are read verbatim — every value is what the client OBSERVED, and
          *     the interpretation of it (the CLI pid behind a client pid, a valid account
@@ -1854,9 +1856,6 @@ export interface paths {
          *
          *     Returns:
          *         The typed query result.
-         *
-         *     Raises:
-         *         HTTPException: If the scope, package, query, or arguments are invalid.
          */
         post: operations["extension_query_api_extensions__extension_id__queries__query_id__post"];
         delete?: never;
@@ -6311,15 +6310,6 @@ export interface operations {
             };
             /** @description No such harness, or one that accepts no hooks. */
             404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description That raw event id was reused for DIFFERENT bytes. */
-            409: {
                 headers: {
                     [name: string]: unknown;
                 };

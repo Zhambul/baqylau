@@ -53,12 +53,26 @@ class AuditRecorder(failures.ErrorRecorder, PaneAudit):
         context: documents.AuditContent = None,
     ) -> None:
         """Record the active exception."""
+        self.error_from(sys.exception(), session_or_log, func, context)
+
+    def error_from(
+        self,
+        failure: BaseException | None,
+        session_or_log: str = "",
+        func: str = "",
+        context: documents.AuditContent = None,
+    ) -> None:
+        """Record an exception that the caller can hold outside its `except` block.
+
+        A web framework exception handler receives its exception as an argument,
+        and it can run on a thread where no exception is active.
+        """
         self.audit_write_repository.record_error(
             records.ApplicationErrorRecord(
                 session_id=SessionId(session_or_log),
                 script=script_name(),
                 function=func,
-                traceback=traceback.format_exc(),
+                traceback="".join(traceback.format_exception(failure)),
                 context="" if context is None else mapper.text(context),
                 process_id=os.getpid(),
                 timestamp=time.time(),

@@ -3,6 +3,7 @@
 
 import ast
 from pathlib import Path
+from types import MappingProxyType
 
 from baqylau_extension_api.contracts.plugin import ExtensionPlugin
 
@@ -35,8 +36,13 @@ def test_sdk_imports_only_its_declared_boundary() -> None:
     assert not violations
 
 
+# The worker entry point ends its own process, so that a hung call cannot keep it alive after its host.
+PROCESS_EXIT = MappingProxyType({SDK_ROOT / "runtime" / "worker.py": frozenset(("os",))})
+
+
 def _allowed_imports(path: Path, shared: set[str], runtime: set[str]) -> set[str]:
-    return shared | runtime if path.is_relative_to(SDK_ROOT / "runtime") else shared
+    allowed = shared | runtime if path.is_relative_to(SDK_ROOT / "runtime") else shared
+    return allowed | PROCESS_EXIT.get(path, frozenset())
 
 
 def test_host_contract_contains_only_reexports() -> None:

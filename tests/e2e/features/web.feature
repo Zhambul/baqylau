@@ -56,7 +56,10 @@ Feature: web activity stays on the work that requested it
     And work "fetch example" has final answer 'WEB_FETCH_DONE'
     When I name the web fetch in work "fetch example" for URL 'https://example.com' "example page"
     Then web fetch "example page" has state succeeded
-    And web fetch "example page" has result containing 'Example Domain'
+    # Since 2026-10 the "Example Domain" heading is only in the HTML title, and
+    # OpenCode2 returns the body text only. Claude Code returns a summary of the
+    # body, so the check uses one word that the body and each summary keep.
+    And web fetch "example page" has result containing 'documentation'
 
     Examples:
       | harness     | model                           | worker   |

@@ -18,7 +18,6 @@ from harness.hooks import gateway as hook_gateway, headers
 from harness.models.hooks import (
     HarnessHookRequest,
 )
-from repository.errors import RepositoryError
 
 router = APIRouter()
 CLIENT_CLOSED_REQUEST = 499
@@ -26,7 +25,6 @@ CLIENT_CLOSED_REQUEST = 499
 HOOK_RESPONSES = errors(
     {
         404: "No such harness, or one that accepts no hooks.",
-        409: "That raw event id was reused for DIFFERENT bytes.",
     },
 )
 
@@ -65,10 +63,12 @@ async def record_hook_delivery(
 ) -> Response:
     """One pushed hook delivery: exact stdin bytes in, the reply bytes out.
 
-    Recording happens on the request, never behind the interpreter tick — a
-    wedged tick cannot stop hook capture. Errors are audited HERE, and now
-    exclusively here: a hook client in `client/` records nothing at all, so a
-    delivery the daemon refused would otherwise vanish.
+    The reply goes back before the raw events are written: the daemon's one
+    hook recorder writes them after it, in arrival order, so the harness does
+    not wait for the database, and a wedged tick cannot stop hook capture. A
+    delivery refused here is audited HERE, and a write that fails later is
+    audited by the recorder: a hook client in `client/` records nothing at all,
+    so a delivery the daemon refused would otherwise vanish.
 
     The headers are read verbatim — every value is what the client OBSERVED, and
     the interpretation of it (the CLI pid behind a client pid, a valid account
@@ -107,11 +107,4 @@ async def record_hook_delivery(
             ),
         )
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(error)) from error
-    except RepositoryError as error:
-        audit.error(
-            "",
-            "hook delivery",
-            HarnessErrorAudit(harness=harness_name, error=repr(error)),
-        )
-        raise HTTPException(status.HTTP_409_CONFLICT, str(error)) from error
     return Response(content=output, media_type="application/json")

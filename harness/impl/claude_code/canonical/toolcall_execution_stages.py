@@ -120,7 +120,7 @@ class _ToolCallBackgroundTasks(_ToolCallMonitors):
         task_id: runtime_dependencies.ids.ClaudeCodeShellId,
         transcript_path: str,
     ) -> list[domain_dependencies.event_base.CanonicalEvent[domain_dependencies.event_base.EventPayload]]:
-        """Close a background Bash command after a successful TaskStop.
+        """Close a background Bash command or a Monitor after a successful TaskStop.
 
         Returns:
             Result items.
@@ -128,30 +128,40 @@ class _ToolCallBackgroundTasks(_ToolCallMonitors):
         """
         if not task_id:
             return []
-        key = raw_event.session_id, task_id
-        background = self.background_tasks.get(key)
-        if background is None:
-            call_id = runtime_dependencies.transcript.background_call(transcript_path, task_id)
-            if call_id is None:
-                return []
-            shell_id = runtime_dependencies.ids.shell_id_from_claude_code_call(call_id)
-            background = runtime_dependencies.tool_state_models.BackgroundTaskState(
-                raw_event.session_id, task_id, shell_id,
-            )
-        self.background_tasks.pop(key, None)
+        shell_id = self._stopped_shell(raw_event, task_id, transcript_path)
+        if shell_id is None:
+            return []
         return [
             runtime_dependencies.support.event(
                 raw_event,
                 runtime_dependencies.support.CanonicalEventDraft(
                     runtime_dependencies.tool_kind_values.ToolKind.SHELL.value,
-                    str(background.shell_id),
+                    str(shell_id),
                     "output_finished",
                     domain_dependencies.event_shell.ShellOutputFinished(
-                        background.shell_id, domain_dependencies.outcomes.Outcome.CANCELLED,
+                        shell_id, domain_dependencies.outcomes.Outcome.CANCELLED,
                     ),
                 ),
             ),
         ]
+
+    def _stopped_shell(
+        self,
+        raw_event: runtime_dependencies.raw_events.RawEvent,
+        task_id: runtime_dependencies.ids.ClaudeCodeShellId,
+        transcript_path: str,
+    ) -> domain_dependencies.ids.ShellId | None:
+        background = self.background_tasks.pop((raw_event.session_id, task_id), None)
+        if background is not None:
+            return background.shell_id
+        # A stopped Monitor sends no end notification (measured in claude-code
+        # 2.1.284), so this stop is its only end. The arm stays: an event queued
+        # before the stop can reach the transcript after the stop's hook.
+        monitor_shell = self.monitor_shell(raw_event, task_id)
+        if monitor_shell is not None:
+            return monitor_shell
+        call_id = runtime_dependencies.transcript.background_call(transcript_path, task_id)
+        return None if call_id is None else runtime_dependencies.ids.shell_id_from_claude_code_call(call_id)
 
 
 class _ToolCallStarts(_ToolCallBackgroundTasks):
@@ -224,6 +234,12 @@ class _ToolCallStarts(_ToolCallBackgroundTasks):
                 ),
             ]
         if kind == runtime_dependencies.tool_kind_values.ToolKind.PLAN:
+            # Claude Code 2.1.294 writes `ExitPlanMode` with no arguments in the
+            # transcript and gives the plan text only to the PreToolUse hook. The
+            # first writer of a fact is kept, so an empty plan from the transcript
+            # hid the hook's plan. A call without plan text makes no fact.
+            if not arguments.plan:
+                return []
             attention_id = runtime_dependencies.ids.attention_id_from_claude_code_call(call_id)
             payload = domain_dependencies.event_work.PlanProposed(
                 attention_id, runtime_dependencies.support.content(arguments.plan or "", markdown=True),

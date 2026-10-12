@@ -50,6 +50,11 @@ class _CodexTranslationLifecycle(dependencies.translator_service_dependencies.Ha
         # not about the poll that observed it.
         self._backgrounded_shells: set[runtime_dependencies.translator_identity.SourceShellKey] = set()
         self._semantic_tool_calls: set[runtime_dependencies.translator_identity.SourceCallKey] = set()
+        # A goal tool call that waits for its output, which normally carries the goal.
+        self._goal_tool_calls: dict[
+            runtime_dependencies.translator_identity.SourceCallKey,
+            dependencies.record_canonical_namespaces.record_actor_records.GoalToolRecord,
+        ] = {}
         self._call_records: dict[
             tuple[str, str],
             dependencies.record_canonical_namespaces.record_tool_records.ExecRecord
@@ -140,6 +145,9 @@ class _CodexTranslationLifecycle(dependencies.translator_service_dependencies.Ha
         runtime_dependencies.translator_indexes.drop_source_keys(self._collaboration_calls, sources)
         self._finished_skills = {key for key in self._finished_skills if key.source_key not in sources}
         self._semantic_tool_calls = {key for key in self._semantic_tool_calls if key.source_key not in sources}
+        self._goal_tool_calls = {
+            key: goal_call for key, goal_call in self._goal_tool_calls.items() if key.source_key not in sources
+        }
         runtime_dependencies.translator_indexes.drop_source_keys(self._call_records, sources)
         runtime_dependencies.translator_indexes.drop_source_keys(self._mcp_tool_outcomes, sources)
         self._finished_tool_calls = {key for key in self._finished_tool_calls if key.source_key not in sources}

@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
 
 CONTENT_TYPE_JSON = "application/json"
+EVENT_STREAM = "text/event-stream"
 
 
 def connection(host: str, port: int, timeout: float) -> http_client.HTTPConnection:
@@ -66,7 +67,9 @@ def stream_lines(active_connection: http_client.HTTPConnection, path: str) -> It
         OSError: If the server does not return HTTP 200.
 
     """
-    active_connection.request("GET", path)
+    # The daemon sends an event stream's headers at once, and does not compress it, only for this accept type.
+    request_headers = {"Accept": EVENT_STREAM}
+    active_connection.request("GET", path, headers=request_headers)
     response = active_connection.getresponse()
     if response.status != HTTPStatus.OK:
         message = f"stream refused: {int(response.status)}"

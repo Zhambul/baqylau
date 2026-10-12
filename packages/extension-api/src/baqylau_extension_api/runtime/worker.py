@@ -3,14 +3,14 @@
 
 import argparse
 import asyncio
+import os
 import socket
+import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from baqylau_extension_api.runtime import methods
-from baqylau_extension_api.runtime.bootstrap import WorkerBootstrap
-from baqylau_extension_api.runtime.bridge import RpcBridge
+from baqylau_extension_api.runtime import bootstrap, bridge, methods
 from baqylau_extension_api.runtime.channel import RpcChannel, stream_channel
 from baqylau_extension_api.runtime.models import MAX_HEADER_BYTES
 
@@ -26,7 +26,12 @@ class WorkerArguments(argparse.Namespace):
 
 
 def main() -> None:
-    """Start an isolated worker; stdout and stderr never carry RPC frames."""
+    """Start an isolated worker; stdout and stderr never carry RPC frames.
+
+    The worker ends when its host connection ends. A call that still runs then
+    has no one to take its result, and its thread would keep the process alive
+    without a host, so the process ends without a wait for it.
+    """
     parser = argparse.ArgumentParser(description="Run one Baqylau extension worker.")
     parser.add_argument("--rpc-fd", type=int, required=True)
     parser.add_argument("--runtime-revision", required=True)
@@ -34,12 +39,15 @@ def main() -> None:
     arguments = WorkerArguments()
     parser.parse_args(namespace=arguments)
     asyncio.run(_serve(arguments))
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
 
 
 async def _serve(arguments: WorkerArguments) -> None:
     async with _worker_channel(arguments) as channel:
-        caller = RpcBridge(channel, asyncio.get_running_loop(), REQUEST_SECONDS)
-        channel.register_async(methods.LOAD, WorkerBootstrap(
+        caller = bridge.RpcBridge(channel, asyncio.get_running_loop(), REQUEST_SECONDS)
+        channel.register_async(methods.LOAD, bootstrap.WorkerBootstrap(
             channel, caller, arguments.runtime_revision, arguments.package_directory,
         ))
         channel.start()

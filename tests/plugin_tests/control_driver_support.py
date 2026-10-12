@@ -173,6 +173,16 @@ class RewindScreenDriver(CursorScreenDriver):
         self.resizes.append(cells)
         return True
 
+    def insert_text(self, _window: domain_ids.WindowId, text: str, *, paste: bool = True) -> bool:
+        """Record a pasted piece that is not submitted.
+
+        Returns:
+            True to report successful insertion.
+
+        """
+        self._submissions.append((text, paste))
+        return True
+
     def submit_text(self, _window: domain_ids.WindowId, text: str, *, paste: bool = True) -> bool:
         """Record text submission and its paste mode.
 

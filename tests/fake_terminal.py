@@ -95,6 +95,15 @@ class _FakeTerminalMetadata(_FakeTerminalState):
         """
         return tuple(self.windows_on_screen)
 
+    def last_windows(self) -> tuple[values.WindowInfo, ...]:
+        """Read the fake windows on screen, which the fake keeps in memory.
+
+        Returns:
+            The current window records.
+
+        """
+        return self.windows()
+
     def tag_window(self, request: metadata.WindowTagRequest) -> metadata.WindowTagResponse:
         """Record and apply tags to a matching window.
 

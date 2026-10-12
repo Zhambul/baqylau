@@ -19,6 +19,10 @@ from extensions.models.runtime_resolution import RuntimeResolution
 from extensions.models.settings import SettingsOverrides
 from repository.impl.sqlite.extension_shutdown import latest_record
 
+# Built once: a lifecycle read runs for every job attempt, and a new adapter builds its schema again.
+RUNTIME_CANDIDATE: TypeAdapter[RuntimeCandidate] = TypeAdapter(RuntimeCandidate)
+OPERATION_STATUS: TypeAdapter[OperationStatus] = TypeAdapter(OperationStatus)
+
 
 def read_state(connection: sqlite3.Connection) -> LifecycleState:
     """Read all current rows at the same SQLite snapshot.
@@ -60,7 +64,7 @@ def read_runtime(connection: sqlite3.Connection, runtime_revision: str | None) -
     if row is None:
         return None
     resolution = _resolution(row)
-    return (TypeAdapter(RuntimeCandidate).validate_json(str(row["selection"]))
+    return (RUNTIME_CANDIDATE.validate_json(str(row["selection"]))
             if resolution is None else resolution.runtime)
 
 
@@ -81,7 +85,7 @@ def read_operation(connection: sqlite3.Connection, operation_id: Identifier | No
     return LifecycleOperation(
         proposal=LifecycleProposal.model_validate_json(str(row["proposal"])),
         accepted_revision=int(row["accepted_revision"]),
-        status=TypeAdapter[OperationStatus](OperationStatus).validate_python(str(row["status"])),
+        status=OPERATION_STATUS.validate_python(str(row["status"])),
         created_at=float(row["created_at"]), updated_at=float(row["updated_at"]),
         failure=_failure(row), resolution=_resolution(row),
     )

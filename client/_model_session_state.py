@@ -70,10 +70,11 @@ class _SessionModelIngress(_SessionModelState):
             return
         # An entry's cursor is its row, not a canonical cursor; the stream takes it as `after_entry`.
         self.entry_cursor = max(self.entry_cursor, entry.cursor)
-        self._entries[entry_id] = entry
         if entry.type in SHELL_ENTRIES:
+            # A fold holds its own entries, and no one holds a part of a shell that the model does not have.
             self._fold_shell(entry)
             return
+        self._entries[entry_id] = entry
         _place(self._order, self._places, _ENTRY_PREFIX + entry_id, entry)
         if entry.type == "message":
             self._drop_superseded(entry)

@@ -21,6 +21,7 @@ SESSION_SCOPE: Literal["session"] = "session"
 @fixture_dependencies.application.pytest.fixture(scope=SESSION_SCOPE)
 def client(
     application_process: fixture_dependencies.drivers.process_testkit.ApplicationProcess,
+    expected_audit_errors: fixture_dependencies.drivers.expected_findings.ExpectedAuditErrors,
 ) -> Iterator[fixture_dependencies.harness.BaqylauClient]:
     """Open a client and check diagnostics when the test session ends.
 
@@ -36,6 +37,7 @@ def client(
         end = running.diagnostics.wait_until_drained()
         fixture_dependencies.drivers.process_testkit.assert_clean_diagnostics(
             "the complete E2E run has pipeline findings", running.diagnostics.report(start, end),
+            expected_audit_errors.cursors,
         )
 
 

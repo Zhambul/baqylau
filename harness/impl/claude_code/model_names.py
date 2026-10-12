@@ -21,7 +21,8 @@ ALIAS_DISPLAY: Mapping[str, str] = MappingProxyType({
     FABLE_MODEL: "fable-5",
     OPUS_MODEL: "opus-5",
     SONNET_MODEL: "sonnet-5",
-    HAIKU_MODEL: "haiku-4.5",
+    # Claude Code 2.1.294 runs claude-haiku-5-5 for the `haiku` alias.
+    HAIKU_MODEL: "haiku-5.5",
 })
 
 

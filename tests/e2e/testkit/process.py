@@ -15,6 +15,7 @@ from api.runtime import ApplicationConfig, ApplicationEndpoint, DashboardApplica
 from tests.e2e.testkit.orphan_watch import stop_when_orphaned
 
 if TYPE_CHECKING:
+    from collections.abc import Collection
 
     from api.diagnostics.models import (
         AuditProblemResponse,
@@ -49,8 +50,11 @@ HARNESS_PARENT_ENVIRONMENT_VARIABLES = (
 def assert_clean_diagnostics(
     label: str,
     report: DiagnosticsReportResponse,
+    expected_cursors: Collection[int] = (),
 ) -> None:
     """Check that every raw event has a verdict and diagnostics contain no problems.
+
+    `expected_cursors` names the audit rows that a scenario caused on purpose.
 
     Raises:
         AssertionError: If a verdict is missing or interpretation or audit problems exist.
@@ -67,6 +71,7 @@ def assert_clean_diagnostics(
     findings.extend(
         _audit_finding(problem)
         for problem in report.audit_problems
+        if problem.error_cursor not in expected_cursors
     )
     if findings:
         finding_details = "\n".join(findings)

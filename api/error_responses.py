@@ -61,9 +61,9 @@ def _application_input_error(_request: Request, error: Exception) -> Response:
     return error_body(str(message), HTTPStatus.BAD_REQUEST)
 
 
-def _internal_error(request: Request, _error: Exception) -> Response:
+def _internal_error(request: Request, error: Exception) -> Response:
     audit = resolve(request.app.state.instances, provider_audit_storage.recorder)
     action = "POST" if request.method == "POST" else "request"
     path = PathAudit(path=request.url.path[:AUDIT_PATH_CHARACTER_LIMIT])
-    audit.error("", f"dashboard {action}", path)
+    audit.error_from(error, "", f"dashboard {action}", path)
     return error_body("internal", HTTPStatus.INTERNAL_SERVER_ERROR)

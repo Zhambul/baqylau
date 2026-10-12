@@ -34,6 +34,8 @@ class _WrapState:
     background: Color | None
     painted: list[str] = field(default_factory=list)
     current: list[Span] = field(default_factory=list)
+    # The columns of `current`. An atom adds its own width, so it does not measure the line again.
+    used: int = 0
 
     @classmethod
     def from_content(
@@ -57,6 +59,7 @@ class _WrapState:
             )
             self.line_prefix = self.continuation
             self.current = []
+            self.used = 0
         return self.painted
 
     def _fill_line(self) -> None:
@@ -73,12 +76,14 @@ class _WrapState:
         return atom.text.isspace() and not self.current and bool(self.painted)
 
     def _append_atom(self, atom: Span, available: int) -> bool:
-        if _does_atom_wrap(self.current, atom, available):
+        atom_width = text_width(atom.text)
+        if self.current and self.used + atom_width > available:
             return True
         self.atoms.popleft()
-        room = available - spans_width(self.current)
-        if text_width(atom.text) <= room:
+        room = available - self.used
+        if atom_width <= room:
             self.current.append(atom)
+            self.used += atom_width
             return False
         head, tail = _take([atom], room)  # a word longer than the line
         if not head and not self.current:
@@ -92,13 +97,6 @@ def _first_character(atom: Span) -> tuple[list[Span], list[Span]]:
     # A wide character wider than the whole line still takes one row.
     first = atom.sized(atom.text[:1])
     return [first], [atom.sized(atom.text[1:])]
-
-
-def _does_atom_wrap(current: list[Span], atom: Span, available: int) -> bool:
-    if not current:
-        return False
-    current_width = spans_width(current)
-    return current_width + text_width(atom.text) > available
 
 
 def _content_atoms(content: list[Span]) -> list[Span]:

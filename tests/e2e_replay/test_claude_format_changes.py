@@ -8,6 +8,7 @@ from pathlib import Path
 from domain.event_conversation import TurnFinished
 from domain.ids import SessionId
 from engine.interpret.loop import Interpreter
+from harness.hooks.recorder import OrderedHookRecorder
 from tests import http_test_assets, http_test_controls, http_test_pane_models, http_test_preferences, storage_reads
 from tests.e2e_replay.audit_replay_support import replay
 from tests.harness_names import CLAUDE_CODE_HARNESS
@@ -40,6 +41,8 @@ def test_rate_limit_hook_is_accepted(tmp_path: Path) -> None:
     with http_test_assets.running_server(application) as server:
         status, _ = http_test_preferences.post_hook(server, "claude_code", payload)
         assert status == HTTPStatus.OK
+        # The hook's raw events are written after its reply.
+        application.provider("hook_recorder", OrderedHookRecorder).flush()
         application.provider("interpreter", Interpreter).translation.translate()
         application.reaction_loop.tick()
         _assert_failed_turn(application)

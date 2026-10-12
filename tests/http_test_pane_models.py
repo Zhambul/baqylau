@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from harness.hooks.recorder import OrderedHookRecorder
 from tests import (
     http_contract_dependencies as contract_dependencies,
     http_library_dependencies as library_dependencies,
@@ -102,10 +103,13 @@ def raw_event_audits(
 ) -> contract_dependencies.SqliteRawEventAuditRepository:
     """Build the raw event audit reader for the test application.
 
+    A hook's raw events are written after its reply, so the reader waits for them.
+
     Returns:
         The audit repository using the application's main database.
 
     """
+    application.provider("hook_recorder", OrderedHookRecorder).flush()
     return contract_dependencies.SqliteRawEventAuditRepository(application.main_db)
 
 

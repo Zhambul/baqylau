@@ -11,12 +11,15 @@ from typing import TYPE_CHECKING
 from api import job_workers, worker_plans
 from app import (
     provider_extension_runtime,
+    provider_harness_sessions,
+    provider_reactions,
     provider_runtime as runtime_providers,
     provider_uploads as upload_providers,
 )
 from app.injection import Instances, resolve, seed
 from extensions.manager_contract import ExtensionManager
 from terminal.contract import TerminalPlugin
+from terminal.panes.reaction_thread import PaneReactionThread
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -57,6 +60,7 @@ class _ManagedWorker:
 class _WorkerGroup:
     workers: tuple[_ManagedWorker, ...]
     model_terminal: TerminalPlugin
+    panes: PaneReactionThread
     terminal_plugin: TerminalPlugin
     extensions: ExtensionManager
 
@@ -77,6 +81,9 @@ class _WorkerGroup:
         self.model_terminal.close()
         for worker in self.workers:
             worker.join()
+        # The engine adds no pane facts now. Finish the queued pane actions
+        # before their terminal closes.
+        self.panes.close()
         self.terminal_plugin.close()
         self.extensions.close()
 
@@ -95,7 +102,7 @@ def _prepare_workers(
     instances: Instances, extensions: ExtensionManager,
 ) -> tuple[_WorkerGroup, tuple[worker_plans.WorkerPlan, ...]]:
     group = _WorkerGroup(
-        (), resolve(instances, runtime_providers.model_terminal),
+        (), resolve(instances, runtime_providers.model_terminal), resolve(instances, provider_reactions.pane_reaction),
         resolve(instances, runtime_providers.terminal_plugin), extensions,
     )
     return group, worker_plans.plans(instances)
@@ -106,6 +113,10 @@ def background_workers(instances: Instances) -> Iterator[None]:
     """Start daemon workers on entry and stop them on exit."""
     # Attachments are pruned from the row, not from directory timestamps.
     resolve(instances, upload_providers.uploads).prune()
+    # A display read uses the last terminal read and asks the terminal nothing.
+    # Read the windows once before the daemon serves, so that a restarted daemon
+    # shows its live sessions as live at once.
+    resolve(instances, runtime_providers.terminal_plugin).metadata.windows()
     factory = resolve(instances, provider_extension_runtime.extension_manager_factory)
     extensions = factory.open_manager()
     with job_workers.job_executor(instances, extensions) as jobs:
@@ -117,3 +128,5 @@ def background_workers(instances: Instances) -> Iterator[None]:
             yield
         finally:
             workers.close()
+            # The last hook deliveries are written before the database closes.
+            resolve(instances, provider_harness_sessions.hook_recorder).close()

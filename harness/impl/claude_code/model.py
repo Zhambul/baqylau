@@ -49,28 +49,15 @@ class ClaudeCodeModel(StrEnum):
     HAIKU = "haiku"
     CLAUDE_FABLE_FIVE = "claude-fable-5"
     CLAUDE_FABLE_FIVE_ONE = "claude-fable-5-1"
+    CLAUDE_OPUS_FIVE_FIVE = "claude-opus-5-5"
     CLAUDE_OPUS_FIVE = "claude-opus-5"
     CLAUDE_OPUS_FOUR_EIGHT = "claude-opus-4-8"
     CLAUDE_OPUS_FOUR_SIX = "claude-opus-4-6"
+    CLAUDE_SONNET_FIVE_FIVE = "claude-sonnet-5-5"
     CLAUDE_SONNET_FIVE = "claude-sonnet-5"
+    CLAUDE_HAIKU_FIVE_FIVE = "claude-haiku-5-5"
     CLAUDE_HAIKU_FOUR_FIVE = "claude-haiku-4-5"
     CLAUDE_HAIKU_FOUR_FIVE_OCTOBER = "claude-haiku-4-5-20251001"
-
-
-CLAUDE_CODE_MODELS = (
-    ClaudeCodeModel.FABLE,
-    ClaudeCodeModel.OPUS,
-    ClaudeCodeModel.SONNET,
-    ClaudeCodeModel.HAIKU,
-    ClaudeCodeModel.CLAUDE_FABLE_FIVE,
-    ClaudeCodeModel.CLAUDE_FABLE_FIVE_ONE,
-    ClaudeCodeModel.CLAUDE_OPUS_FIVE,
-    ClaudeCodeModel.CLAUDE_OPUS_FOUR_EIGHT,
-    ClaudeCodeModel.CLAUDE_OPUS_FOUR_SIX,
-    ClaudeCodeModel.CLAUDE_SONNET_FIVE,
-    ClaudeCodeModel.CLAUDE_HAIKU_FOUR_FIVE,
-    ClaudeCodeModel.CLAUDE_HAIKU_FOUR_FIVE_OCTOBER,
-)
 
 
 class ClaudeCodeEffort(StrEnum):
@@ -100,6 +87,8 @@ KNOWN_MILLION_MODELS = (
     "fable-5",
     "sonnet-5",
     "opus-5",
+    # Haiku 5.5 has a native 1M window (Claude Code 2.1.294 catalog).
+    "haiku-5",
     "opus-4-6",
     "opus-4-7",
     "opus-4-8",
@@ -120,12 +109,15 @@ def window(model: str | None) -> int | None:
     if not model:
         return None
     normalized_model = model.lower().strip()
-    if HAIKU_MODEL in normalized_model:
+    known_million_model = any(model_marker in normalized_model for model_marker in KNOWN_MILLION_MODELS)
+    # A Haiku model before Haiku 5 has only the standard window, also with a
+    # `[1m]` suffix. The bare `haiku` alias runs Haiku 5.5 since Claude Code 2.1.294.
+    if HAIKU_MODEL in normalized_model and normalized_model != HAIKU_MODEL and not known_million_model:
         return STANDARD_CONTEXT_WINDOW
     has_large_window = (
         "[1m]" in normalized_model
-        or any(model_marker in normalized_model for model_marker in KNOWN_MILLION_MODELS)
-        or normalized_model in {OPUS_MODEL, SONNET_MODEL, FABLE_MODEL}
+        or known_million_model
+        or normalized_model in {OPUS_MODEL, SONNET_MODEL, FABLE_MODEL, HAIKU_MODEL}
     )
     return LARGE_CONTEXT_WINDOW if has_large_window else STANDARD_CONTEXT_WINDOW
 

@@ -13,6 +13,26 @@ from harness.impl.codex.canonical import (
 from harness.impl.codex.canonical.translator_lifecycle_start import _CodexToolCallTranslator
 
 
+def _unprinted_goal_call(
+    goal_call: dependencies.record_canonical_namespaces.record_actor_records.GoalToolRecord | None,
+    record: dependencies.record_canonical_namespaces.record_tool_records.ExecResultRecord,
+) -> dependencies.record_canonical_namespaces.record_actor_records.GoalToolRecord | None:
+    """Return a goal call whose script completed without printing the goal.
+
+    A script can call a goal tool and print something else, for example
+    `const r = await tools.create_goal(...); text("created")`. Its output then
+    has no goal, so only the call tells what the goal is, as it does in a batch.
+
+    Returns:
+        The goal call, or None when the output already carried the goal or the script failed.
+
+    """
+    if goal_call is None or goal_call.name == "get_goal":
+        return None
+    completed = record.exit in {None, 0} and not record.interrupted
+    return goal_call if completed else None
+
+
 class _CodexToolResultTranslator(_CodexToolCallTranslator):
     """Translate shell and tool results."""
 
@@ -73,7 +93,9 @@ class _CodexToolResultTranslator(_CodexToolCallTranslator):
         call_id = dependencies.translator_id_dependencies.ids_session_types.CodexCallId(
             record.call_id or source.native_identity,
         )
-        self._semantic_tool_calls.add(finish_dependencies.translator_identity.SourceCallKey(source.source_key, call_id))
+        key = finish_dependencies.translator_identity.SourceCallKey(source.source_key, call_id)
+        self._semantic_tool_calls.add(key)
+        self._goal_tool_calls[key] = record
 
     def _exec_result_events(
         self,
@@ -87,13 +109,14 @@ class _CodexToolResultTranslator(_CodexToolCallTranslator):
         call_id = dependencies.translator_id_dependencies.ids_session_types.CodexCallId(
             record.call_id or record_source.native_identity,
         )
-        source_key = record_source.source_key
-        if finish_dependencies.translator_identity.SourceCallKey(source_key, call_id) in self._semantic_tool_calls:
-            return []
-        continued_shell = self._continuation_shells.get((source_key, call_id))
+        call_key = finish_dependencies.translator_identity.SourceCallKey(record_source.source_key, call_id)
+        if call_key in self._semantic_tool_calls:
+            goal_call = _unprinted_goal_call(self._goal_tool_calls.pop(call_key, None), record)
+            return [] if goal_call is None else [self._goal_tool_event(record_source, goal_call)]
+        continued_shell = self._continuation_shells.get((record_source.source_key, call_id))
         if continued_shell is not None:
             return self._continued_command_result(record_source, continued_shell, record)
-        if (source_key, call_id) in self._collaboration_calls:
+        if (record_source.source_key, call_id) in self._collaboration_calls:
             return []
         call_record = self._call_record(record_source.raw_event, call_id)
         if call_record is None:

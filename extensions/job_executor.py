@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from threading import Lock
 from typing import TYPE_CHECKING
 
+from audit.failures import FailureContext
 from domain.extension_jobs import JobKind, JobState
 from extensions import (
     command_dispatch,
@@ -17,6 +18,7 @@ from extensions import (
     job_scheduling_contract,
     observer_execution,
     observer_models,
+    registry_package,
     runtime_identity,
 )
 
@@ -47,7 +49,11 @@ class JobExecutor(job_scheduling_contract.JobScheduling):
         self.pool.submit(self._run, job_key)
 
     def submit_accepted(self, limit: int) -> int:
-        """Schedule the oldest accepted jobs that are not already queued.
+        """Schedule the oldest accepted jobs of the active packages that are not already queued.
+
+        A job of a package that is not active waits and is not read. So it does
+        not run again after each batch, and it does not hold back the jobs of
+        active packages.
 
         Returns:
             The number of accepted jobs read.
@@ -55,7 +61,9 @@ class JobExecutor(job_scheduling_contract.JobScheduling):
         """
         if _switch_pending(self.services.manager):
             return 0
-        accepted = self.services.stores.jobs.jobs_in_state(JobState.ACCEPTED, limit)
+        with self.services.registry.read_snapshot() as read:
+            owners = registry_package.active_owners(read.snapshot.packages)
+        accepted = self.services.stores.jobs.jobs_in_state(JobState.ACCEPTED, limit, owners)
         for job in accepted:
             self.submit(job_requests.JobKey(job.owner, job.scope, job.job_id))
         return len(accepted)
@@ -67,8 +75,8 @@ class JobExecutor(job_scheduling_contract.JobScheduling):
     def _run(self, job_key: job_requests.JobKey) -> None:
         try:
             self._run_outside_switch(job_key)
-        except Exception:  # noqa: BLE001 -- Leave the failed job for reconciliation.
-            return
+        except Exception:  # noqa: BLE001 -- Leave the failed job for reconciliation, and record why.
+            self.services.failures.record("job run", FailureContext(source=job_key.owner))
         finally:
             with self.lock:
                 self.queued.discard(job_key)

@@ -10,6 +10,7 @@ from api import workers
 from api.worker_plans import WorkerPlan
 from extensions.manager_contract import ExtensionManager
 from terminal.contract import TerminalPlugin
+from terminal.panes.reaction_thread import PaneReactionThread
 
 
 def worker_group(
@@ -23,7 +24,8 @@ def worker_group(
     """
     terminal = Mock(spec=TerminalPlugin)
     model_terminal = Mock(spec=TerminalPlugin)
-    return workers._WorkerGroup(selected, model_terminal, terminal, manager)  # noqa: SLF001 -- White-box ownership test.
+    panes = Mock(spec=PaneReactionThread)
+    return workers._WorkerGroup(selected, model_terminal, panes, terminal, manager)  # noqa: SLF001 -- White-box ownership test.
 
 
 def held_worker(released: Event) -> workers._ManagedWorker:

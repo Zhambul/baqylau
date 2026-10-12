@@ -8,6 +8,7 @@ import pytest
 
 from domain.event_shell import (
     ShellOutputFinished,
+    ShellProgressed,
 )
 from domain.ids import (
     ShellId,
@@ -17,7 +18,7 @@ from harness.impl.claude_code.canonical.records import HookPayload
 from harness.impl.claude_code.canonical.translator import ClaudeCanonicalTranslator
 from harness.impl.claude_code.hooks import foreground as claude_foreground
 from tests.harness_names import CLAUDE_CODE_HARNESS
-from tests.plugin_tests import support_events, support_terminal, vocabulary as fixture
+from tests.plugin_tests import support_events, support_hooks, support_terminal, vocabulary as fixture
 from tests.plugin_tests.hook_common_support import receive_claude_hook
 
 
@@ -181,3 +182,42 @@ def test_claude_task_stop_recovers_its_bg_shell(tmp_path: Path) -> None:
     assert len(finished) == 1
     assert finished[0].payload.shell_id == ShellId("background-op-before-restart")
     assert finished[0].payload.outcome == Outcome.CANCELLED
+
+
+def test_claude_task_stop_cancels_monitor_output() -> None:
+    """Verify claude task stop cancels a monitor and keeps its queued events."""
+    translator = ClaudeCanonicalTranslator()
+    support_hooks.armed_monitor(translator, task_id=fixture.NATIVE_TASK_ONE_ID)
+
+    stopped = translator.translate(
+        support_events.raw_event(
+            {
+                fixture.HOOK_EVENT_NAME_FIELD: fixture.POST_TOOL_USE_HOOK,
+                fixture.TOOL_NAME_FIELD: "TaskStop",
+                fixture.TOOL_USE_ID_FIELD: "stop-monitor",
+                fixture.TOOL_INPUT_FIELD: {fixture.TASK_ID: fixture.NATIVE_TASK_ONE_ID},
+                fixture.TOOL_RESPONSE_FIELD: {
+                    fixture.MESSAGE_FIELD: "Successfully stopped task: native-task-one",
+                    fixture.TASK_ID: fixture.NATIVE_TASK_ONE_ID,
+                    "task_type": "local_bash",
+                },
+            },
+            harness=CLAUDE_CODE_HARNESS,
+            source_type=fixture.HOOK_SOURCE,
+            raw_event_id="monitor-stopped",
+        ),
+    )
+    late = translator.translate(
+        support_hooks.monitor_notification(
+            "monitor-late-event",
+            f'<task-id>{fixture.NATIVE_TASK_ONE_ID}</task-id><summary>Monitor event: "ticks"</summary>'
+            "<event>late-tick</event>",
+        ),
+    )
+
+    finished = support_events.payloads(stopped, ShellOutputFinished)
+    assert [(finish.payload.shell_id, finish.payload.outcome) for finish in finished] == [
+        (ShellId(fixture.MONITOR_OP_ONE), Outcome.CANCELLED),
+    ]
+    progressed = support_events.payloads(late, ShellProgressed)
+    assert [progress.payload.shell_id for progress in progressed] == [ShellId(fixture.MONITOR_OP_ONE)]

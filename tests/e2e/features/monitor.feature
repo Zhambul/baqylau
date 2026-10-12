@@ -44,3 +44,26 @@ Feature: an armed monitor reports its events
     Examples:
       | harness     | model |
       | claude_code | haiku |
+
+  Scenario Outline: stopping a monitor ends its background work
+    # Harness limit: claude_code only. Only Claude Code supports monitors.
+    Given session configuration "primary" uses <harness> with model <model> and low effort
+    When I launch session "primary" as turn "stop monitor" with prompt
+      """
+      Your first tool call must use the Monitor tool with description endless
+      ticks to watch this exact command:
+      `while true; do echo endless-tick; sleep 20; done`. Do not run it with
+      Bash. After Monitor returns the task ID, load TaskStop if needed and use
+      TaskStop for that exact task ID. Do not wait for monitor events. Then,
+      reply only with MONITOR_STOPPED.
+      """
+    Then turn "stop monitor" completes
+    And turn "stop monitor" has final answer 'MONITOR_STOPPED'
+    When I name the only monitor in turn "stop monitor" containing 'endless-tick' "stopped monitor"
+    Then monitor "stopped monitor" ends
+    And session "primary" has no running work
+    And the lead in session "primary" has status awaiting_response
+
+    Examples:
+      | harness     | model |
+      | claude_code | haiku |

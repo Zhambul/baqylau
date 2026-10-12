@@ -28,6 +28,9 @@ def text_width(text: str) -> int:
         The sum of the character widths.
 
     """
+    # Each ASCII character takes one column, so most text needs no lookup.
+    if text.isascii():
+        return len(text)
     return sum(char_width(char) for char in text)
 
 
@@ -38,6 +41,8 @@ def cut(text: str, columns: int) -> int:
         The length of the longest prefix that is at most `columns` wide.
 
     """
+    if text.isascii():
+        return max(0, min(len(text), columns))
     used = 0
     for index, char in enumerate(text):
         used += char_width(char)

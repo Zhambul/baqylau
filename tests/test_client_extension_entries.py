@@ -7,7 +7,7 @@ import re
 
 from tests import test_client_loading
 
-compose = test_client_loading.load_shared("_render_compose")
+feed = test_client_loading.load_shared("_render_feed")
 entries = test_client_loading.load_shared("_model_entry")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 WIDTH = 60
@@ -20,7 +20,7 @@ ENTRY_JSON = (
 
 def _painted(summary: str) -> list[str]:
     entry = entries.EntryRecord.model_validate_json(ENTRY_JSON % summary)
-    rows = compose.entry_rows(entry, None, WIDTH, None, frozenset())
+    rows = feed.entry_rows(entry, None, WIDTH, None, frozenset())
     return [ANSI.sub("", row).rstrip() for row in rows]
 
 

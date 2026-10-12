@@ -16,6 +16,7 @@ from domain.ids import WindowId
 from harness.impl.claude_code import suggestion_screen
 from harness.impl.claude_code.composer_state import read_composer_state
 from harness.impl.claude_code.controls import clipboard_image
+from harness.impl.claude_code.controls.paste_pieces import paste_pieces
 from harness.impl.claude_code.controls.screen_driver import poll_until
 from harness.impl.claude_code.controls.screen_protocols import CommandScreenDriver, ScreenDriver
 
@@ -68,9 +69,11 @@ def type_command(
         box while the control audited `acknowledged`). So after the paste the box
         itself is read back: if the message is still sitting there, Enter is
         re-sent with backoff, and a message that never leaves the draft is a FAILED
-        delivery — the caller reports indeterminate instead of lying. Multi-line
-        pastes collapse into Claude Code's placeholder. Attachment delivery uses
-        `ensure_submit`, which sends the bounded Enter retry budget for that case.
+        delivery — the caller reports indeterminate instead of lying. A long or
+        multi-line message is pasted in pieces (paste_pieces), so that Claude
+        Code keeps it as plain text and not as untrusted pasted content.
+        Attachment delivery uses `ensure_submit`, which sends the bounded Enter
+        retry budget for that case.
 
     Returns:
         Type command.
@@ -85,13 +88,28 @@ def type_command(
     if not ready:
         return False, False
     clip = clipboard_image.clear_image()
-    if not command_screen_driver.submit_text(win, text, paste=True):
+    if not _paste_and_submit(command_screen_driver, win, text):
         return False, clip
     marker = _submission_marker(text)
     time.sleep(SUBMIT_SETTLE_S)
     if ensure_submit and not _send_submit_retries(command_screen_driver, win):
         return False, clip
     return _verified_submission(command_screen_driver, win, marker), clip
+
+
+def _paste_and_submit(command_screen_driver: CommandScreenDriver, window_id: WindowId, text: str) -> bool:
+    """Paste the text in pieces that Claude Code keeps as plain text, and submit the last piece.
+
+    Returns:
+        True if the terminal took each piece and the submit.
+
+    """
+    *leading, last = paste_pieces(text)
+    for piece in leading:
+        if not command_screen_driver.insert_text(window_id, piece, paste=True):
+            return False
+        time.sleep(PASTE_PIECE_SETTLE_S)
+    return command_screen_driver.submit_text(window_id, last, paste=True)
 
 
 def _send_submit_retries(command_screen_driver: CommandScreenDriver, window_id: WindowId) -> bool:
@@ -113,6 +131,8 @@ def _verified_submission(command_screen_driver: CommandScreenDriver, window_id: 
     return not _submission_pending(command_screen_driver, window_id, marker)
 
 
+# Give the TUI a beat to take one paste before the next piece comes.
+PASTE_PIECE_SETTLE_S = 0.05
 # After the paste's own CR, give the TUI a beat before reading the box back; then
 # each retried Enter gets a longer beat to take effect.
 SUBMIT_SETTLE_S = 0.2

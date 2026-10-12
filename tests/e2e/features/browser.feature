@@ -413,8 +413,8 @@ Feature: the browser controls real harness sessions
       Make a plan that contains the exact marker BROWSER-PLAN-APPROVE-731.
       The marker is a plan label. The plan must have one step: reply only
       with BROWSER_PLAN_APPROVED. Do not change files or run commands.
-      Wait for approval through the plan picker. The message "Implement the
-      plan." confirms approval. Then do the one step without another question.
+      Wait for approval through the plan picker. After the approval, do the
+      one step without another question.
       """
     And I name the pending plan in turn "approve browser plan" containing 'BROWSER-PLAN-APPROVE-731' "approved browser plan"
     Then the browser composer is empty

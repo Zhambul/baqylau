@@ -86,8 +86,13 @@ class ExtensionJobRepository(Protocol):
         """Return one stored job, or None when it does not exist."""
         ...
 
-    def jobs_in_state(self, job_state: JobState, limit: int) -> tuple[ExtensionJob, ...]:
-        """Return the oldest jobs in one state, for recovery and scheduling."""
+    def jobs_in_state(
+        self, job_state: JobState, limit: int, owners: frozenset[str] | None = None,
+    ) -> tuple[ExtensionJob, ...]:
+        """Return the oldest jobs in one state, for recovery and scheduling.
+
+        With `owners`, only their jobs, so that no job of another owner holds them back.
+        """
         ...
 
     def open_jobs(self, owner: str) -> int:

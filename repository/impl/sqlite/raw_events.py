@@ -114,17 +114,18 @@ class SqliteRawEventRepository(RawEventRepository):
         """
         if not source_identities:
             return {}
-        placeholders = ",".join("?" for _identity in source_identities)
+        identities = ",".join("(?)" for _identity in source_identities)
         with self.sqlite_database.read() as connection:
-            # MAX(id) picks the last recorded event per source, and the join
-            # reads that row's position. One query for every source the
-            # interpreter is about to poll, instead of one query each.
+            # One query for every source that the interpreter polls. For each source,
+            # one index seek finds its last recorded event. A MAX(id) group read every
+            # event of each source, because the index does not hold the session column.
             found = connection.execute(
-                "SELECT latest.source_identity, raw_events.source_position "  # noqa: S608 -- Only ? placeholders vary.
-                "FROM (SELECT source_identity, MAX(id) AS id FROM raw_events "
-                f"      WHERE session_id IS NOT NULL AND source_identity IN ({placeholders}) "
-                "       GROUP BY source_identity) AS latest "
-                "JOIN raw_events ON raw_events.id = latest.id",
+                f"WITH polled(source_identity) AS (VALUES {identities}) "  # noqa: S608 -- Only ? placeholders vary.
+                "SELECT polled.source_identity, ("
+                "SELECT source_position FROM raw_events "
+                "WHERE raw_events.source_identity = polled.source_identity AND session_id IS NOT NULL "
+                "ORDER BY id DESC LIMIT 1) AS source_position FROM polled",
                 tuple(source_identities),
             ).fetchall()
-        return {row["source_identity"]: row["source_position"] for row in found}
+        recorded = (row for row in found if row["source_position"] is not None)
+        return {row["source_identity"]: row["source_position"] for row in recorded}

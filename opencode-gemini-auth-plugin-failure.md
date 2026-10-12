@@ -8,6 +8,28 @@ The OpenCode server cannot load the `opencode-gemini-auth` plugin. The plugin us
 
 ---
 
+## Status: fixed
+
+Option A is applied on `2026-09-21`.
+
+- Removed the `plugin` array and the `opencode-gemini-auth@latest` entry from `~/.config/opencode/opencode.json`.
+- Backup: `~/.config/opencode/opencode.json.bak-20260921T110504-remove-gemini-auth`.
+- The config file is valid JSON. The `plugin` key is gone.
+- The config watcher reloaded the plugin list. The server now loads only the `baqylau` plugin.
+- No new `opencode-gemini-auth` load or failure appears after the edit.
+- A full server restart was not done, because it would stop the active session. The watcher applied the change.
+
+Cache cleanup is done. The stale folders were removed on `2026-09-21`:
+
+- `~/.cache/opencode/node_modules/opencode-gemini-auth` (about 304 KB)
+- `~/.cache/opencode/packages/opencode-gemini-auth@latest` (about 86 MB)
+
+Total space freed: about 88 MB. No `opencode-gemini-auth` folder remains in the cache.
+
+Note: the cache manifests `~/.cache/opencode/package.json` and `~/.cache/opencode/bun.lock` still list `opencode-gemini-auth@1.4.9`. These lines are inert. OpenCode regenerates these files. They can be left as is.
+
+---
+
 ## Log entry found
 
 **File:** `/Users/z.yermagambet/.local/share/opencode/log/opencode.log`

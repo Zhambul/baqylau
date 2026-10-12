@@ -17,6 +17,10 @@ if TYPE_CHECKING:
     )
 
 
+# The only facts that open or close panes.
+PANE_FACTS = (SessionStarted, SessionFinished)
+
+
 def _prior_session(session_started: SessionStarted, session_id: SessionId) -> SessionId | None:
     previous = session_started.continued_from
     return None if previous == session_id else previous

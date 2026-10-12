@@ -10,7 +10,12 @@ from pydantic import BaseModel, Field
 from harness.impl.claude_code.canonical.record_common import FOREIGN, OPEN_FOREIGN, ForeignMetadata
 from harness.impl.claude_code.canonical.record_tool_response import HookEffort, ToolResponse
 from harness.impl.claude_code.canonical.record_tool_response_base import ToolResponseBlocks
-from harness.impl.claude_code.canonical.record_transcript_common import CompactMetadata, HookSummaryInfo, Origin
+from harness.impl.claude_code.canonical.record_transcript_common import (
+    CompactMetadata,
+    HookSummaryInfo,
+    Origin,
+    TurnPosition,
+)
 from harness.impl.claude_code.canonical.record_usage import MessageObject
 from harness.impl.claude_code.ids import (
     ClaudeCodeSessionId,
@@ -70,6 +75,9 @@ class UserRecord(BaseModel):
     is_sidechain: Annotated[bool | None, Field(alias="isSidechain")] = None
     is_meta: Annotated[bool | None, Field(alias="isMeta")] = None
     is_compact_summary: Annotated[bool | None, Field(alias="isCompactSummary")] = None
+    # Claude Code 2.1.294 marks the `/compact` command output that repeats the
+    # compaction summary (corpus: true). Nothing here reads it.
+    repeats_compact_summary: Annotated[bool | None, Field(alias="repeatsCompactSummary")] = None
     is_visible_in_transcript_only: Annotated[bool | None, Field(alias="isVisibleInTranscriptOnly")] = None
     interrupted_message_id: Annotated[str | None, Field(alias="interruptedMessageId")] = None
     permission_mode: Annotated[str | None, Field(alias="permissionMode")] = None
@@ -77,6 +85,7 @@ class UserRecord(BaseModel):
     prompt_source: Annotated[str | None, Field(alias="promptSource")] = None
     # Claude Code 2.1.x names where the prompt came from (corpus: "human").
     turn_origin: Annotated[str | None, Field(alias="turnOrigin")] = None
+    turn_position: Annotated[TurnPosition | None, Field(alias="turnPosition")] = None
     source_tool_assistant_uuid: Annotated[str | None, Field(alias="sourceToolAssistantUUID")] = None
     source_tool_use_id: Annotated[str | None, Field(alias="sourceToolUseID")] = None
     tool_denial_kind: Annotated[str | None, Field(alias="toolDenialKind")] = None
@@ -86,6 +95,9 @@ class UserRecord(BaseModel):
     queue_priority: Annotated[str | None, Field(alias="queuePriority")] = None
     queue_origin: Annotated[Origin | None, Field(alias="queueOrigin")] = None
     user_feedback: Annotated[ForeignMetadata | str | None, Field(alias="userFeedback")] = None
+    # Claude Code 2.1.293 names who allowed the tool call that a tool result
+    # answers (corpus: {"decision": "accept", "source": "config", "reasonType": "mode"}).
+    permission_decision: Annotated[ForeignMetadata | None, Field(alias="permissionDecision")] = None
     image_paste_ids: Annotated[list[str | int] | None, Field(alias="imagePasteIds")] = None
     mcp_meta: Annotated[ForeignMetadata | None, Field(alias="mcpMeta")] = None
 
@@ -129,6 +141,12 @@ class AssistantRecord(BaseModel):
     attribution_plugin: Annotated[str | None, Field(alias="attributionPlugin")] = None
     attribution_skill: Annotated[str | None, Field(alias="attributionSkill")] = None
     quota_limits: Annotated[ForeignMetadata | None, Field(alias="quotaLimits")] = None
+    # Claude Code 2.1.287 reports how long a thinking block took (corpus: 1229).
+    thinking_duration_ms: Annotated[int | float | None, Field(alias="thinkingDurationMs")] = None
+    # Claude Code 2.1.287 marks a reply that stopped after its output (corpus: true).
+    truncated_after_output: Annotated[bool | None, Field(alias="truncatedAfterOutput")] = None
+    # Claude Code 2.1.295 names the model that the reply asked for (corpus: "claude-haiku-5-5").
+    requested_model: Annotated[str | None, Field(alias="requestedModel")] = None
 
 
 class SystemRecord(BaseModel):

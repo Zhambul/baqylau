@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
@@ -90,9 +91,14 @@ class CoalescingFailureRecorder:
         self.clock = clock
         self.repeat_report_seconds = repeat_report_seconds
         self._states: dict[tuple[str, str], FailureState] = {}
+        self._lock = threading.Lock()
 
     def record(self, where: str, failure_context: FailureContext) -> None:
-        """Record a new failure shape or a counted periodic repeat."""
+        """Record a new failure shape or a counted periodic repeat, from any thread."""
+        with self._lock:
+            self._record(where, failure_context)
+
+    def _record(self, where: str, failure_context: FailureContext) -> None:
         fingerprint = _failure_fingerprint()
         location = (where, failure_context.model_dump_json())
         now = self.clock()

@@ -80,10 +80,14 @@ class PaneRendering:
                 view=self._view_link,
                 opened=self._opened,
             )
+            # A pane keeps only the feed that its paint shows, so it does not grow with the session.
+            self.model.keep_newest(painted.shown)
             sections = _extension_sections.mirror_rows(self.sections.current(self.width), self.width)
-            picture = _render.mirror_screen(painted, self.width, sections)
+            picture = _render.mirror_screen(painted.rows, self.width, sections)
             self._publish()
             return picture
+        # The scoreboard shows no feed item, so it keeps none.
+        self.model.keep_newest(0)
         chips = _extension_sections.score_chips(self.sections.current(self.width))
         return _render.scoreboard(self.model, self.width, chips)
 

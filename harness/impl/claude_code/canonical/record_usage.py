@@ -40,6 +40,8 @@ class MessageUsage(BaseModel):
     inference_geo: UsageInferenceGeo | None = None
     iterations: tuple[UsageIteration, ...] | None = None
     speed: UsageSpeed | None = None
+    # Claude Code 2.1.285 reports a fallback credit on every usage (corpus: always null so far).
+    fallback_credit: ForeignMetadata | float | None = None
 
 
 class MessageObject(BaseModel):

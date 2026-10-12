@@ -5,8 +5,9 @@ from typing import Annotated
 
 from fastapi import Depends
 
-from app import provider_databases as database_providers
+from app import provider_audit_storage, provider_databases as database_providers
 from app.injection import singleton
+from audit.failures import CoalescingFailureRecorder
 from extensions.observer_models import ObserverStores
 from repository.contract.extension_jobs import ExtensionJobRepository
 from repository.contract.extension_observers import ExtensionObserverRepository
@@ -56,3 +57,14 @@ def observer_stores(
 
 
 JobStores = Annotated[ObserverStores, Depends(observer_stores)]
+
+
+@singleton
+def extension_job_failures(audit: provider_audit_storage.Recorder) -> CoalescingFailureRecorder:
+    """Record the first failure of a job run, then count the repeats.
+
+    Returns:
+        The failure record of the job executor.
+
+    """
+    return CoalescingFailureRecorder(audit, "extension job")

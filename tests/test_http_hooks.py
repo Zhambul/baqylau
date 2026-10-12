@@ -171,7 +171,8 @@ def test_internal_failure_is_audited(monkeypatch: library_dependencies.pytest.Mo
         assert status == library_dependencies.http.client.INTERNAL_SERVER_ERROR
         assert body.json == {ERROR_FIELD: "internal"}
         assert "private" not in body.decode()
-        assert application.audit_reads.errors_for_session(runtime_dependencies.domain_ids.SessionId("")), (
-            "an internal failure must leave an errors row behind"
-        )
+        assert any(
+            "ValueError" in error.traceback
+            for error in application.audit_reads.errors_for_session(runtime_dependencies.domain_ids.SessionId(""))
+        ), "an internal failure must leave its traceback in an errors row"
         assert headers["X-Content-Type-Options"] == "nosniff"

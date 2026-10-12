@@ -4,107 +4,33 @@
 from __future__ import annotations
 
 from _model import (
-    EntryRecord,
     SessionModel,
     ShellFold,
 )
-from _render_assignments import (
-    _assignment_rows,
-    visible,
+from _render_feed import (
+    FeedPaint,
+    MirrorRows,
+    scrollback_feed,
 )
-from _render_entries import (
-    _attention_rows,
-    _message_rows,
-    _note_rows,
-)
-from _render_files import _file_rows
 from _render_rows import (
     _no_link,
     _RowOptions,
     rows,
 )
-from _render_shells import (
-    _shell_rows,
-    copy_target,
-)
+from _render_shells import copy_target
 from _render_styles import (
     EMPTY_ENTRY_IDS,
     HEADER_COLOR,
     HEADER_TEXT,
-    MUTED,
     TRUNCATE_LAYOUT,
     Links,
     Span,
 )
 from _render_tasks import (
     _rule,
-    _said,
     task_rows,
 )
-from _render_tools import (
-    _entry_text,
-    _tool_rows,
-)
 from _render_wrap import screen
-
-
-def entry_rows(
-    entry: EntryRecord,
-    model: SessionModel,
-    width: int,
-    view: Links,
-    opened: frozenset[str],
-) -> list[str]:
-    kind = entry.type
-    primary_rows = _primary_entry_rows(entry, model, width, view, opened)
-    if primary_rows is not None:
-        return primary_rows
-    if kind in {
-        "search",
-        "web",
-        "browser",
-        "worktree",
-        "skill_started",
-        "skill_finished",
-    }:
-        return _tool_rows(entry, width)
-    if kind in {"question_asked", "question_answered", "plan_proposed", "plan_resolved"}:
-        return _attention_rows(entry, width)
-    if kind in {"assignment_started", "assignment_finished"}:
-        return _assignment_rows(entry, width)
-    if kind in {
-        "compaction_started",
-        "compaction_finished",
-        "model_change",
-        "effort_change",
-        "extension",
-    }:
-        rendered = _note_rows(entry, width)
-    else:
-        # Turn markers and unknown grouping facts do not draw a line.
-        rendered = []
-    return rendered
-
-
-def _primary_entry_rows(
-    entry: EntryRecord,
-    model: SessionModel,
-    width: int,
-    view: Links,
-    opened: frozenset[str],
-) -> list[str] | None:
-    if entry.type == "message":
-        return _message_rows(entry, model, width)
-    if entry.type == "reasoning":
-        return _said("THINK", _entry_text(entry.body.content), width, MUTED)
-    if entry.type == "file":
-        return _file_rows(
-            entry,
-            view,
-            width,
-            open_now=entry.entry_id in opened,
-        )
-    return None
 
 
 def mirror(
@@ -117,7 +43,7 @@ def mirror(
 ) -> str:
     """Return the mirror.
 
-    The whole feed at this width. Called on every frame, on every resize and
+    The newest feed that the scrollback keeps, at this width. Called on every frame, on every resize and
         on every expand — a repaint is the only update this surface has.
 
         The two link builders default to producing nothing, so a caller that wants
@@ -128,7 +54,8 @@ def mirror(
         Mirror.
 
     """
-    return mirror_screen(mirror_rows(model, width, copy=copy, view=view, opened=opened), width)
+    painted = mirror_rows(model, width, copy=copy, view=view, opened=opened)
+    return mirror_screen(painted.rows, width)
 
 
 def mirror_rows(
@@ -138,27 +65,14 @@ def mirror_rows(
     copy: Links = _no_link,
     view: Links = _no_link,
     opened: frozenset[str] = EMPTY_ENTRY_IDS,
-) -> list[str]:
-    """Paint the feed and the task panel, without the header.
+) -> MirrorRows:
+    """Paint the newest feed that the scrollback keeps, and the task panel, without the header.
 
     Returns:
         The mirror rows.
 
     """
-    lead_actor_id = model.lead_actor_id()
-    painted: list[str] = []
-    for feed_record in model.feed():
-        if isinstance(feed_record, ShellFold):
-            painted.extend(
-                _shell_rows(
-                    feed_record,
-                    copy,
-                    width,
-                    running=model.running_shell(feed_record.shell_id),
-                ),
-            )
-        elif visible(feed_record, lead_actor_id):
-            painted.extend(entry_rows(feed_record, model, width, view, opened))
+    feed = scrollback_feed(FeedPaint(model, width, copy, view, opened))
     # The task panel goes LAST, and that is the whole of its placement decision.
     # This surface is newest-at-the-bottom, so the end of the paint is what a
     # reader is actually looking at; and the pane clears its scrollback on every
@@ -167,9 +81,10 @@ def mirror_rows(
     # pane to a fixed height (terminal/adapter.py SCOREBOARD_HEIGHT), and content
     # whose size is decided by a constant in another process is a trap.
     tasks = task_rows(model, width)
-    if tasks:
-        painted.extend(["", _rule(width), *tasks])
-    return painted
+    if not tasks:
+        return feed
+    with_tasks = [*feed.rows, "", _rule(width), *tasks]
+    return MirrorRows(with_tasks, feed.shown)
 
 
 def mirror_screen(painted: list[str], width: int, sections: tuple[str, ...] = ()) -> str:

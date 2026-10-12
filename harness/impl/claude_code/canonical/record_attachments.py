@@ -10,6 +10,8 @@ from pydantic import BaseModel, Field
 from harness.impl.claude_code.canonical.record_common import FOREIGN, OPEN_FOREIGN, ForeignMetadata
 from harness.impl.claude_code.canonical.record_transcript_common import Origin
 from harness.impl.claude_code.ids import (
+    ClaudeCodeDeliveryId,
+    ClaudeCodeRunId,
     ClaudeCodeSessionId,
 )
 
@@ -54,6 +56,12 @@ class QueuedCommandAttachment(BaseModel):
     usage: ForeignMetadata | None = None
     origin: Origin | None = None
     source_uuid: str | None = None
+    # Claude Code 2.1.287 names the delivery of a queued command. The queue
+    # `remove` record repeats it as `deliveryId`. Nothing here reads it.
+    delivery_id: ClaudeCodeDeliveryId | None = None
+    # Claude Code 2.1.294 names the run of a queued task notification, as
+    # its `origin.runId` does. Nothing here reads it.
+    run_id: Annotated[ClaudeCodeRunId | None, Field(alias="runId")] = None
     timestamp: str | None = None
 
 
@@ -94,6 +102,8 @@ class AttachmentRecord[AttachmentBody: BaseModel](BaseModel):
     rendered_in_human_turn: Annotated[
         list[RenderedAttachment] | None, Field(alias="renderedInHumanTurn"),
     ] = None
+    # Claude Code 2.1.285 names the role the rendered blocks take (corpus: "system", "user").
+    rendered_role: Annotated[str | None, Field(alias="renderedRole")] = None
     uuid: str | None = None
     parent_uuid: Annotated[str | None, Field(alias="parentUuid")] = None
     external_session_id: Annotated[str | None, Field(alias="sessionId")] = None
@@ -129,6 +139,10 @@ class QueueOperationRecord(BaseModel):
     # Claude Code adds this to `remove` records (currently
     # `absorbed_mid_turn`) when a queued prompt is consumed during a turn.
     reason: str | None = None
+    # Claude Code 2.1.287 names the queued command and its delivery on a
+    # `remove` record (the attachment's `source_uuid` and `delivery_id`).
+    command_uuid: Annotated[str | None, Field(alias="commandUuid")] = None
+    delivery_id: Annotated[ClaudeCodeDeliveryId | None, Field(alias="deliveryId")] = None
 
 
 class TitleRecord(BaseModel):

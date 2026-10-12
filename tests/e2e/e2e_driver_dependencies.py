@@ -4,6 +4,7 @@
 from tests.e2e.testkit import (
     account_contexts as account_contexts,
     action_contexts as action_contexts,
+    expected_findings as expected_findings,
     launching as launching,
     observation_contexts as observation_contexts,
     process as _process_testkit,

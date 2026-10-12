@@ -46,6 +46,10 @@ class PasteScreenDriver(ScreenDriver, Protocol):
 class CommandScreenDriver(ScreenDriver, Protocol):
     """Submit one complete composer command."""
 
+    def insert_text(self, window_id: WindowId, text: str, *, paste: bool = True) -> bool:
+        """Put text into the composer without submitting it."""
+        ...
+
     def submit_text(
         self,
         window_id: WindowId,

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from _render_rows import (
     _RowOptions,
@@ -11,12 +12,16 @@ from _render_rows import (
 )
 from _render_styles import (
     DARK,
+    SCROLLBACK_ROWS,
     TEXT_INDENT,
     TRUNCATE_LAYOUT,
     Color,
     Span,
 )
 from _render_tasks import _rule
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 
 @dataclass(frozen=True)
@@ -82,15 +87,56 @@ def _block_stream_rows(
     chip_color: Color,
     width: int,
 ) -> list[str]:
-    painted: list[str] = []
+    """Paint the newest lines of the status and the output, until the scrollback is full.
+
+    The screen keeps only the newest scrollback rows. Thus an older line has
+    no row on the screen, and the paint does not grow with the output.
+
+    Returns:
+        The rows of the newest lines, oldest first.
+
+    """
+    newest_rows: list[list[str]] = []
+    row_count = 0
     rail = (Span("│ ", chip_color),)
-    for stream in (content.status, content.output):
-        for line in stream.splitlines():
-            painted.extend(
-                rows(
-                    [Span(line.rstrip())],
-                    width,
-                    _RowOptions(prefix=rail, continuation=rail),
-                ),
-            )
-    return painted
+    options = _RowOptions(prefix=rail, continuation=rail)
+    for line in _newest_lines(content, width):
+        if row_count >= SCROLLBACK_ROWS:
+            break
+        newest_rows.append(rows([Span(line)], width, options))
+        row_count += len(newest_rows[-1])
+    return [row for line_rows in reversed(newest_rows) for row in line_rows]
+
+
+def _newest_lines(content: _BlockContent, width: int) -> Iterator[str]:
+    """Walk the output and then the status, each from its newest line.
+
+    One long line can fill the scrollback alone. A row holds less than the
+    width, so the last scrollback-rows-times-width characters fill the scrollback.
+
+    Yields:
+        The end of each line, newest first.
+
+    """
+    longest = SCROLLBACK_ROWS * width
+    for stream in (content.output, content.status):
+        for line in reversed(_tail(stream, SCROLLBACK_ROWS).splitlines()):
+            yield line.rstrip()[-longest:]
+
+
+def _tail(text: str, line_count: int) -> str:
+    """Return the end of the text that holds at least its newest lines.
+
+    Each cut is after a line feed. A line feed always ends a line for
+    `splitlines`, so the tail has the same newest lines as the full text.
+
+    Returns:
+        The tail of the text.
+
+    """
+    start = len(text)
+    for _ in range(line_count + 1):
+        start = text.rfind("\n", 0, start)
+        if start < 0:
+            return text
+    return text[start + 1 :]

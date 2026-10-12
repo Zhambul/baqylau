@@ -14,8 +14,16 @@ from tests.plugin_tests.support_events import raw_event
 from tests.provider_graph import ProviderGraph
 
 
-def replay(filename: str, harness: HarnessName, source_type: str) -> ProviderGraph:
+def replay(
+    filename: str,
+    harness: HarnessName,
+    source_type: str,
+    *,
+    before: tuple[RawEvent, ...] = (),
+) -> ProviderGraph:
     """Store and process a recorded input shape.
+
+    `before` is evidence from another source that arrived before the recorded lines.
 
     Returns:
         The separate application used by the test.
@@ -35,6 +43,8 @@ def replay(filename: str, harness: HarnessName, source_type: str) -> ProviderGra
             source_type="hook",
             raw_event_id="audit-session-start",
         ),))
+    if before:
+        application.raw_events.record(before)
     for index, line in enumerate(path.read_text().splitlines()):
         application.raw_events.record((raw_event(
             json.loads(line),

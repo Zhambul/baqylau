@@ -8,9 +8,11 @@ from harness.impl.claude_code.id_calls import (
     skill_id_from_claude_code_call as skill_id_from_claude_code_call,
 )
 from harness.impl.claude_code.id_item_types import (
+    ClaudeCodeDeliveryId as ClaudeCodeDeliveryId,
     ClaudeCodeMessageId as ClaudeCodeMessageId,
     ClaudeCodeQuestionId as ClaudeCodeQuestionId,
     ClaudeCodeReasoningId as ClaudeCodeReasoningId,
+    ClaudeCodeRunId as ClaudeCodeRunId,
     ClaudeCodeTaskId as ClaudeCodeTaskId,
     ClaudeCodeTaskListId as ClaudeCodeTaskListId,
     ClaudeCodeTurnId as ClaudeCodeTurnId,
