@@ -89,11 +89,11 @@ Feature: live harness sessions survive a Baqylau restart
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I start journey session "primary" from the dashboard as turn "active work" with prompt
       """
-      Run `python3 -c 'import time; time.sleep(15); print("persistence-survived")'`
+      Run `python3 -c 'import time; time.sleep(40); print("persistence-survived")'`
       as one foreground shell command. Wait for it. Then reply only with
       ACTIVE_PERSISTENCE_DONE.
       """
-    And I name the only running foreground command in turn "active work" containing 'time.sleep(15)' "persistence command"
+    And I name the only running foreground command in turn "active work" containing 'time.sleep(40)' "persistence command"
     And I save composer draft 'durable restart draft' for session "primary"
     And I set view mode focus for session "primary"
     And I mute notifications for session "primary"

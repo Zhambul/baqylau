@@ -31,6 +31,8 @@ Feature: a lead waits for a foreground subagent
       | opencode2   | opencode-go/deepseek-v4.1-flash |
 
   Scenario Outline: a lead stays busy while a foreground subagent runs
+    # Harness limit: codex, opencode2 only. Claude Code 2.1.296 haiku sends run_in_background as a string, so the agent starts in the background.
+    # The lead turn then ends while the subagent runs, so the lead cannot stay busy.
     Given session configuration "primary" uses <harness> with model <model> and low effort
     When I launch session "primary" and assign work "color work" to the foreground subagent with prompt
       """
@@ -45,5 +47,4 @@ Feature: a lead waits for a foreground subagent
     Examples:
       | harness     | model                           |
       | codex       | gpt-5.6-luna                    |
-      | claude_code | haiku                           |
       | opencode2   | opencode-go/deepseek-v4.1-flash |
