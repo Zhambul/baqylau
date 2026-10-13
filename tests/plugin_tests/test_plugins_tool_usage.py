@@ -22,6 +22,8 @@ from tests.plugin_tests.support_values import JsonValue
 if TYPE_CHECKING:
     import pytest
 
+CREDITS_FIELD = "credits"
+
 type CodexTranslationDecisionCase = tuple[dict[str, JsonValue], str]
 
 
@@ -40,7 +42,7 @@ def test_codex_current_app_server_rate_limits() -> None:
                         "resetsAt": 1787879978,
                     },
                     "secondary": None,
-                    "credits": {"hasCredits": False, "unlimited": False, "balance": fixture.ZERO_TEXT},
+                    CREDITS_FIELD: {"hasCredits": False, "unlimited": False, "balance": fixture.ZERO_TEXT},
                     "individualLimit": None,
                     "spendControlReached": False,
                     "planType": "prolite",
@@ -56,7 +58,7 @@ def test_codex_current_app_server_rate_limits() -> None:
                             "resetsAt": 1787879978,
                         },
                         "secondary": None,
-                        "credits": {"hasCredits": False, "unlimited": False, "balance": fixture.ZERO_TEXT},
+                        CREDITS_FIELD: {"hasCredits": False, "unlimited": False, "balance": fixture.ZERO_TEXT},
                         "individualLimit": None,
                         "spendControlReached": False,
                         "planType": "prolite",
@@ -86,6 +88,30 @@ def test_codex_current_app_server_rate_limits() -> None:
     assert normalized.plan == "prolite"
     assert normalized.windows[0].used_percent == fixture.RATE_LIMIT_USED_PERCENT
     assert normalized.windows[0].duration_minutes == fixture.WEEKLY_RATE_LIMIT_MINUTES
+
+
+def test_codex_rate_limits_null_balance() -> None:
+    """Verify a Codex 0.156.1 account with no credits still reports its windows."""
+    response = codex_usage_rpc.RateLimitsRpcResponse.model_validate(
+        {
+            fixture.ID_FIELD: 2,
+            fixture.RESULT: {
+                "rateLimits": {
+                    "primary": {
+                        "usedPercent": fixture.RATE_LIMIT_USED_PERCENT,
+                        "windowDurationMins": fixture.WEEKLY_RATE_LIMIT_MINUTES,
+                        "resetsAt": 1787879978,
+                    },
+                    CREDITS_FIELD: {"hasCredits": False, "unlimited": False, "balance": None},
+                },
+            },
+        },
+    )
+
+    normalized = codex_usage.normalize_rate_limits(response.result)
+
+    assert normalized is not None
+    assert normalized.windows[0].used_percent == fixture.RATE_LIMIT_USED_PERCENT
 
 
 def test_codex_usage_retries_transient_app_server(monkeypatch: pytest.MonkeyPatch) -> None:

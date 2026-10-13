@@ -23,7 +23,8 @@ class RateLimitCredits(BaseModel):
     model_config = FOREIGN_DOCUMENT
     has_credits: Annotated[bool, Field(alias="hasCredits")]
     unlimited: bool
-    balance: str
+    # Codex 0.156.1 sends null when the account has no credits.
+    balance: str | None = None
 
 
 class RateLimitsResult(BaseModel):
