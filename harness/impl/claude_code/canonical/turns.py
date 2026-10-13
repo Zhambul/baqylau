@@ -14,6 +14,9 @@ does not open a second one: an injection is part of that turn. A queued prompt
 with `promptSource=queued` is different. Claude can write it before the native
 interrupt marker, although it starts the work after the interrupt. That prompt
 replaces the open turn, and the later marker still belongs to the replaced turn.
+
+A turn is named by its prompt id when the prompt record has one; see
+`prompt_turns` for why.
 """
 
 from __future__ import annotations
@@ -22,6 +25,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from domain.ids import ActorId, SessionId, TurnId
+from harness.impl.claude_code.canonical.prompt_turns import prompt_turn_id
+from harness.impl.claude_code.ids import ClaudeCodePromptId, ClaudeCodeTurnId, turn_id_from_claude_code
 
 if TYPE_CHECKING:
     from harness.impl.claude_code.ids import ClaudeCodeMessageId
@@ -74,6 +79,7 @@ class _TurnState:
             tuple[SessionId, ActorId, ClaudeCodeMessageId],
             TurnId,
         ] = {}
+        self._started: set[OpenTurn] = set()
 
     def _has_open_turn(self, session_id: SessionId, actor_id: ActorId) -> bool:
         return any(
@@ -95,8 +101,31 @@ class _OpenTurnLifecycle(_TurnState):
         session_id, actor_id = _event_actor_key(raw_event)
         if self._has_open_turn(session_id, actor_id):
             return False
-        self._open.append(OpenTurn(session_id, actor_id, turn_id))
+        opened = OpenTurn(session_id, actor_id, turn_id)
+        self._open.append(opened)
+        self._started.add(opened)
         return True
+
+    def prompt_turn(
+        self, raw_event: RawEvent, prompt_id: ClaudeCodePromptId | None, record_identity: str,
+    ) -> TurnId:
+        """Name the turn that a transcript prompt record opens.
+
+        A record without a prompt id keeps its record name. A second turn with
+        the same prompt id, for example a subagent that its lead resumes in
+        the same prompt, uses its record name too.
+
+        Returns:
+            The turn identifier.
+
+        """
+        record_turn = turn_id_from_claude_code(ClaudeCodeTurnId(record_identity))
+        if prompt_id is None:
+            return record_turn
+        turn_id = prompt_turn_id(raw_event, prompt_id)
+        if OpenTurn(raw_event.session_id, raw_event.actor_id, turn_id) in self._started:
+            return record_turn
+        return turn_id
 
     def current(self, raw_event: RawEvent) -> TurnId | None:
         """Return the current.
@@ -235,6 +264,7 @@ class TurnSemantics(_TurnCompletion):
             finished for finished in self._transcript_finished if finished.session_id != session_id
         ]
         self._hook_finished = [finished for finished in self._hook_finished if finished.session_id != session_id]
+        self._started = {started for started in self._started if started.session_id != session_id}
         for key in tuple(self._response_turns):
             if key[0] == session_id:
                 self._response_turns.pop(key)

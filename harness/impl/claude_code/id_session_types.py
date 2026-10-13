@@ -9,3 +9,5 @@ ClaudeCodeCallId = NewType("ClaudeCodeCallId", str)
 ClaudeCodeCompactionId = NewType("ClaudeCodeCompactionId", str)
 ClaudeCodeControlRequestId = NewType("ClaudeCodeControlRequestId", str)
 ClaudeCodeShellId = NewType("ClaudeCodeShellId", str)
+# A prompt and every hook of that prompt carry the same prompt id.
+ClaudeCodePromptId = NewType("ClaudeCodePromptId", str)

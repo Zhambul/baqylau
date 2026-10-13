@@ -30,7 +30,7 @@ def translate_transcript(
     turn_events = (
         [
             replace(started, payload=event_conversation.TurnStarted(None))
-            for started in prompt_turn(raw_event, semantics.turns, source.native_identity, source.occurred_at)
+            for started in prompt_turn(source, semantics.turns)
         ]
         if is_task_prompt(transcript_document)
         else []

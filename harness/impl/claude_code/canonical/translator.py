@@ -11,6 +11,7 @@ from harness.contract import HarnessTranslator
 from harness.impl.claude_code.canonical import (
     hooks,
     messages,
+    prompt_turns,
     records,
     required_translation,
     source_translators,
@@ -28,6 +29,7 @@ from harness.impl.claude_code.canonical import (
 )
 from harness.impl.claude_code.ids import (
     ClaudeCodeCompactionId,
+    ClaudeCodeTurnId,
     turn_id_from_claude_code,
 )
 from harness.models import (
@@ -54,12 +56,16 @@ def _recovered_turn_id(
         and raw_event.parent_actor_id is None
     ):
         return None
-    recovered_turn = transcript.prompt_turn_before(
+    prompt = transcript.prompt_turn_before(
         raw_event.source_name,
         raw_event.source_position,
         transcript_document.parent_uuid,
     )
-    return None if recovered_turn is None else turn_id_from_claude_code(recovered_turn)
+    if prompt is None:
+        return None
+    if prompt.prompt_id is None:
+        return turn_id_from_claude_code(ClaudeCodeTurnId(prompt.identity))
+    return prompt_turns.prompt_turn_id(raw_event, prompt.prompt_id)
 
 
 def _nonsemantic_record_reason(record: transcript.TranscriptRecord) -> str:
@@ -123,13 +129,15 @@ class _ClaudeTurnStamping(_ClaudeTranslatorState, HarnessTranslator):
 
     def _translate_stamped(self, raw_event: raw_events.RawEvent) -> raw_events.TranslationResult:
         observed_turn = self._turns.current(raw_event)
-        return self._stamped(raw_event, self._translate(raw_event), observed_turn)
+        prompt_turn = prompt_turns.hook_prompt_turn(raw_event)
+        return self._stamped(raw_event, self._translate(raw_event), observed_turn, prompt_turn)
 
     def _stamped(
         self,
         raw_event: raw_events.RawEvent,
         translation_result: raw_events.TranslationResult,
         observed_turn: domain_ids.TurnId | None,
+        prompt_turn: domain_ids.TurnId | None = None,
     ) -> raw_events.TranslationResult:
         """Every fact of an open turn carries it.
 
@@ -158,7 +166,10 @@ class _ClaudeTurnStamping(_ClaudeTranslatorState, HarnessTranslator):
                 None,
             )
         )
-        if turn_id is None or not translation_result.canonical_events:
+        if turn_id is None:
+            # A hook can arrive before the transcript record that opens its turn.
+            return prompt_turns.stamped_by_prompt(translation_result, prompt_turn)
+        if not translation_result.canonical_events:
             return translation_result
         stamped = tuple(
             replace(canonical, turn_id=turn_id) if canonical.turn_id is None else canonical

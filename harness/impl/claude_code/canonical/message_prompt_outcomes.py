@@ -47,7 +47,7 @@ def resumed_prompt_events(
         Turn start events followed by the prompt message.
 
     """
-    started = prompt_turn(source.raw_event, turn_semantics, source.native_identity, source.occurred_at)
+    started = prompt_turn(source, turn_semantics)
     created = replace(prompt_message.created, turn_id=turn_semantics.current(source.raw_event))
     return [*started, created]
 
@@ -75,6 +75,6 @@ def user_prompt_events(
             occurred_at=source.occurred_at,
         )
         interrupted.append(dependencies.support.event(source.raw_event, draft))
-    started = prompt_turn(source.raw_event, turn_semantics, source.native_identity, source.occurred_at)
+    started = prompt_turn(source, turn_semantics)
     created = replace(prompt_message.created, turn_id=turn_semantics.current(source.raw_event))
     return [*interrupted, *started, created]

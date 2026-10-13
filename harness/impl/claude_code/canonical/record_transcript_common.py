@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from harness.impl.claude_code.canonical.record_common import FOREIGN, OPEN_FOREIGN
 from harness.impl.claude_code.canonical.record_usage import MessageObject
-from harness.impl.claude_code.ids import ClaudeCodeRunId
+from harness.impl.claude_code.ids import ClaudeCodePromptId, ClaudeCodeRunId
 
 
 class TranscriptDocument(BaseModel):
@@ -19,6 +19,9 @@ class TranscriptDocument(BaseModel):
     type: str | None = None
     uuid: str | None = None
     parent_uuid: Annotated[str | None, Field(alias="parentUuid")] = None
+    # Claude Code puts the same prompt id on a prompt record and on each hook of
+    # that prompt. A subagent's records carry its parent's prompt id.
+    prompt_id: Annotated[ClaudeCodePromptId | None, Field(alias="promptId")] = None
     timestamp: str | int | float | None = None
     cwd: str | None = None
     transcript_path: str | None = None

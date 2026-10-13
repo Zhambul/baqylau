@@ -24,7 +24,7 @@ from harness.impl.claude_code.canonical.transcript_model_core import (
     TextTranscriptRecord,
     TranscriptKind,
 )
-from harness.impl.claude_code.ids import ClaudeCodeActorId, ClaudeCodeCallId, ClaudeCodeShellId
+from harness.impl.claude_code.ids import ClaudeCodeActorId, ClaudeCodeCallId, ClaudeCodePromptId, ClaudeCodeShellId
 
 
 @dataclass(frozen=True)
@@ -76,6 +76,7 @@ class AncestryLine:
     identity: str
     parent_identity: str | None
     is_prompt: bool
+    prompt_id: ClaudeCodePromptId | None = None
 
 
 type TranscriptRecord = (

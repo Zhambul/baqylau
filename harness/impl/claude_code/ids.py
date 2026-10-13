@@ -38,6 +38,7 @@ from harness.impl.claude_code.id_session_types import (
     ClaudeCodeCallId as ClaudeCodeCallId,
     ClaudeCodeCompactionId as ClaudeCodeCompactionId,
     ClaudeCodeControlRequestId as ClaudeCodeControlRequestId,
+    ClaudeCodePromptId as ClaudeCodePromptId,
     ClaudeCodeSessionId as ClaudeCodeSessionId,
     ClaudeCodeShellId as ClaudeCodeShellId,
 )

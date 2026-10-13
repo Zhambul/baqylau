@@ -197,7 +197,7 @@ def test_owned_packages_never_use_raw() -> None:
             "calls",
             "monitors",
         },
-        "harness/impl/claude_code/canonical/transcript_turn_scan.py": {"_turn_ancestry", "parents"},
+        "harness/impl/claude_code/canonical/transcript_turn_scan.py": {"_turn_ancestry", "ancestry_lines"},
         "harness/impl/claude_code/canonical/translator.py": {"_pending_compactions", "translator_by_source"},
         "harness/impl/claude_code/canonical/turns.py": {"_response_turns"},
         "harness/impl/claude_code/catalog.py": {"COMMAND_PROMPT_FLOORS"},

@@ -114,11 +114,5 @@ def result_prompt(
     if not record.texts or record.meta or record.blocks or record.interrupted:
         return ResultPrompt([], None)
     first_text_identity = f"{source.native_identity}:text:0"
-    events = prompt_turn(
-        source.raw_event,
-        turns,
-        source.native_identity,
-        source.occurred_at,
-        prompt_message_identity=first_text_identity,
-    )
+    events = prompt_turn(source, turns, prompt_message_identity=first_text_identity)
     return ResultPrompt(events, turns.current(source.raw_event))

@@ -9,17 +9,15 @@ from harness.impl.claude_code.canonical import (
     transcript,
     transcript_selections,
 )
-from harness.models import raw_event_builders, raw_events
+from harness.models import raw_event_builders
 
 EFFORT_COMMAND_NAME = "effort"
 SELECTION_COMMANDS = frozenset((message_subject_values.MODEL_SUBJECT, EFFORT_COMMAND_NAME))
 
 
 def prompt_turn(
-    raw_event: raw_events.RawEvent,
+    source: message_models.TranscriptSource,
     turn_semantics: dependencies.turns.TurnSemantics,
-    native_identity: str,
-    occurred_at: float | None,
     *,
     prompt_message_identity: str | None = None,
 ) -> list[event_base.CanonicalEvent[event_base.EventPayload]]:
@@ -29,12 +27,10 @@ def prompt_turn(
         The turn events.
 
     """
-    turn_id = dependencies.ids.turn_id_from_claude_code(
-        dependencies.ids.ClaudeCodeTurnId(native_identity),
-    )
-    if not turn_semantics.begin(raw_event, turn_id):
+    turn_id = turn_semantics.prompt_turn(source.raw_event, source.document.prompt_id, source.native_identity)
+    if not turn_semantics.begin(source.raw_event, turn_id):
         return []
-    message_identity = prompt_message_identity or native_identity
+    message_identity = prompt_message_identity or source.native_identity
     message_id = dependencies.ids.message_id_from_claude_code(
         dependencies.ids.ClaudeCodeMessageId(message_identity),
     )
@@ -44,9 +40,9 @@ def prompt_turn(
         message_subject_values.STARTED_PHASE,
         conversation_events.TurnStarted(message_id),
         turn_id=turn_id,
-        occurred_at=occurred_at,
+        occurred_at=source.occurred_at,
     )
-    return [dependencies.support.event(raw_event, draft)]
+    return [dependencies.support.event(source.raw_event, draft)]
 
 
 def slash_command(
@@ -76,12 +72,7 @@ def slash_command(
     command_event, role = _prompt_command_event(source, record)
     if role == messaging.MessageRole.USER:
         return [
-            *prompt_turn(
-                source.raw_event,
-                semantics.turns,
-                source.native_identity,
-                source.occurred_at,
-            ),
+            *prompt_turn(source, semantics.turns),
             command_event,
         ]
     return [command_event]

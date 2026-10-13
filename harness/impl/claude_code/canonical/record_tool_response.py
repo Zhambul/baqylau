@@ -19,6 +19,7 @@ from harness.impl.claude_code.ids import (
     ClaudeCodeActorId,
     ClaudeCodeCallId,
     ClaudeCodeMessageId,
+    ClaudeCodePromptId,
     ClaudeCodeSessionId,
     ClaudeCodeTaskId,
     ClaudeCodeTurnId,
@@ -123,7 +124,7 @@ class HookPayload(BaseModel):
     cwd: str | None = None
     old_cwd: str | None = None
     new_cwd: str | None = None
-    prompt_id: str | None = None
+    prompt_id: ClaudeCodePromptId | None = None
     permission_mode: str | None = None
     effort: str | HookEffort | None = None
     agent_id: ClaudeCodeActorId | None = None
